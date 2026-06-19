@@ -1,12 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
-  <!-- 暗色底圆角(让 favicon 在浅色 tab 上也不丢失) -->
-  <rect x="0" y="0" width="32" height="32" rx="6" fill="#0A0A0B"/>
+  <!-- 中间透明(无底色, 显示页面/浏览器背景) -->
   <!-- 左方括号 -->
-  <path d="M10 4 L4 4 L4 28 L10 28" stroke="#8B5CF6" stroke-width="2" stroke-linejoin="miter"/>
+  <path d="M10 4 L4 4 L4 28 L10 28" stroke="#5B21B6" stroke-width="2.5" stroke-linejoin="miter"/>
   <!-- 右方括号 -->
-  <path d="M22 4 L28 4 L28 28 L22 28" stroke="#8B5CF6" stroke-width="2" stroke-linejoin="miter"/>
+  <path d="M22 4 L28 4 L28 28 L22 28" stroke="#5B21B6" stroke-width="2.5" stroke-linejoin="miter"/>
   <!-- K 线 wick(上下影) -->
-  <line x1="16" y1="7" x2="16" y2="25" stroke="#8B5CF6" stroke-width="1.5" stroke-linecap="round" stroke-opacity="0.6"/>
+  <line x1="16" y1="7" x2="16" y2="25" stroke="#5B21B6" stroke-width="2" stroke-linecap="round" stroke-opacity="0.65"/>
   <!-- K 线 body -->
-  <rect x="13" y="12" width="6" height="10" fill="#8B5CF6" rx="0.5"/>
+  <rect x="12.5" y="11.5" width="7" height="11" fill="#5B21B6" rx="0.8"/>
 </svg>

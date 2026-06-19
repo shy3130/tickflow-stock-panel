@@ -303,11 +303,10 @@ export function Layout() {
               style={{ color: BRAND }}
             />
             <div
-              className="font-mono font-bold text-[13px] tracking-[0.06em] text-foreground leading-tight"
+              className="font-mono font-bold text-[13px] tracking-[0.06em] text-foreground leading-none"
               style={{ textShadow: `0 0 10px ${BRAND}44` }}
             >
-              <div>TF-Stock</div>
-              <div>Panel</div>
+              TF-Stock-Panel
             </div>
           </div>
 
