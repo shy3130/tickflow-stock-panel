@@ -5,7 +5,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: TF-Stock-Panel
+    container_name: TickFlow Stock Panel
     ports:
       - "${PORT:-3018}:3018"
     env_file:

@@ -1,4 +1,4 @@
-# tf-stock-panel - one-shot launcher for backend + frontend (Windows / PowerShell)
+# tickflow-stock-panel - one-shot launcher for backend + frontend (Windows / PowerShell)
 #
 # Usage:
 #   .\dev.ps1
@@ -128,7 +128,7 @@ if (-not (Test-Path (Join-Path $FrontendDir 'node_modules'))) {
 # ===== 4. Banner (ASCII so it renders on any codepage) =====
 Write-Host ''
 Write-Host '+----------------------------------------------+' -ForegroundColor Blue
-Write-Host '|  tf-stock-panel                        |' -ForegroundColor Blue
+Write-Host '|  tickflow-stock-panel                        |' -ForegroundColor Blue
 Write-Host '|                                              |' -ForegroundColor Blue
 Write-Host "|  backend   http://localhost:$BackendPort"      -ForegroundColor Blue
 Write-Host "|  frontend  http://localhost:$FrontendPort"     -ForegroundColor Blue

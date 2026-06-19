@@ -2205,7 +2205,7 @@ wheels = [
 ]
 
 [[package]]
-name = "tf-stock-panel-backend"
+name = "tickflow-stock-panel-backend"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

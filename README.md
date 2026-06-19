@@ -1,6 +1,6 @@
 <div align="center">
 
-# 📈 TF-Stock-Panel
+# 📈 TickFlow Stock Panel
 
 **自托管、零运维的 A 股「选股 + 监控 + 回测」量化工作台**
 
@@ -305,6 +305,6 @@ cd ../frontend && pnpm install && pnpm dev
 
 ## 📄 License
 
-[MIT](./LICENSE) © tf-stock-panel contributors
+[MIT](./LICENSE) © tickflow-stock-panel contributors
 
 本项目依赖 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 提供数据服务,使用前请遵守其服务条款。

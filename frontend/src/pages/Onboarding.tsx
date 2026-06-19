@@ -65,7 +65,7 @@ export function Onboarding() {
       <header className="flex items-center justify-between px-6 py-4 border-b border-border">
         <div className="flex items-center gap-2 text-foreground">
           <Logo size={22} />
-          <span className="text-sm font-medium">TF-Stock-Panel</span>
+          <span className="text-sm font-medium">TickFlow Stock Panel</span>
         </div>
         <div className="flex items-center gap-1.5">
           {STEPS.map((label, i) => (
@@ -117,7 +117,7 @@ function WelcomeStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
       <div className="mx-auto w-fit rounded-2xl bg-accent/10 p-4">
         <Sparkles className="h-8 w-8 text-accent" />
       </div>
-      <h1 className="mt-6 text-2xl font-bold text-foreground">欢迎使用 TF-Stock-Panel</h1>
+      <h1 className="mt-6 text-2xl font-bold text-foreground">欢迎使用 TickFlow Stock Panel</h1>
       <p className="mt-3 text-sm text-secondary leading-relaxed max-w-md mx-auto">
         一个本地化的 A 股量化分析面板 —— 行情、选股、回测、财务一体化。
         花一分钟配置,即可开始使用。
