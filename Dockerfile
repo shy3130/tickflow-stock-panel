@@ -16,6 +16,7 @@ WORKDIR /app
 RUN pip install --no-cache-dir uv
 
 # Backend deps
+COPY README.md /README.md
 COPY backend/pyproject.toml backend/uv.lock* ./
 RUN uv sync --frozen --no-dev || uv sync --no-dev
 
