@@ -179,7 +179,8 @@ docker compose up --build
 | 平台 | 文件 |
 | :--- | :--- |
 | **Windows** | `TickFlowStockPanel-Setup-x64.exe` → 双击安装向导,自动创建桌面/开始菜单快捷方式 |
-| **macOS** | `TickFlowStockPanel-macos.zip` → 解压后运行 app(首次打开右键→打开,绕过 Gatekeeper) |
+| **macOS (Apple Silicon)** | `TickFlowStockPanel-macos-arm64.dmg` → 双击打开,拖入「应用程序」(M1/M2/M3/M4 芯片选这个) |
+| **macOS (Intel)** | `TickFlowStockPanel-macos-x64.dmg` → 双击打开,拖入「应用程序」(老款 Intel 芯片选这个) |
 | **Linux** | `TickFlowStockPanel-linux-x64.tar.gz` → 解压后运行可执行文件 |
 
 下载地址:**[GitHub Releases](https://github.com/shy3130/tickflow-stock-panel/releases/latest)**
