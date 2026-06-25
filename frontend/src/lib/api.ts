@@ -566,6 +566,7 @@ export interface SettingsState {
   has_ai_key: boolean
   ai_model: string
   ai_daily_token_budget: number
+  ai_user_agent: string
 }
 
 /** 保存 TickFlow Key 的响应(先探后存) */
@@ -636,7 +637,7 @@ export const api = {
     ),
 
   /** 保存 AI 配置 */
-  saveAiSettings: (ai: { provider?: string; base_url?: string; api_key?: string; model?: string; daily_token_budget?: number }) =>
+  saveAiSettings: (ai: { provider?: string; base_url?: string; api_key?: string; model?: string; daily_token_budget?: number; user_agent?: string }) =>
     request<{ ok: boolean }>('/api/settings/ai', {
       method: 'POST',
       body: JSON.stringify(ai),

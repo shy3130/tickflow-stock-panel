@@ -71,6 +71,13 @@ class Settings(BaseSettings):
     ai_api_key: str = ""
     ai_model: str = "gpt-5.5"
     ai_daily_token_budget: int = 5_000_000
+    # 默认浏览器风格 UA,绕过 Cloudflare 等 CDN/WAF 的 Bot 拦截(Issue #8)。
+    # 用户可在 AI 设置页按需修改。
+    ai_user_agent: str = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/131.0.0.0 Safari/537.36"
+    )
 
     # Server
     host: str = "0.0.0.0"

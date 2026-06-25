@@ -83,11 +83,17 @@ class AIStrategyGenerator:
         if not ai_key:
             raise RuntimeError("AI API Key 未配置，请在设置页面配置")
 
+        # User-Agent: 默认浏览器标识,绕过 Cloudflare 等 CDN/WAF 的 Bot 拦截(Issue #8)。
+        # 用户可在 AI 设置页自定义。
+        from app.config import settings
+        user_agent = secrets_store.get_ai_config("ai_user_agent", "") or settings.ai_user_agent
+
         client = AsyncOpenAI(
             api_key=ai_key,
             base_url=secrets_store.get_ai_config("ai_base_url", "https://api.alysc.top"),
             timeout=180.0,
             max_retries=2,
+            default_headers={"User-Agent": user_agent},
         )
         # 使用流式请求：CDN 收到首个 token 后会持续转发，不会因等待超时
         stream = await client.chat.completions.create(

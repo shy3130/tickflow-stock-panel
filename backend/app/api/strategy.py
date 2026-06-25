@@ -324,7 +324,12 @@ async def ai_test(request: Request):
         return {"ok": False, "error": "未配置 API Key"}
 
     try:
-        client = AsyncOpenAI(api_key=ai_key, base_url=settings.ai_base_url)
+        # User-Agent: 默认浏览器标识,绕过 Cloudflare 等 CDN/WAF 的 Bot 拦截(Issue #8)。
+        client = AsyncOpenAI(
+            api_key=ai_key,
+            base_url=settings.ai_base_url,
+            default_headers={"User-Agent": settings.ai_user_agent or "Mozilla/5.0"},
+        )
         resp = await client.chat.completions.create(
             model=settings.ai_model,
             messages=[{"role": "user", "content": "回复 OK"}],

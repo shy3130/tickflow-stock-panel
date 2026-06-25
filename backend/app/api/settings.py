@@ -58,6 +58,7 @@ def get_settings() -> dict:
         "has_ai_key": bool(secrets_store.get_ai_key()),
         "ai_model": secrets_store.get_ai_config("ai_model", settings.ai_model),
         "ai_daily_token_budget": int(secrets_store.get_ai_config("ai_daily_token_budget", str(settings.ai_daily_token_budget)) or settings.ai_daily_token_budget),
+        "ai_user_agent": secrets_store.get_ai_config("ai_user_agent", settings.ai_user_agent),
     }
 
 
@@ -212,6 +213,7 @@ class AiSettingsIn(BaseModel):
     api_key: str | None = None
     model: str = ""
     daily_token_budget: int = 500_000
+    user_agent: str = ""
 
 
 @router.post("/ai")
@@ -238,6 +240,9 @@ def save_ai_settings(req: AiSettingsIn) -> dict:
         settings.ai_model = req.model
     updates["ai_daily_token_budget"] = req.daily_token_budget
     settings.ai_daily_token_budget = req.daily_token_budget
+    # user_agent 允许清空(回到默认浏览器 UA),故无条件持久化
+    updates["ai_user_agent"] = req.user_agent
+    settings.ai_user_agent = req.user_agent
 
     if updates:
         secrets_store.save(updates)
