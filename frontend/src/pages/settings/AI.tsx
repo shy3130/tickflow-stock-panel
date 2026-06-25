@@ -224,10 +224,9 @@ export function SettingsAIPanel() {
                 <input type="text" value={userAgent} onChange={e => setUserAgent(e.target.value)}
                   placeholder="留空点击「随机生成」或直接粘贴浏览器 UA"
                   className="flex-1 h-8 px-2.5 rounded-lg bg-base border-0 ring-1 ring-border/30 text-xs font-mono text-foreground placeholder:text-muted/30 focus:outline-none focus:ring-2 focus:ring-accent/30 transition-shadow" />
-                <button type="button" onClick={() => { if (!userAgent) genRandomUa() }}
-                  title={userAgent ? '已存在内容，清空后可重新生成' : '随机生成浏览器 UA'}
-                  className="h-8 px-2.5 rounded-lg border border-border/50 text-xs text-secondary hover:text-accent hover:border-accent/30 transition-all flex items-center gap-1.5 shrink-0 disabled:opacity-40"
-                  disabled={!!userAgent}>
+                <button type="button" onClick={genRandomUa}
+                  title="随机生成一条浏览器 UA"
+                  className="h-8 px-2.5 rounded-lg border border-border/50 text-xs text-secondary hover:text-accent hover:border-accent/30 transition-all flex items-center gap-1.5 shrink-0">
                   <Shuffle className="h-3 w-3" /> 随机
                 </button>
               </div>
