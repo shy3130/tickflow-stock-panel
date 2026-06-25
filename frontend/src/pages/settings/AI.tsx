@@ -6,9 +6,9 @@ import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 
 const PRESETS: { label: string; url: string; model: string; website: string; websiteLabel: string; description: string; partner?: boolean; promo?: string }[] = [
-  { label: '炸鸡中转站', url: 'https://code.alysc.top/v1', model: 'gpt-5.5', website: 'https://code.alysc.top/sign-up?aff=1afk', websiteLabel: 'code.alysc.top', description: 'OpenAI 兼容中转服务，适合直接使用国际模型。', partner: true, promo: '通过链接邀请注册赠送免费额度 · 国际模型最低0.01倍率' },
   { label: 'DeepSeek', url: 'https://api.deepseek.com/v1', model: 'deepseek-chat', website: 'https://www.deepseek.com/', websiteLabel: 'deepseek.com', description: 'DeepSeek 官方 OpenAI 兼容接口。' },
   { label: '通义千问', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus', website: 'https://tongyi.aliyun.com/', websiteLabel: 'tongyi.aliyun.com', description: '阿里云 DashScope 兼容模式接口。' },
+  { label: '炸鸡中转站', url: 'https://code.alysc.top/v1', model: 'gpt-5.5', website: 'https://code.alysc.top/sign-up?aff=1afk', websiteLabel: 'code.alysc.top', description: 'OpenAI 兼容中转服务，适合直接使用国际模型。', partner: true, promo: '通过链接邀请注册赠送免费额度 · 国际模型最低0.01倍率' },
 ]
 
 export function SettingsAIPanel() {
@@ -126,7 +126,7 @@ export function SettingsAIPanel() {
               className={`rounded-lg border px-3 py-2 text-left transition-all ${baseUrl === p.url ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border bg-surface text-secondary hover:border-accent/30'}`}>
               <div className="flex items-center gap-1.5 text-xs font-medium">
                 <span>{p.label}</span>
-                {p.partner && <span className="rounded-full border border-orange-400/30 bg-orange-400/10 px-1.5 py-px text-[9px] text-orange-400">优惠</span>}
+                {p.partner && <span className="rounded-full border border-orange-400/30 bg-orange-400/10 px-1.5 py-px text-[9px] text-orange-400">赞助</span>}
               </div>
             </button>
           ))}
