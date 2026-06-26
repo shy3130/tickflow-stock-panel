@@ -5,6 +5,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        BACKEND_EXTRAS: ${BACKEND_EXTRAS:-}
     container_name: TickFlow_Stock_Panel
     ports:
       - "${PORT:-3018}:3018"

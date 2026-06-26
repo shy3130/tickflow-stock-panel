@@ -192,6 +192,21 @@ docker compose up --build
 # 打开 http://localhost:3018
 ```
 
+如果你的 VPS / 物理机 CPU 较老,`docker compose up --build` 时出现类似
+`Missing required CPU features: avx2, fma, bmi1...` 或容器 `exit code 132`,
+先在 `.env` 里打开 Polars 兼容运行时再重建:
+
+```ini
+BACKEND_EXTRAS=legacy-cpu
+```
+
+```bash
+docker compose up --build
+```
+
+`legacy-cpu` 会让后端安装 `polars[rtcompat]`,适用于不支持 AVX2/FMA 的老 CPU;
+默认留空则保持 Polars 高性能运行时。
+
 
 首次运行会自动安装前后端依赖(约 1-2 分钟),之后直接启动:
 
@@ -219,6 +234,9 @@ pnpm dev                   # http://localhost:3011
 
 > **启用回测**:`cd backend && uv sync --extra backtest`
 > vectorbt → numba 体积较大,故作为可选 extras。macOS / Intel 无预构建 wheel 时需 `brew install cmake` 现场编译。
+
+> **老 CPU 兼容**:`cd backend && uv sync --extra legacy-cpu`
+> 当机器缺少 `avx2/fma` 等指令集时,给 Polars 切到 `rtcompat` 运行时。
 
 ---
 

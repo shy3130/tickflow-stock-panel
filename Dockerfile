@@ -3,6 +3,7 @@
 ARG USE_CN_MIRROR=1
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 ARG PYPI_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG BACKEND_EXTRAS=
 
 # === Stage 1: 前端构建 ===
 FROM node:20-alpine AS frontend-builder
@@ -25,6 +26,7 @@ RUN pnpm build
 FROM python:3.11-slim AS runtime
 ARG USE_CN_MIRROR=1
 ARG PYPI_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG BACKEND_EXTRAS=
 WORKDIR /app
 
 # 安装 uv(快)
@@ -38,7 +40,11 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
 COPY README.md /README.md
 COPY backend/pyproject.toml backend/uv.lock* ./
 RUN if [ "$USE_CN_MIRROR" = "1" ]; then export UV_DEFAULT_INDEX="$PYPI_INDEX"; fi; \
-    uv sync --frozen --no-dev || uv sync --no-dev
+    set -- --no-dev; \
+    for extra in $BACKEND_EXTRAS; do \
+      set -- "$@" --extra "$extra"; \
+    done; \
+    uv sync --frozen "$@" || uv sync "$@"
 
 # Backend code
 # 注意:Docker 里 WORKDIR=/app, 而 config.py 的 _PROJECT_ROOT 是按开发布局

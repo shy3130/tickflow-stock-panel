@@ -35,6 +35,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Legacy CPU runtime: install the Polars compatibility kernel on
+# machines without AVX2/FMA support.
+# Enable with: uv sync --extra legacy-cpu
+legacy-cpu = [
+    "polars[rtcompat]>=1.0",
+]
+
 # 回测依赖 vectorbt → numba → llvmlite,体积大且 macOS/Intel 上无预构建 wheel 时
 # 需要 brew install cmake 现场编译。挪到可选 extras,主依赖瘦身。
 # 启用:`uv sync --extra backtest`
