@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import json
 import threading
 import time
 from datetime import datetime, timezone
@@ -49,6 +50,123 @@ _table_cache_lock = threading.Lock()
 _last_finished_cache: dict[str, str | None] | None = None
 _last_finished_lock = threading.Lock()
 
+_parquet_rows_cache: dict[str, dict[str, Any]] | None = None
+_parquet_rows_cache_lock = threading.Lock()
+_parquet_rows_cache_dirty = False
+_table_summary_cache: dict[str, dict[str, Any]] | None = None
+_table_summary_cache_lock = threading.Lock()
+_table_summary_cache_dirty = False
+_SUMMARY_CACHE_KEYS: dict[str, tuple[str, ...]] = {
+    "daily": ("daily",),
+    "enriched": ("enriched",),
+    "adj_factor": ("adj_factor",),
+}
+
+
+def _parquet_rows_cache_path(data_dir: Path) -> Path:
+    return data_dir / ".metadata" / "parquet_rows.json"
+
+
+def _table_summary_cache_path(data_dir: Path) -> Path:
+    return data_dir / ".metadata" / "table_summary.json"
+
+
+def _load_table_summary_cache(data_dir: Path) -> dict[str, dict[str, Any]]:
+    global _table_summary_cache
+    with _table_summary_cache_lock:
+        if _table_summary_cache is not None:
+            return _table_summary_cache
+        path = _table_summary_cache_path(data_dir)
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            _table_summary_cache = raw if isinstance(raw, dict) else {}
+        except Exception as e:  # noqa: BLE001
+            logger.debug("load table summary cache failed: %s", e)
+            _table_summary_cache = {}
+        return _table_summary_cache
+
+
+def _save_table_summary_cache(data_dir: Path) -> None:
+    global _table_summary_cache_dirty
+    with _table_summary_cache_lock:
+        if not _table_summary_cache_dirty or _table_summary_cache is None:
+            return
+        path = _table_summary_cache_path(data_dir)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(_table_summary_cache, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+            _table_summary_cache_dirty = False
+        except Exception as e:  # noqa: BLE001
+            logger.debug("save table summary cache failed: %s", e)
+
+
+def _load_parquet_rows_cache(data_dir: Path) -> dict[str, dict[str, Any]]:
+    global _parquet_rows_cache
+    with _parquet_rows_cache_lock:
+        if _parquet_rows_cache is not None:
+            return _parquet_rows_cache
+        path = _parquet_rows_cache_path(data_dir)
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            _parquet_rows_cache = raw if isinstance(raw, dict) else {}
+        except Exception as e:  # noqa: BLE001
+            logger.debug("load parquet row cache failed: %s", e)
+            _parquet_rows_cache = {}
+        return _parquet_rows_cache
+
+
+def _save_parquet_rows_cache(data_dir: Path) -> None:
+    global _parquet_rows_cache_dirty
+    with _parquet_rows_cache_lock:
+        if not _parquet_rows_cache_dirty or _parquet_rows_cache is None:
+            return
+        path = _parquet_rows_cache_path(data_dir)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(_parquet_rows_cache, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+            _parquet_rows_cache_dirty = False
+        except Exception as e:  # noqa: BLE001
+            logger.debug("save parquet row cache failed: %s", e)
+
+
+def _clear_table_summary_cache(table: str | None = None) -> None:
+    global _table_summary_cache, _table_summary_cache_dirty
+    try:
+        from app.config import settings
+        data_dir = Path(settings.data_dir)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("resolve data dir for summary cache invalidation failed: %s", e)
+        data_dir = None
+
+    with _table_summary_cache_lock:
+        cache = _table_summary_cache
+        if cache is None:
+            if data_dir is None:
+                return
+            path = _table_summary_cache_path(data_dir)
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+                cache = raw if isinstance(raw, dict) else {}
+            except Exception as e:  # noqa: BLE001
+                logger.debug("load table summary cache for invalidation failed: %s", e)
+                cache = {}
+            _table_summary_cache = cache
+
+        if table is None:
+            if not cache:
+                return
+            cache.clear()
+        else:
+            keys = _SUMMARY_CACHE_KEYS.get(table, ())
+            if not keys or not any(key in cache for key in keys):
+                return
+            for key in keys:
+                cache.pop(key, None)
+        _table_summary_cache_dirty = True
+
+    if data_dir is not None:
+        _save_table_summary_cache(data_dir)
+
 
 def invalidate_data_cache(table: str | None = None) -> None:
     """数据写入/清除后调用。
@@ -68,6 +186,7 @@ def invalidate_data_cache(table: str | None = None) -> None:
         elif table in _table_cache:
             _table_cache[table] = None
             _table_cache_ts[table] = 0.0
+    _clear_table_summary_cache(table)
 
 
 def invalidate_storage_cache() -> None:
@@ -136,6 +255,50 @@ def _date_partitions(base_dir: Path) -> list[str]:
     return dates
 
 
+def _partitioned_table_signature(base_dir: Path, dates: list[str]) -> dict[str, Any]:
+    latest_file = base_dir / f"date={dates[-1]}" / "part.parquet" if dates else None
+    latest_stat = latest_file.stat() if latest_file and latest_file.exists() else None
+    return {
+        "partition_count": len(dates),
+        "earliest_date": dates[0] if dates else None,
+        "latest_date": dates[-1] if dates else None,
+        "latest_mtime_ns": latest_stat.st_mtime_ns if latest_stat else None,
+        "latest_size": latest_stat.st_size if latest_stat else None,
+    }
+
+
+def _partitioned_table_summary(repo, cache_key: str, base_dir: Path, *, fields: int | None = None) -> dict | None:
+    data_dir = repo.store.data_dir
+    cache = _load_table_summary_cache(data_dir)
+    cached = cache.get(cache_key)
+    if isinstance(cached, dict):
+        result = cached.get("result")
+        if isinstance(result, dict):
+            if fields is not None:
+                result = {**result, "fields": fields}
+            return result
+
+    dates = _date_partitions(base_dir)
+    if not dates:
+        return None
+    signature = _partitioned_table_signature(base_dir, dates)
+    result = {
+        "rows": _parquet_num_rows(base_dir),
+        "earliest_date": signature["earliest_date"],
+        "latest_date": signature["latest_date"],
+        "symbols_covered": _count_instruments_symbols(repo),
+        "trading_days": signature["partition_count"],
+    }
+    if fields is not None:
+        result["fields"] = fields
+
+    cache[cache_key] = {"signature": signature, "result": result}
+    global _table_summary_cache_dirty
+    _table_summary_cache_dirty = True
+    _save_table_summary_cache(data_dir)
+    return result
+
+
 def _safe_aggregate_daily(repo, view: str = "kline_daily") -> dict | None:
     """日K轻量统计 — 零数据扫描。
 
@@ -143,19 +306,7 @@ def _safe_aggregate_daily(repo, view: str = "kline_daily") -> dict | None:
     标的数从 instruments 小表获取（~5000行，毫秒级）。
     """
     daily_dir = repo.store.data_dir / "kline_daily"
-    dates = _date_partitions(daily_dir)
-    if not dates:
-        return None
-
-    symbols = _count_instruments_symbols(repo)
-
-    return {
-        "rows": _parquet_num_rows(daily_dir),
-        "earliest_date": dates[0],
-        "latest_date": dates[-1],
-        "symbols_covered": symbols,
-        "trading_days": len(dates),
-    }
+    return _partitioned_table_summary(repo, "daily", daily_dir)
 
 
 def _safe_aggregate_enriched(repo) -> dict | None:
@@ -166,29 +317,11 @@ def _safe_aggregate_enriched(repo) -> dict | None:
     标的数从 instruments 小表取。
     """
     # 字段数：读 schema，不碰数据
-    fields = 0
-    try:
-        cols = repo.execute_all("DESCRIBE kline_enriched")
-        fields = len(cols)
-    except Exception:  # noqa: BLE001
-        pass
+    fields = len(ENRICHED_COLUMNS)
 
     # 日期范围：从分区目录名获取，不扫数据
     enriched_dir = repo.store.data_dir / "kline_daily_enriched"
-    dates = _date_partitions(enriched_dir)
-    if not dates:
-        return None
-
-    symbols = _count_instruments_symbols(repo)
-
-    return {
-        "rows": _parquet_num_rows(enriched_dir),
-        "fields": fields,
-        "earliest_date": dates[0],
-        "latest_date": dates[-1],
-        "symbols_covered": symbols,
-        "trading_days": len(dates),
-    }
+    return _partitioned_table_summary(repo, "enriched", enriched_dir, fields=fields)
 
 
 def _count_instruments_symbols(repo) -> int:
@@ -209,16 +342,36 @@ def _parquet_num_rows(base_dir: Path) -> int:
     if not base_dir.exists():
         return 0
     total = 0
+    data_dir = base_dir.parent if base_dir.parent.name != "date=local_quant_global" else base_dir.parent.parent
+    cache = _load_parquet_rows_cache(data_dir)
+    changed = False
     try:
         import pyarrow.parquet as pq
 
         for path in base_dir.rglob("*.parquet"):
             try:
-                total += pq.ParquetFile(path).metadata.num_rows
+                stat = path.stat()
+                key = path.as_posix()
+                cached = cache.get(key)
+                if (
+                    isinstance(cached, dict)
+                    and cached.get("mtime_ns") == stat.st_mtime_ns
+                    and cached.get("size") == stat.st_size
+                ):
+                    rows = int(cached.get("rows") or 0)
+                else:
+                    rows = int(pq.ParquetFile(path).metadata.num_rows)
+                    cache[key] = {"mtime_ns": stat.st_mtime_ns, "size": stat.st_size, "rows": rows}
+                    changed = True
+                total += rows
             except Exception:  # noqa: BLE001
                 logger.debug("read parquet metadata failed: %s", path)
     except Exception as e:  # noqa: BLE001
         logger.debug("pyarrow parquet metadata unavailable: %s", e)
+    if changed:
+        global _parquet_rows_cache_dirty
+        _parquet_rows_cache_dirty = True
+        _save_parquet_rows_cache(data_dir)
     return total
 
 
@@ -288,34 +441,41 @@ def _safe_aggregate_index_instruments(repo) -> dict | None:
 
 def _safe_aggregate_adj_factor(repo) -> dict | None:
     """adj_factor 视图统计,日期范围对齐日 K 覆盖区间。"""
-    try:
-        # 取日 K 的日期范围作为过滤条件
-        dr = repo.execute_one(
-            "SELECT min(date), max(date) FROM kline_daily"
-        )
-        if not dr or not dr[0]:
-            return None
-        d_min, d_max = dr[0], dr[1]
-        row = repo.execute_one(
-            """SELECT count(*) AS rows,
-                      count(DISTINCT symbol) AS symbols,
-                      count(DISTINCT trade_date) AS trading_days
-               FROM adj_factor
-               WHERE trade_date BETWEEN ? AND ?""",
-            [str(d_min), str(d_max)],
-        )
-        if not row or not row[0]:
-            return None
-        return {
-            "rows": int(row[0]),
-            "symbols_covered": int(row[1]) if isinstance(row[1], (int, float)) else 0,
-            "earliest_date": str(d_min),
-            "latest_date": str(d_max),
-            "trading_days": int(row[2] or 0),
-        }
-    except Exception as e:  # noqa: BLE001
-        logger.debug("aggregate adj_factor failed: %s", e)
+    data_dir = repo.store.data_dir
+    cache = _load_table_summary_cache(data_dir)
+    cached = cache.get("adj_factor")
+    if isinstance(cached, dict):
+        result = cached.get("result")
+        if isinstance(result, dict):
+            return result
+
+    daily_dates = _date_partitions(repo.store.data_dir / "kline_daily")
+    if not daily_dates:
         return None
+
+    factor_dir = repo.store.data_dir / "adj_factor"
+    rows = _parquet_num_rows(factor_dir)
+    if rows <= 0:
+        return None
+
+    symbols = _count_instruments_symbols(repo)
+    result = {
+        "rows": rows,
+        "symbols_covered": symbols,
+        "earliest_date": daily_dates[0],
+        "latest_date": daily_dates[-1],
+        "trading_days": len(daily_dates),
+    }
+    factor_file = factor_dir / "all.parquet"
+    signature = None
+    if factor_file.exists():
+        stat = factor_file.stat()
+        signature = {"mtime_ns": stat.st_mtime_ns, "size": stat.st_size}
+    cache["adj_factor"] = {"signature": signature, "result": result}
+    global _table_summary_cache_dirty
+    _table_summary_cache_dirty = True
+    _save_table_summary_cache(data_dir)
+    return result
 
 
 def _safe_aggregate_minute(repo) -> dict | None:
