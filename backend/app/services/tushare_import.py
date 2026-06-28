@@ -121,17 +121,7 @@ def fetch_stock_basic() -> pl.DataFrame:
     )
     if not rows:
         return pl.DataFrame()
-    df = pl.DataFrame(rows)
-    return df.rename({"ts_code": "symbol", "symbol": "code"}).with_columns(
-        pl.col("symbol").cast(pl.Utf8, strict=False),
-        pl.col("code").cast(pl.Utf8, strict=False),
-        pl.col("name").cast(pl.Utf8, strict=False),
-        pl.lit("CN").alias("region"),
-        pl.lit("stock").alias("type"),
-        pl.col("symbol").str.split(".").list.last().alias("exchange"),
-        pl.col("list_date").cast(pl.Utf8, strict=False),
-        pl.lit(date.today()).cast(pl.Date).alias("as_of"),
-    )
+    return _normalize_tushare_basic_frame(rows)
 
 
 def fetch_realtime_quotes() -> list[dict[str, Any]]:
@@ -241,6 +231,114 @@ def _scale_float(value: Any, factor: float) -> float | None:
     return parsed * factor if parsed is not None else None
 
 
+def _normalize_tushare_basic_frame(rows: list[dict[str, Any]]) -> pl.DataFrame:
+    if not rows:
+        return pl.DataFrame()
+    df = pl.DataFrame(rows)
+    if df.is_empty():
+        return df
+
+    rename_map = {
+        "ts_code": "symbol",
+        "symbol": "code",
+        "total_share": "total_shares",
+        "float_share": "float_shares",
+        "total_mv": "total_market_cap",
+        "circ_mv": "float_market_cap",
+    }
+    df = df.rename({k: v for k, v in rename_map.items() if k in df.columns})
+
+    exprs: list[pl.Expr] = [
+        pl.col("symbol").cast(pl.Utf8, strict=False),
+        pl.lit("CN").alias("region"),
+        pl.lit("stock").alias("type"),
+        pl.lit(date.today()).cast(pl.Date).alias("as_of"),
+    ]
+    if "code" not in df.columns:
+        exprs.append(pl.col("symbol").str.split(".").list.first().alias("code"))
+    if "exchange" not in df.columns:
+        exprs.append(pl.col("symbol").str.split(".").list.last().alias("exchange"))
+    for col in ("code", "name", "industry", "area", "market", "list_date"):
+        if col in df.columns:
+            exprs.append(pl.col(col).cast(pl.Utf8, strict=False))
+    for col in ("pe_ttm", "pb"):
+        if col in df.columns:
+            exprs.append(pl.col(col).cast(pl.Float64, strict=False))
+    # Tushare daily_basic share fields are in 10k shares; mv fields are in 10k CNY.
+    if "total_shares" in df.columns:
+        exprs.append((pl.col("total_shares").cast(pl.Float64, strict=False) * 10000.0).alias("total_shares"))
+    if "float_shares" in df.columns:
+        exprs.append((pl.col("float_shares").cast(pl.Float64, strict=False) * 10000.0).alias("float_shares"))
+    if "total_market_cap" in df.columns:
+        exprs.append((pl.col("total_market_cap").cast(pl.Float64, strict=False) * 10000.0).alias("total_market_cap"))
+    if "float_market_cap" in df.columns:
+        exprs.append((pl.col("float_market_cap").cast(pl.Float64, strict=False) * 10000.0).alias("float_market_cap"))
+
+    keep = [
+        "symbol",
+        "name",
+        "code",
+        "region",
+        "type",
+        "industry",
+        "area",
+        "market",
+        "exchange",
+        "list_date",
+        "total_shares",
+        "float_shares",
+        "total_market_cap",
+        "float_market_cap",
+        "pe_ttm",
+        "pb",
+        "as_of",
+    ]
+    normalized = df.with_columns(exprs)
+    return normalized.select([c for c in keep if c in normalized.columns]).drop_nulls(["symbol"])
+
+
+def _normalize_tushare_daily_frame(
+    daily_rows: list[dict[str, Any]],
+    basic_rows: list[dict[str, Any]] | None = None,
+) -> pl.DataFrame:
+    if not daily_rows:
+        return pl.DataFrame()
+    daily = pl.DataFrame(daily_rows)
+    if daily.is_empty():
+        return daily
+    if basic_rows:
+        basic = pl.DataFrame(basic_rows)
+        if not basic.is_empty():
+            daily = daily.join(basic, on=["ts_code", "trade_date"], how="left")
+
+    df = daily.rename({
+        "ts_code": "symbol",
+        "trade_date": "date",
+        "vol": "volume",
+    })
+    # Canonical daily matches TickFlow input: raw OHLCV rows before pipeline enrichment.
+    # Tushare daily.vol is already in hands; daily.amount is thousand yuan.
+    df = df.with_columns(
+        pl.col("symbol").cast(pl.Utf8, strict=False),
+        pl.col("date").str.strptime(pl.Date, "%Y%m%d", strict=False),
+        pl.col("open").cast(pl.Float64, strict=False),
+        pl.col("high").cast(pl.Float64, strict=False),
+        pl.col("low").cast(pl.Float64, strict=False),
+        pl.col("close").cast(pl.Float64, strict=False),
+        pl.col("volume").cast(pl.Float64, strict=False),
+        (pl.col("amount").cast(pl.Float64, strict=False) * 1000.0).alias("amount"),
+        pl.col("turnover_rate").cast(pl.Float64, strict=False)
+        if "turnover_rate" in df.columns
+        else pl.lit(None).cast(pl.Float64).alias("turnover_rate"),
+    )
+    keep = ["symbol", "date", "open", "high", "low", "close", "volume", "amount", "turnover_rate"]
+    return (
+        df.select(keep)
+        .unique(subset=["symbol", "date"], keep="last")
+        .drop_nulls(["symbol", "date", "open", "high", "low", "close"])
+    )
+
+
 
 def upsert_instruments_from_tushare(repo: KlineRepository) -> int:
     df = fetch_stock_basic()
@@ -257,6 +355,12 @@ def upsert_instruments_from_tushare(repo: KlineRepository) -> int:
         "market",
         "exchange",
         "list_date",
+        "total_shares",
+        "float_shares",
+        "total_market_cap",
+        "float_market_cap",
+        "pe_ttm",
+        "pb",
         "as_of",
     ]
     df = df.select([c for c in keep if c in df.columns])
@@ -286,7 +390,6 @@ def fetch_daily_for_trade_date(trade_date: date) -> pl.DataFrame:
     )
     if not daily_rows:
         return pl.DataFrame()
-    daily = pl.DataFrame(daily_rows)
     try:
         basic_rows = client.call(
             "daily_basic",
@@ -296,29 +399,7 @@ def fetch_daily_for_trade_date(trade_date: date) -> pl.DataFrame:
     except Exception as exc:  # noqa: BLE001
         logger.warning("Tushare daily_basic skipped for %s: %s", ds, exc)
         basic_rows = []
-    if basic_rows:
-        basic = pl.DataFrame(basic_rows)
-        daily = daily.join(basic, on=["ts_code", "trade_date"], how="left")
-    df = daily.rename({
-        "ts_code": "symbol",
-        "trade_date": "date",
-        "vol": "volume",
-    })
-    # TickFlow stores daily volume in hands. Tushare daily.vol is already in hands;
-    # Tushare daily.amount is in thousand yuan, so convert it to yuan.
-    return df.with_columns(
-        pl.col("symbol").cast(pl.Utf8, strict=False),
-        pl.col("date").str.strptime(pl.Date, "%Y%m%d", strict=False),
-        pl.col("open").cast(pl.Float64, strict=False),
-        pl.col("high").cast(pl.Float64, strict=False),
-        pl.col("low").cast(pl.Float64, strict=False),
-        pl.col("close").cast(pl.Float64, strict=False),
-        pl.col("volume").cast(pl.Float64, strict=False),
-        (pl.col("amount").cast(pl.Float64, strict=False) * 1000.0).alias("amount"),
-        pl.col("turnover_rate").cast(pl.Float64, strict=False) if "turnover_rate" in df.columns else pl.lit(None).alias("turnover_rate"),
-    ).select(
-        [c for c in ["symbol", "date", "open", "high", "low", "close", "volume", "amount", "turnover_rate"] if c in df.columns or c == "turnover_rate"]
-    ).drop_nulls(["symbol", "date", "open", "high", "low", "close"])
+    return _normalize_tushare_daily_frame(daily_rows, basic_rows)
 
 
 def import_tushare_daily(
