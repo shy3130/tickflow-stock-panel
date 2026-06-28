@@ -12,21 +12,33 @@ export function MinuteSyncConfig({ caps, isRunning, onStart }: { caps: { label: 
     queryFn: api.preferences,
   })
   const update = useMutation({
-    mutationFn: ({ enabled, days }: { enabled: boolean; days: number }) =>
-      api.updateMinuteSync(enabled, days),
+    mutationFn: ({ enabled, days, source }: { enabled: boolean; days: number; source: 'tickflow' | 'local_quant' }) =>
+      api.updateMinuteSync(enabled, days, source),
     onSuccess: () => qc.invalidateQueries({ queryKey: QK.preferences }),
+  })
+  const localQuant = useQuery({
+    queryKey: QK.localQuantCompare,
+    queryFn: api.localQuantCompare,
+    staleTime: 30_000,
   })
 
   const hasMinuteCap = !!caps?.capabilities?.['kline.minute.batch']
   const enabled = prefs.data?.minute_sync_enabled ?? false
   const days = prefs.data?.minute_sync_days ?? 5
+  const source = prefs.data?.minute_sync_source ?? 'tickflow'
+  const canUseSelectedSource = source === 'local_quant' ? !!localQuant.data?.minute?.local_quant.available : hasMinuteCap
   const [localDays, setLocalDays] = useState(days)
 
   useEffect(() => { setLocalDays(days) }, [days])
 
   const handleToggle = () => {
-    if (!hasMinuteCap) return
-    update.mutate({ enabled: !enabled, days: localDays })
+    if (!canUseSelectedSource) return
+    update.mutate({ enabled: !enabled, days: localDays, source })
+  }
+
+  const handleSource = (next: 'tickflow' | 'local_quant') => {
+    const nextAllowed = next === 'local_quant' ? !!localQuant.data?.minute?.local_quant.available : hasMinuteCap
+    update.mutate({ enabled: enabled && nextAllowed, days: localDays, source: next })
   }
 
   return (
@@ -35,10 +47,10 @@ export function MinuteSyncConfig({ caps, isRunning, onStart }: { caps: { label: 
         <div className="flex items-center gap-2.5">
           <button
             onClick={handleToggle}
-            disabled={!hasMinuteCap}
+            disabled={!canUseSelectedSource}
             className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200 shrink-0 ${
               enabled ? 'bg-accent shadow-[0_0_6px_rgba(61,214,140,0.3)]' : 'bg-elevated'
-            } ${!hasMinuteCap ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}
+            } ${!canUseSelectedSource ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}
           >
             <span
               className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform duration-200 ${
@@ -50,10 +62,37 @@ export function MinuteSyncConfig({ caps, isRunning, onStart }: { caps: { label: 
             {enabled ? '自动同步' : '已关闭'}
           </span>
         </div>
-        {!hasMinuteCap && (
+        {!canUseSelectedSource && (
           <span className="text-[10px] text-warning/80 bg-warning/8 rounded px-1.5 py-px font-medium">
-            需 Pro+
+            {source === 'local_quant' ? '本地库无分钟线' : '需 Pro+'}
           </span>
+        )}
+      </div>
+
+      <div className="space-y-1.5">
+        <div className="flex rounded-btn border border-border overflow-hidden">
+          {([
+            ['tickflow', 'TickFlow'],
+            ['local_quant', '本地 Tushare'],
+          ] as const).map(([value, label]) => (
+            <button
+              key={value}
+              onClick={() => handleSource(value)}
+              disabled={update.isPending}
+              className={`flex-1 px-2 py-1 text-[10px] font-medium transition-colors ${
+                source === value ? 'bg-accent/15 text-accent' : 'text-secondary hover:bg-elevated'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {source === 'local_quant' && (
+          <div className="text-[10px] text-muted leading-relaxed">
+            {localQuant.data?.minute?.local_quant.available
+              ? `${localQuant.data.minute.local_quant.rows} rows · ${localQuant.data.minute.local_quant.symbols} symbols · ${localQuant.data.minute.local_quant.min_time?.slice(0, 16) ?? '-'} ~ ${localQuant.data.minute.local_quant.max_time?.slice(0, 16) ?? '-'}`
+              : '本地 Tushare 分钟表暂不可用'}
+          </div>
         )}
       </div>
 
@@ -62,8 +101,8 @@ export function MinuteSyncConfig({ caps, isRunning, onStart }: { caps: { label: 
         <div className="flex items-center gap-2">
           <div className="flex items-center">
             <button
-              onClick={() => { const v = Math.max(1, localDays - 1); setLocalDays(v); update.mutate({ enabled, days: v }) }}
-              disabled={!hasMinuteCap || !enabled || localDays <= 1}
+              onClick={() => { const v = Math.max(1, localDays - 1); setLocalDays(v); update.mutate({ enabled, days: v, source }) }}
+              disabled={!canUseSelectedSource || !enabled || localDays <= 1}
               className="h-6 w-6 flex items-center justify-center rounded-l-btn bg-elevated border border-border text-secondary hover:bg-border/50 disabled:opacity-30 transition-colors text-xs"
             >
               −
@@ -76,8 +115,8 @@ export function MinuteSyncConfig({ caps, isRunning, onStart }: { caps: { label: 
               {localDays}
             </div>
             <button
-              onClick={() => { const v = Math.min(15, localDays + 1); setLocalDays(v); update.mutate({ enabled, days: v }) }}
-              disabled={!hasMinuteCap || !enabled || localDays >= 15}
+              onClick={() => { const v = Math.min(15, localDays + 1); setLocalDays(v); update.mutate({ enabled, days: v, source }) }}
+              disabled={!canUseSelectedSource || !enabled || localDays >= 15}
               className="h-6 w-6 flex items-center justify-center rounded-r-btn bg-elevated border border-border text-secondary hover:bg-border/50 disabled:opacity-30 transition-colors text-xs"
             >
               +

@@ -206,7 +206,7 @@ class ScreenerService:
             # JOIN instruments
             df_i = self.repo.get_instruments()
             if not df_i.is_empty():
-                inst_cols = [c for c in ["symbol", "name", "total_shares", "float_shares"] if c in df_i.columns]
+                inst_cols = [c for c in ["symbol", "name", "total_shares", "float_shares", "total_market_cap", "float_market_cap", "pe_ttm", "pb"] if c in df_i.columns]
                 if "name" not in df.columns:
                     df = df.join(df_i.select(inst_cols), on="symbol", how="left")
             return df
@@ -220,7 +220,7 @@ class ScreenerService:
                 # JOIN instruments
                 df_i = self.repo.get_instruments()
                 if not df_i.is_empty():
-                    inst_cols = [c for c in ["symbol", "name", "total_shares", "float_shares"] if c in df_i.columns]
+                    inst_cols = [c for c in ["symbol", "name", "total_shares", "float_shares", "total_market_cap", "float_market_cap", "pe_ttm", "pb"] if c in df_i.columns]
                     if "name" not in df.columns:
                         df = df.join(df_i.select(inst_cols), on="symbol", how="left")
                 return df
@@ -257,7 +257,7 @@ class ScreenerService:
         enriched_dir = self.repo.store.data_dir / "kline_daily_enriched"
         start = target_date - timedelta(days=150)
         read_cols = ["symbol", "date", "open", "high", "low", "close", "volume",
-                     "amount", "raw_close", "raw_high", "raw_low"]
+                     "amount", "raw_close", "raw_high", "raw_low", "turnover_rate"]
 
         try:
             lf = (
@@ -291,7 +291,7 @@ class ScreenerService:
 
         # JOIN instruments (name, total_shares, float_shares)
         if not instruments.is_empty():
-            inst_cols = [c for c in ["symbol", "name", "total_shares", "float_shares"] if c in instruments.columns]
+            inst_cols = [c for c in ["symbol", "name", "total_shares", "float_shares", "total_market_cap", "float_market_cap", "pe_ttm", "pb"] if c in instruments.columns]
             if "name" not in df_result.columns:
                 df_result = df_result.join(instruments.select(inst_cols), on="symbol", how="left")
 
@@ -310,7 +310,7 @@ class ScreenerService:
             # JOIN instruments (repo 缓存不含 name 等列)
             instruments = self.repo.get_instruments()
             if instruments is not None and not instruments.is_empty() and "name" not in cached.columns:
-                inst_cols = [c for c in ["symbol", "name", "total_shares", "float_shares"]
+                inst_cols = [c for c in ["symbol", "name", "total_shares", "float_shares", "total_market_cap", "float_market_cap", "pe_ttm", "pb"]
                              if c in instruments.columns]
                 cached = cached.join(instruments.select(inst_cols), on="symbol", how="left")
             elapsed = (time.perf_counter() - t0) * 1000
@@ -339,7 +339,7 @@ class ScreenerService:
 
         enriched_dir = self.repo.store.data_dir / "kline_daily_enriched"
         read_cols = ["symbol", "date", "open", "high", "low", "close", "volume",
-                     "amount", "raw_close", "raw_high", "raw_low"]
+                     "amount", "raw_close", "raw_high", "raw_low", "turnover_rate"]
 
         try:
             lf = (
@@ -364,7 +364,7 @@ class ScreenerService:
             df_full = compute_limit_signals(df_full, instruments)
 
         if instruments is not None and not instruments.is_empty():
-            inst_cols = [c for c in ["symbol", "name", "total_shares", "float_shares"] if c in instruments.columns]
+            inst_cols = [c for c in ["symbol", "name", "total_shares", "float_shares", "total_market_cap", "float_market_cap", "pe_ttm", "pb"] if c in instruments.columns]
             if "name" not in df_full.columns:
                 df_full = df_full.join(instruments.select(inst_cols), on="symbol", how="left")
 

@@ -203,7 +203,7 @@ class KlineRepository:
                 from app.indicators.pipeline import compute_indicators, compute_signals, compute_limit_signals
                 start_full = latest - timedelta(days=300)
                 read_cols = [c for c in ["symbol", "date", "open", "high", "low", "close",
-                                         "volume", "amount", "raw_close", "raw_high", "raw_low"]
+                                         "volume", "amount", "raw_close", "raw_high", "raw_low", "turnover_rate"]
                              if c in df_latest.columns]
                 lf = (
                     pl.scan_parquet(self._enriched_glob)
@@ -220,7 +220,7 @@ class KlineRepository:
 
                     # JOIN instruments 到完整历史 (filter_history/basic_filter 需要 name/股本等列)
                     if instruments is not None and not instruments.is_empty():
-                        inst_cols = [c for c in ["name", "total_shares", "float_shares"]
+                        inst_cols = [c for c in ["name", "total_shares", "float_shares", "total_market_cap", "float_market_cap", "pe_ttm", "pb"]
                                      if c in instruments.columns and c not in df_full.columns]
                         if inst_cols:
                             df_full = df_full.join(
@@ -273,7 +273,7 @@ class KlineRepository:
             if "date" in hist_all.columns and hist_all["date"].min() <= start_60d:
                 # 从历史缓存中提取所需列 (历史缓存已有指标列)
                 base_cols = ["symbol", "date", "open", "high", "low", "close", "volume",
-                             "raw_close", "raw_high", "raw_low"]
+                             "raw_close", "raw_high", "raw_low", "turnover_rate"]
                 needed = [c for c in base_cols if c in hist_all.columns]
                 df_hist = hist_all.filter(
                     (pl.col("date") >= start_60d) & (pl.col("date") <= latest)
@@ -439,7 +439,7 @@ class KlineRepository:
         )
 
         read_cols = [c for c in ["symbol", "date", "open", "high", "low", "close", "volume",
-                                 "raw_close", "raw_high", "raw_low"]
+                                 "raw_close", "raw_high", "raw_low", "turnover_rate"]
                      if c in lf.collect_schema().names()]
         df_hist = lf.select(read_cols).collect()
 

@@ -312,6 +312,8 @@ export function Layout() {
   const isTrading = quoteStatus?.is_trading_hours ?? false
   // none/free 档(无实时行情权限)→ rank < starter(1)
   const isFreeTier = tierRank(caps?.label ?? '') < 1
+  const hasTushareRealtime = !!settingsState?.has_tushare_token
+  const realtimeUnlocked = !isFreeTier || hasTushareRealtime
 
   // 轮询触发记录总数 → 更新监控中心徽标 (每 15 秒)
   const alertsTotalQuery = useQuery({
@@ -356,7 +358,7 @@ export function Layout() {
         queryKey: QK.capabilities,
         queryFn: api.capabilities,
       })
-      if (tierRank(fresh.label ?? '') < 1) return
+      if (tierRank(fresh.label ?? '') < 1 && !settingsState?.has_tushare_token) return
     }
     await toggleQuote.mutateAsync(enabled)
     // 仅在交易时段立即获取一次行情
@@ -445,7 +447,7 @@ export function Layout() {
 
         {/* 全局行情开关 */}
         <div className="border-t border-border px-3 py-2.5 shrink-0">
-          {isFreeTier ? (
+          {!realtimeUnlocked ? (
             /* Free 档位 — 显示升级提示 */
             <div className="flex items-center justify-between">
               <span className="text-xs text-secondary truncate">实时行情</span>
@@ -492,7 +494,7 @@ export function Layout() {
           )}
 
           {/* 状态提示 */}
-          {realtimeEnabled && !isFreeTier && (
+          {realtimeEnabled && realtimeUnlocked && (
             <div className="mt-1.5 text-[10px] leading-snug">
               {isRunning && isTrading ? (
                 <span className="text-accent">行情运行中</span>
@@ -501,7 +503,7 @@ export function Layout() {
               ) : null}
             </div>
           )}
-          {showSidebarQuotes && !isFreeTier && (
+          {showSidebarQuotes && realtimeUnlocked && (
             <SidebarIndexQuotes rows={sidebarIndexQuotes?.rows} items={sidebarIndexes} />
           )}
         </div>

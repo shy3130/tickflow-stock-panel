@@ -69,6 +69,31 @@ def get_tickflow_key() -> str:
     return settings.tickflow_api_key or ""
 
 
+def get_tushare_token() -> str:
+    """Return current Tushare token from secrets.json first, then env/config."""
+    data = load()
+    if "tushare_token" in data:
+        return str(data.get("tushare_token") or "")
+    env_val = os.getenv("TUSHARE_TOKEN", "")
+    return env_val or ""
+
+
+def get_tushare_http_url() -> str:
+    """Return the configured Tushare-compatible HTTP endpoint."""
+    data = load()
+    if "tushare_http_url" in data:
+        return _normalize_http_url(data.get("tushare_http_url") or "https://tt.xiaodefa.cn")
+    env_val = os.getenv("TUSHARE_HTTP_URL", "")
+    return _normalize_http_url(env_val or "https://tt.xiaodefa.cn")
+
+
+def _normalize_http_url(url: str) -> str:
+    value = str(url or "").strip().rstrip("/")
+    if value and "://" not in value:
+        value = f"https://{value}"
+    return value
+
+
 def get_ai_key() -> str:
     """取当前 AI Key:secrets.json 优先,否则 .env。"""
     val = load().get("ai_api_key")

@@ -21,6 +21,12 @@ from apscheduler.triggers.cron import CronTrigger
 from app.indicators.pipeline import run_pipeline
 from app.config import settings
 from app.services import index_sync, instrument_sync, kline_sync
+from app.services.local_quant_import import (
+    import_local_quant_incremental,
+    import_local_quant_minute,
+    local_quant_auto_import_enabled,
+    upsert_instruments_from_local_quant,
+)
 from app.tickflow.capabilities import Cap, CapabilitySet
 from app.tickflow.pools import DEMO_SYMBOLS, get_pool
 from app.tickflow.repository import KlineRepository
@@ -70,10 +76,16 @@ def _resolve_universe(capset: CapabilitySet) -> list[str]:
 
 def run_instruments_sync(repo: KlineRepository) -> dict:
     """盘前同步标的维表。"""
+    if local_quant_auto_import_enabled():
+        rows = upsert_instruments_from_local_quant(repo)
+        _refresh_instruments_view(repo)
+        _invalidate("instruments")
+        return {"instruments_rows": rows, "source": "local_quant"}
+
     rows = instrument_sync.sync_instruments(repo.store.data_dir)
     _refresh_instruments_view(repo)
     _invalidate("instruments")
-    return {"instruments_rows": rows}
+    return {"instruments_rows": rows, "source": "tickflow"}
 
 
 def run_now(
@@ -88,12 +100,25 @@ def run_now(
     """
     emit = on_progress or _noop
     skipped: list[str] = []
+    local_quant_enabled = local_quant_auto_import_enabled()
+    inst_source = "tickflow"
 
     # Step 0: 先同步标的维表, 再解析标的池 — 确保标的池基于最新 instruments
     emit("sync_instruments", 2, "同步标的维表…")
-    inst_rows = instrument_sync.sync_instruments(repo.store.data_dir)
-    if inst_rows > 0:
-        _refresh_instruments_view(repo)
+    if local_quant_enabled:
+        try:
+            inst_rows = upsert_instruments_from_local_quant(repo)
+            inst_source = "local_quant"
+            _refresh_instruments_view(repo)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("local_quant instruments sync failed, fallback to TickFlow: %s", e)
+            inst_rows = instrument_sync.sync_instruments(repo.store.data_dir)
+            if inst_rows > 0:
+                _refresh_instruments_view(repo)
+    else:
+        inst_rows = instrument_sync.sync_instruments(repo.store.data_dir)
+        if inst_rows > 0:
+            _refresh_instruments_view(repo)
     emit("sync_instruments", 8, f"标的维表同步完成,{inst_rows} 只标的")
     _invalidate("instruments")
 
@@ -110,8 +135,28 @@ def run_now(
     today = _date.today()
     today_exists = latest_daily and latest_daily >= today
     new_daily_days = 0
+    local_daily_result: dict | None = None
 
-    if today_exists and capset.has(Cap.QUOTE_POOL):
+    if local_quant_enabled:
+        try:
+            emit("sync_daily", 12, "从本地 quant-screener 增量导入日K…")
+            local_daily_result = import_local_quant_incremental(repo, compute_enriched=False)
+            if local_daily_result.get("status") == "unavailable":
+                raise RuntimeError(str(local_daily_result.get("reason") or "local quant unavailable"))
+            written_daily = int(local_daily_result.get("rows_written") or 0)
+            start_date = local_daily_result.get("start_date")
+            end_date = local_daily_result.get("end_date")
+            new_daily_days = len(list((repo.store.data_dir / "kline_daily").glob("date=*")))
+            _refresh_single_view(repo, "kline_daily")
+            emit("sync_daily", 45, f"本地日K导入完成,{written_daily} 行 [{start_date} ~ {end_date}]")
+            logger.info("local_quant sync_daily done: %s", local_daily_result)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("local_quant daily import failed, fallback to TickFlow: %s", e)
+            local_daily_result = None
+
+    if local_daily_result is not None:
+        pass
+    elif today_exists and capset.has(Cap.QUOTE_POOL):
         # 付费档:今天有数据(QuoteService 已落盘)→ 实时行情覆写,确保最新。
         # free/none 档无 quote.pool 能力,即便今天已有数据(如从 expert 降级),
         # 也降级到下方 batch 路径刷新,避免调用无权限的实时行情接口。
@@ -325,8 +370,26 @@ def run_now(
     from app.services import preferences
     minute_on = preferences.get_minute_sync_enabled()
     minute_days = preferences.get_minute_sync_days()
+    minute_source = preferences.get_minute_sync_source()
     written_minute = 0
-    if minute_on and capset.has(Cap.KLINE_MINUTE_BATCH):
+    local_minute_result: dict | None = None
+    if minute_on and minute_source == "local_quant":
+        minute_start = today - _td(days=minute_days)
+        emit("sync_minute", 90, f"从本地 Tushare 导入分钟K [{minute_start} ~ {today}]…")
+        logger.info("sync_minute local_quant: [%s ~ %s] start", minute_start, today)
+        try:
+            local_minute_result = import_local_quant_minute(repo, days=minute_days)
+            written_minute = int(local_minute_result.get("rows_written") or 0)
+            minute_dir = repo.store.data_dir / "kline_minute"
+            minute_cover_days = len(list(minute_dir.glob("date=*"))) if minute_dir.exists() else 0
+            emit("sync_minute", 93, f"本地分钟K完成,覆盖 {minute_cover_days} 天")
+            logger.info("sync_minute local_quant done: %s", local_minute_result)
+            _invalidate("minute")
+        except Exception as e:  # noqa: BLE001
+            skipped.append("sync_minute")
+            logger.warning("local_quant minute import failed: %s", e)
+            emit("sync_minute", 93, f"本地分钟K导入失败:{e}")
+    elif minute_on and capset.has(Cap.KLINE_MINUTE_BATCH):
         minute_start = today - _td(days=minute_days)
         emit("sync_minute", 90, f"获取分钟K [{minute_start} ~ {today}]…")
         logger.info("sync_minute: [%s ~ %s] start", minute_start, today)
@@ -365,6 +428,10 @@ def run_now(
         "index_count": index_count,
         "index_daily_rows": written_index_daily,
         "minute_rows": written_minute,
+        "data_source": "local_quant" if local_daily_result is not None else "tickflow",
+        "instrument_source": inst_source,
+        "local_quant_daily": local_daily_result,
+        "local_quant_minute": local_minute_result,
         "skipped_stages": skipped,
     }
 
@@ -497,6 +564,8 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
         misfire_grace_time=3600,
         replace_existing=True,
     )
+    if not preferences.get_daily_pipeline_enabled():
+        scheduler.pause_job("daily_pipeline")
 
     # 盘后: 五档盘口 sealed 定版(时间由偏好决定, 默认15:02, 范围15:01~18:00)
     depth_sched = preferences.get_depth_finalize_time()

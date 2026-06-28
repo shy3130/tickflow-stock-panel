@@ -26,7 +26,7 @@ from app.services.ext_data import (
     write_ext_parquet,
     rows_to_parquet,
 )
-from app.services.ext_pull import fetch_and_ingest, pull_scheduler
+from app.services.ext_pull import fetch_and_ingest, pull_scheduler, request_pull_json
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ext-data", tags=["ext-data"])
@@ -88,6 +88,65 @@ def _store(request: Request) -> ExtConfigStore:
 
 def _data_dir(request: Request) -> Path:
     return request.app.state.repo.store.data_dir
+
+
+@router.post("/presets/tushare-daily")
+def create_tushare_daily_preset(request: Request):
+    """Create or update a Tushare daily quote ext-data pull preset."""
+    store = _store(request)
+    existing = store.get("tushare_daily")
+    fields = [
+        ExtField("symbol", "string", "symbol"),
+        ExtField("date", "string", "date"),
+        ExtField("open", "float", "open"),
+        ExtField("high", "float", "high"),
+        ExtField("low", "float", "low"),
+        ExtField("close", "float", "close"),
+        ExtField("volume", "float", "volume"),
+        ExtField("amount", "float", "amount"),
+    ]
+    body = json.dumps(
+        {
+            "api_name": "daily",
+            "token": "${TUSHARE_TOKEN}",
+            "params": {"trade_date": "${LAST_WEEKDAY_YYYYMMDD}"},
+            "fields": "ts_code,trade_date,open,high,low,close,vol,amount",
+        },
+        ensure_ascii=False,
+    )
+    pull = PullConfig(
+        url="${TUSHARE_HTTP_URL}",
+        method="POST",
+        headers={"Content-Type": "application/json"},
+        body=body,
+        response_path="data",
+        field_map={"ts_code": "symbol", "trade_date": "date", "vol": "volume"},
+        schedule_minutes=1440,
+        enabled=False,
+        last_run=existing.pull.last_run if existing and existing.pull else None,
+        last_status=existing.pull.last_status if existing and existing.pull else None,
+        last_message=existing.pull.last_message if existing and existing.pull else None,
+        last_rows=existing.pull.last_rows if existing and existing.pull else None,
+    )
+    config = existing or ExtConfig(
+        id="tushare_daily",
+        label="Tushare Daily",
+        mode="timeseries",
+        fields=fields,
+        description="Tushare daily quote data via ext-data pull.",
+        symbol_map={"type": "mapped", "col": "symbol"},
+        code_map={"type": "computed", "from": "symbol", "method": "strip_exchange"},
+    )
+    config.label = "Tushare Daily"
+    config.mode = "timeseries"
+    config.fields = fields
+    config.description = "Tushare daily quote data via ext-data pull."
+    config.symbol_map = {"type": "mapped", "col": "symbol"}
+    config.code_map = {"type": "computed", "from": "symbol", "method": "strip_exchange"}
+    config.pull = pull
+    store.upsert(config)
+    pull_scheduler.refresh(_data_dir(request))
+    return config.to_dict()
 
 
 # ---------------------------------------------------------------------------
@@ -569,28 +628,17 @@ async def test_pull(request: Request, config_id: str):
 
     # 临时构建一个带新配置的 config 用于测试
     from app.services.ext_pull import _extract_rows, _apply_field_map
-    import httpx
 
     pull = config.pull
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            headers = pull.headers or {}
-            kwargs: dict = {"headers": headers}
-            if pull.method.upper() == "POST" and pull.body:
-                kwargs["content"] = pull.body
-                if "content-type" not in {k.lower() for k in headers}:
-                    kwargs["headers"]["Content-Type"] = "application/json"
-            resp = await client.request(pull.method.upper(), pull.url, **kwargs)
-            resp.raise_for_status()
-            data = resp.json()
-
+        data = await request_pull_json(pull)
         rows = _extract_rows(data, pull.response_path)
         preview = _apply_field_map(rows[:5], pull.field_map)
         return {
             "status": "ok",
             "total_rows": len(rows),
             "preview": preview,
-            "has_symbol": bool(rows and "symbol" in rows[0]),
+            "has_symbol": bool(preview and "symbol" in preview[0]),
         }
     except Exception as e:
         raise HTTPException(400, f"测试失败: {e}") from e

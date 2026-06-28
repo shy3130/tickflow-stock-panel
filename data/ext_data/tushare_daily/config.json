@@ -1,0 +1,79 @@
+{
+  "id": "tushare_daily",
+  "label": "Tushare Daily",
+  "mode": "timeseries",
+  "fields": [
+    {
+      "name": "symbol",
+      "dtype": "string",
+      "label": "symbol"
+    },
+    {
+      "name": "date",
+      "dtype": "string",
+      "label": "date"
+    },
+    {
+      "name": "open",
+      "dtype": "float",
+      "label": "open"
+    },
+    {
+      "name": "high",
+      "dtype": "float",
+      "label": "high"
+    },
+    {
+      "name": "low",
+      "dtype": "float",
+      "label": "low"
+    },
+    {
+      "name": "close",
+      "dtype": "float",
+      "label": "close"
+    },
+    {
+      "name": "volume",
+      "dtype": "float",
+      "label": "volume"
+    },
+    {
+      "name": "amount",
+      "dtype": "float",
+      "label": "amount"
+    }
+  ],
+  "description": "Tushare daily quote data via ext-data pull.",
+  "symbol_map": {
+    "type": "mapped",
+    "col": "symbol"
+  },
+  "code_map": {
+    "type": "computed",
+    "from": "symbol",
+    "method": "strip_exchange"
+  },
+  "created_at": "2026-06-27T18:23:11.573793",
+  "updated_at": "2026-06-28T02:50:10.198472",
+  "pull": {
+    "url": "${TUSHARE_HTTP_URL}",
+    "method": "POST",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\"api_name\": \"daily\", \"token\": \"${TUSHARE_TOKEN}\", \"params\": {\"trade_date\": \"${LAST_WEEKDAY_YYYYMMDD}\"}, \"fields\": \"ts_code,trade_date,open,high,low,close,vol,amount\"}",
+    "response_path": "data",
+    "field_map": {
+      "ts_code": "symbol",
+      "trade_date": "date",
+      "vol": "volume"
+    },
+    "schedule_minutes": 1440,
+    "enabled": false,
+    "last_run": null,
+    "last_status": null,
+    "last_message": null,
+    "last_rows": null
+  }
+}

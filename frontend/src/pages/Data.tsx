@@ -45,6 +45,13 @@ import { Skeleton } from '@/components/data/Skeleton'
 import { ExtDataStatCard } from '@/components/ext-data/ExtDataStatCard'
 import { CreateExtDialog } from '@/components/ext-data/CreateExtDialog'
 import { EditExtDialog } from '@/components/ext-data/EditExtDialog'
+import { useFinancialSync } from '@/lib/useFinancials'
+
+const parseDateOrNull = (value: string | null | undefined) => {
+  if (!value) return null
+  const d = new Date(value)
+  return Number.isNaN(d.getTime()) ? null : d
+}
 
 export function Data() {
   const qc = useQueryClient()
@@ -122,6 +129,8 @@ export function Data() {
   const [showCreateExt, setShowCreateExt] = useState(false)
   const [editingExt, setEditingExt] = useState<ExtDataConfig | null>(null)
   const [indexBatchInput, setIndexBatchInput] = useState('100')
+  const [tushareImportDays, setTushareImportDays] = useState(30)
+  const clampTushareImportDays = (value: number) => Math.max(1, Math.min(5000, Math.trunc(value) || 30))
 
   const extConfigs = useQuery({
     queryKey: QK.extData,
@@ -141,6 +150,49 @@ export function Data() {
       qc.invalidateQueries({ queryKey: ['index-daily'] })
     },
   })
+
+  const importTushareDaily = useMutation({
+    mutationFn: (compute_enriched: boolean) =>
+      api.tushareImportDailyJob({
+        days: clampTushareImportDays(tushareImportDays),
+        compute_enriched,
+      }),
+    onSuccess: ({ job_id }) => {
+      setActiveJobId(job_id)
+      startTime.current = Date.now()
+      qc.invalidateQueries({ queryKey: QK.pipelineJobs })
+    },
+  })
+
+  const importTushareInstruments = useMutation({
+    mutationFn: api.tushareImportInstruments,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: QK.dataStatus })
+      qc.invalidateQueries({ queryKey: QK.pipelineJobs })
+    },
+  })
+
+  const importAdjFactorLocal = useMutation({
+    mutationFn: api.localQuantImportAdjFactor,
+    onSuccess: () => qc.invalidateQueries({ queryKey: QK.dataStatus }),
+  })
+
+  const importIndexLocal = useMutation({
+    mutationFn: api.localQuantImportGlobalIndexDaily,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: QK.dataStatus })
+      qc.invalidateQueries({ queryKey: QK.indexList })
+      qc.invalidateQueries({ queryKey: QK.indexQuotes })
+      qc.invalidateQueries({ queryKey: ['index-daily'] })
+    },
+  })
+
+  const importMinuteLocal = useMutation({
+    mutationFn: () => api.localQuantImportMinute({ days: prefs.data?.minute_sync_days ?? 5 }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: QK.dataStatus }),
+  })
+
+  const importFinancials = useFinancialSync()
 
   const prefs = usePreferences()
   const minuteAuto = prefs.data?.minute_sync_enabled ?? false
@@ -184,7 +236,7 @@ export function Data() {
   const quoteStatus = useQuoteStatus()
   const toggleQuote = useToggleRealtimeQuotes()
 
-  const hasAdjCap = !!caps.data?.capabilities?.['adj_factor']
+  const hasAdjCap = !!caps.data?.capabilities?.['adj_factor'] || !!status.data?.adj_factor?.rows
   const hasDailyBatchCap = !!caps.data?.capabilities?.['kline.daily.batch']
   const hasMinuteCap = !!caps.data?.capabilities?.['kline.minute.batch']
   const pipelineSteps = ['日K', ...(hasAdjCap ? ['复权'] : []), '指标', '指数', ...((hasMinuteCap && minuteAuto) ? ['分钟K'] : [])]
@@ -215,6 +267,7 @@ export function Data() {
   const isRunning = job.data?.status === 'running' || job.data?.status === 'pending'
   const isStarting = startSync.isPending
   const hasData = !!(s?.instruments?.rows || s?.daily?.rows)
+  const hasTushareToken = !!settings.data?.has_tushare_token
   // none 档(无 key / 无效 key) → 禁用立即同步 (同步依赖付费档的批量端点)
   const isNoKey = settings.data?.mode === 'none'
   const indexOverviewStats = s ? {
@@ -228,7 +281,7 @@ export function Data() {
   const indexEarliestDate = s?.index_daily?.earliest_date ?? s?.index_enriched?.earliest_date ?? null
   const indexOffsetDays = indexExtendUnit === 'month' ? indexExtendValue * 30 : indexExtendValue * 365
   const indexTargetDate = (() => {
-    const d = indexEarliestDate ? new Date(indexEarliestDate) : new Date()
+    const d = parseDateOrNull(indexEarliestDate) ?? new Date()
     d.setDate(d.getDate() - indexOffsetDays)
     return d
   })()
@@ -248,6 +301,12 @@ export function Data() {
     sync_index: 'index_daily',
     sync_minute: 'minute',
     extend_minute: 'minute',
+    local_quant_import: 'daily',
+    local_quant_instruments: 'instruments',
+    local_quant_enriched: 'enriched',
+    tushare_import: 'daily',
+    tushare_instruments: 'instruments',
+    tushare_enriched: 'enriched',
   }
   const activeCard = isRunning && job.data ? STAGE_CARD[job.data.stage] ?? null : null
 
@@ -361,6 +420,88 @@ export function Data() {
             </span>
           </div>
         )}
+
+        <div className="rounded-card border border-border bg-surface p-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <Database className="h-4 w-4 text-secondary" />
+                <h3 className="text-sm font-medium text-foreground">Tushare 导入</h3>
+              </div>
+              <div className="mt-1 text-[11px] text-muted">
+                当前地址: <span className="font-mono text-secondary">{settings.data?.tushare_http_url || 'https://tt.xiaodefa.cn'}</span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center">
+                <button
+                  type="button"
+                  onClick={() => setTushareImportDays(v => clampTushareImportDays(v - 1))}
+                  disabled={!!activeJobId || importTushareDaily.isPending}
+                  className="h-7 w-7 flex items-center justify-center rounded-l-btn bg-elevated border border-border text-secondary hover:bg-border/50 disabled:opacity-30 transition-colors text-xs"
+                >−</button>
+                <input
+                  type="number"
+                  min={1}
+                  max={5000}
+                  value={tushareImportDays}
+                  onChange={(e) => setTushareImportDays(clampTushareImportDays(Number(e.target.value)))}
+                  disabled={!!activeJobId || importTushareDaily.isPending}
+                  className="h-7 w-20 border-y border-border bg-base px-2 text-center text-[11px] font-mono tabular-nums text-foreground outline-none focus:bg-elevated disabled:opacity-40"
+                />
+                <button
+                  type="button"
+                  onClick={() => setTushareImportDays(v => clampTushareImportDays(v + 1))}
+                  disabled={!!activeJobId || importTushareDaily.isPending}
+                  className="h-7 w-7 flex items-center justify-center rounded-r-btn bg-elevated border border-border text-secondary hover:bg-border/50 disabled:opacity-30 transition-colors text-xs"
+                >+</button>
+                <span className="ml-1.5 text-[11px] text-muted">天</span>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => importTushareInstruments.mutate()}
+                disabled={!hasTushareToken || !!activeJobId || importTushareInstruments.isPending}
+                className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-btn bg-elevated text-secondary hover:text-foreground disabled:opacity-40 disabled:pointer-events-none text-xs transition-colors"
+              >
+                {importTushareInstruments.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Database className="h-3.5 w-3.5" />}
+                导入标的
+              </button>
+
+              <button
+                type="button"
+                onClick={() => importTushareDaily.mutate(false)}
+                disabled={!hasTushareToken || !!activeJobId || importTushareDaily.isPending}
+                className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-btn bg-elevated text-secondary hover:text-foreground disabled:opacity-40 disabled:pointer-events-none text-xs transition-colors"
+              >
+                {importTushareDaily.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                导入最近 {tushareImportDays} 天
+              </button>
+
+              <button
+                type="button"
+                onClick={() => importTushareDaily.mutate(true)}
+                disabled={!hasTushareToken || !!activeJobId || importTushareDaily.isPending}
+                className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-btn bg-accent/90 text-base hover:bg-accent disabled:opacity-40 disabled:pointer-events-none text-xs font-medium transition-colors"
+              >
+                {importTushareDaily.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                导入最近 {tushareImportDays} 天并计算
+              </button>
+            </div>
+          </div>
+
+          {!hasTushareToken && (
+            <div className="mt-3 text-[11px] text-warning/90">
+              未配置 Tushare Token，请先到 <Link to="/settings?tab=tushare" className="font-medium hover:underline">Tushare 设置</Link> 保存 Token。
+            </div>
+          )}
+          {(importTushareDaily.isError || importTushareInstruments.isError) && (
+            <div className="mt-3 text-xs text-danger">
+              导入失败:{String(((importTushareDaily.error || importTushareInstruments.error) as any)?.message ?? '')}
+            </div>
+          )}
+        </div>
 
         {/* 实时进度 */}
         <AnimatePresence>
@@ -598,6 +739,8 @@ export function Data() {
               tierLabel={caps.data?.label}
               auto
               onShowFields={() => setSchemaTable('instruments')}
+              onSettings={() => setOpenSettings(v => v === 'instruments' ? null : 'instruments')}
+              settingsOpen={openSettings === 'instruments'}
             />
             <StatCard
               title="日 K"
@@ -630,6 +773,8 @@ export function Data() {
               tierLabel={caps.data?.label}
               auto
               onShowFields={() => setSchemaTable('adj_factor')}
+              onSettings={() => setOpenSettings(v => v === 'adj_factor' ? null : 'adj_factor')}
+              settingsOpen={openSettings === 'adj_factor'}
             />
             <StatCard
               title="Enriched"
@@ -698,6 +843,8 @@ export function Data() {
               tierKey="financials"
               capLimits={caps.data?.capabilities}
               tierLabel={caps.data?.label}
+              onSettings={() => setOpenSettings(v => v === 'financials' ? null : 'financials')}
+              settingsOpen={openSettings === 'financials'}
             />
             {(extConfigs.data?.items ?? []).map((ext) => (
               <ExtDataStatCard
@@ -776,14 +923,86 @@ export function Data() {
       </AnimatePresence>
 
       <AnimatePresence>
+        {openSettings === 'instruments' && (
+          <SettingsModal title="标的维表 · Tushare 导入" onClose={() => setOpenSettings(null)}>
+            <div className="rounded-card border border-border bg-base/30 p-4 space-y-3">
+              <div>
+                <div className="text-sm font-medium text-foreground">Tushare stock_basic</div>
+                <div className="text-[11px] text-muted mt-1">从 Tushare 刷新 A 股标的维表，写入 TickFlow 本地 instruments。</div>
+              </div>
+              <button
+                onClick={() => importTushareInstruments.mutate()}
+                disabled={!hasTushareToken || importTushareInstruments.isPending || !!activeJobId}
+                className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-btn bg-accent/90 text-base text-xs font-medium hover:bg-accent disabled:opacity-40 disabled:pointer-events-none transition-colors"
+              >
+                {importTushareInstruments.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
+                {importTushareInstruments.isPending ? '导入中...' : '从 Tushare 导入'}
+              </button>
+              {!hasTushareToken && <div className="text-[10px] text-warning/80">请先在 Tushare 设置里保存 Token。</div>}
+            </div>
+          </SettingsModal>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
         {openSettings === 'daily' && (
           <SettingsModal title="日 K · 向前扩展历史" onClose={() => setOpenSettings(null)}>
-            <ExtendHistoryPanel
-              caps={caps.data}
-              isRunning={!!activeJobId}
-              earliestDate={s?.daily?.earliest_date ?? null}
-              onStart={() => setOpenSettings(null)}
-            />
+            <div className="space-y-4">
+              <ExtendHistoryPanel
+                caps={caps.data}
+                isRunning={!!activeJobId}
+                earliestDate={s?.daily?.earliest_date ?? null}
+                onStart={() => setOpenSettings(null)}
+              />
+              <div className="rounded-card border border-border bg-base/30 p-4 space-y-3">
+                <div>
+                  <div className="text-[10px] text-secondary">Tushare 日线导入</div>
+                  <div className="text-[11px] text-muted mt-1">按当前 Tushare 配置导入最近 {tushareImportDays} 天日 K，并写入 TickFlow 本地 daily。</div>
+                </div>
+                <button
+                  onClick={() => importTushareDaily.mutate(true)}
+                  disabled={!hasTushareToken || importTushareDaily.isPending || !!activeJobId}
+                  className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-btn bg-accent/90 text-base text-xs font-medium hover:bg-accent disabled:opacity-40 disabled:pointer-events-none transition-colors"
+                >
+                  {importTushareDaily.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
+                  {importTushareDaily.isPending ? '导入中...' : `从 Tushare 导入最近 ${tushareImportDays} 天`}
+                </button>
+              </div>
+            </div>
+          </SettingsModal>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {openSettings === 'adj_factor' && (
+          <SettingsModal title="除权因子 · 本地 Tushare" onClose={() => setOpenSettings(null)}>
+            <div className="space-y-4">
+              <div className="rounded-card border border-border bg-base/30 p-4 space-y-3">
+                <div>
+                  <div className="text-sm font-medium text-foreground">Tushare adj_factor</div>
+                  <div className="text-[11px] text-muted mt-1">从本地 Tushare 数据库导入复权因子，写入 TickFlow 本地 adj_factor。</div>
+                </div>
+                <button
+                  onClick={() => importAdjFactorLocal.mutate()}
+                  disabled={importAdjFactorLocal.isPending || !!activeJobId}
+                  className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-btn bg-accent/90 text-base text-xs font-medium hover:bg-accent disabled:opacity-40 disabled:pointer-events-none transition-colors"
+                >
+                  {importAdjFactorLocal.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
+                  {importAdjFactorLocal.isPending ? '导入中...' : '从 Tushare 导入'}
+                </button>
+              </div>
+              <div className="rounded-card border border-border bg-base/30 p-4 space-y-3">
+                <div className="text-[10px] text-secondary">Tushare 日线 + 指标计算</div>
+                <button
+                  onClick={() => importTushareDaily.mutate(true)}
+                  disabled={!hasTushareToken || importTushareDaily.isPending || !!activeJobId}
+                  className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-btn bg-elevated text-secondary text-xs font-medium hover:text-foreground disabled:opacity-40 disabled:pointer-events-none transition-colors"
+                >
+                  {importTushareDaily.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
+                  {importTushareDaily.isPending ? '导入中...' : '从 Tushare 导入并计算'}
+                </button>
+              </div>
+            </div>
           </SettingsModal>
         )}
       </AnimatePresence>
@@ -791,7 +1010,20 @@ export function Data() {
       <AnimatePresence>
         {openSettings === 'enriched' && (
           <SettingsModal title="Enriched · 计算设置" onClose={() => setOpenSettings(null)}>
-            <EnrichedRebuildPanel isRunning={!!activeJobId} onStart={() => setOpenSettings(null)} />
+            <div className="space-y-4">
+              <EnrichedRebuildPanel isRunning={!!activeJobId} onStart={() => setOpenSettings(null)} />
+              <div className="rounded-card border border-border bg-base/30 p-4 space-y-3">
+                <div className="text-[10px] text-secondary">Tushare 日线 + 指标计算</div>
+                <button
+                  onClick={() => importTushareDaily.mutate(true)}
+                  disabled={!hasTushareToken || importTushareDaily.isPending || !!activeJobId}
+                  className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-btn bg-elevated text-secondary text-xs font-medium hover:text-foreground disabled:opacity-40 disabled:pointer-events-none transition-colors"
+                >
+                  {importTushareDaily.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
+                  {importTushareDaily.isPending ? '导入中...' : '从 Tushare 导入并计算'}
+                </button>
+              </div>
+            </div>
           </SettingsModal>
         )}
       </AnimatePresence>
@@ -894,6 +1126,41 @@ export function Data() {
                   </span>
                 )}
               </div>
+              <div className="rounded-card border border-border bg-base/30 p-4 space-y-3">
+                <div>
+                  <div className="text-[10px] text-secondary">本地 Tushare 指数导入</div>
+                  <div className="text-[11px] text-muted mt-1">从 quant-screener / Tushare 本地库导入指数日 K，并重建 TickFlow 指数指标。</div>
+                </div>
+                <button
+                  onClick={() => importIndexLocal.mutate()}
+                  disabled={importIndexLocal.isPending || !!activeJobId}
+                  className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-btn bg-elevated text-secondary text-xs font-medium hover:text-foreground disabled:opacity-40 disabled:pointer-events-none transition-colors"
+                >
+                  {importIndexLocal.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
+                  {importIndexLocal.isPending ? '导入中...' : '从 Tushare 导入指数'}
+                </button>
+              </div>
+            </div>
+          </SettingsModal>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {openSettings === 'financials' && (
+          <SettingsModal title="财务数据 · 本地 Tushare" onClose={() => setOpenSettings(null)}>
+            <div className="rounded-card border border-border bg-base/30 p-4 space-y-3">
+              <div>
+                <div className="text-sm font-medium text-foreground">财务数据全量导入</div>
+                <div className="text-[11px] text-muted mt-1">从 quant-screener / Tushare 本地库重新生成 TickFlow 财务数据。</div>
+              </div>
+              <button
+                onClick={() => importFinancials.mutate('all')}
+                disabled={importFinancials.isPending}
+                className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-btn bg-accent/90 text-base text-xs font-medium hover:bg-accent disabled:opacity-40 disabled:pointer-events-none transition-colors"
+              >
+                {importFinancials.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
+                {importFinancials.isPending ? '导入中...' : '从 Tushare 导入财务数据'}
+              </button>
             </div>
           </SettingsModal>
         )}
@@ -902,7 +1169,23 @@ export function Data() {
       <AnimatePresence>
         {openSettings === 'minute' && (
           <SettingsModal title="分钟 K · 同步设置" onClose={() => setOpenSettings(null)}>
-            <MinuteSyncConfig caps={caps.data} isRunning={!!activeJobId} onStart={() => setOpenSettings(null)} />
+            <div className="space-y-4">
+              <MinuteSyncConfig caps={caps.data} isRunning={!!activeJobId} onStart={() => setOpenSettings(null)} />
+              <div className="rounded-card border border-border bg-base/30 p-4 space-y-3">
+                <div>
+                  <div className="text-[10px] text-secondary">本地 Tushare 分钟线导入</div>
+                  <div className="text-[11px] text-muted mt-1">从本地 Tushare 分钟表导入最近 {prefs.data?.minute_sync_days ?? 5} 天，写入 TickFlow 分钟 K。</div>
+                </div>
+                <button
+                  onClick={() => importMinuteLocal.mutate()}
+                  disabled={importMinuteLocal.isPending || !!activeJobId}
+                  className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-btn bg-elevated text-secondary text-xs font-medium hover:text-foreground disabled:opacity-40 disabled:pointer-events-none transition-colors"
+                >
+                  {importMinuteLocal.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
+                  {importMinuteLocal.isPending ? '导入中...' : `从 Tushare 导入最近 ${prefs.data?.minute_sync_days ?? 5} 天`}
+                </button>
+              </div>
+            </div>
           </SettingsModal>
         )}
       </AnimatePresence>

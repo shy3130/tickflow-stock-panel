@@ -116,7 +116,9 @@ export function StatCard({
   const meta = tierKey ? CARD_META[tierKey] : undefined
   const isLocal = meta?.capKey === ''
   const capInfo = meta?.capKey ? capLimits?.[meta.capKey] : undefined
-  const hasCap = isLocal || !!capInfo
+  const hasLocalData = !empty
+  const hasCap = isLocal || !!capInfo || hasLocalData
+  const badgeIsLocal = isLocal || (!capInfo && hasLocalData)
 
   // 渲染字段说明入口图标
   // - fieldTabs 提供时: 返回 null (图标由 renderSubLabelInline 内联到文字后)
@@ -232,7 +234,7 @@ export function StatCard({
         ) : (
           <CapBadge
             hasCap={hasCap}
-            isLocal={isLocal}
+            isLocal={badgeIsLocal}
             tierLabel={tierLabel}
             tierReq={meta?.tierReq}
             capInfo={capInfo}

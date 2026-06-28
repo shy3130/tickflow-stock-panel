@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react'
-import { RefreshCw, Lock, Loader2, X, Search, FileText, Database, Clock, CheckCircle2, Hourglass } from 'lucide-react'
+import { RefreshCw, Loader2, X, Search, FileText, Database, Clock, CheckCircle2, Hourglass } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
-import { useCapabilities } from '@/lib/useSharedQueries'
 import { useFinancialStatus, useFinancialSync } from '@/lib/useFinancials'
 import { StockFinancialSearch } from '@/components/financials/StockFinancialSearch'
 import { StockFinancialDetail } from '@/components/financials/StockFinancialDetail'
@@ -27,8 +26,6 @@ const TABLE_ICON: Record<string, typeof FileText> = {
 }
 
 export function Financials() {
-  const { data: caps } = useCapabilities()
-  const hasFinancial = caps?.capabilities?.['financial'] != null
   const { data: status, isLoading } = useFinancialStatus()
   const syncMut = useFinancialSync()
   // 同步进行中 = 服务端真值(status.syncing)或本地乐观态(请求已发出待确认)。
@@ -57,25 +54,6 @@ export function Financials() {
     rememberStock(symbol, name)
   }
 
-  if (!hasFinancial) {
-    return (
-      <>
-        <PageHeader title="财务分析" subtitle="利润表 / 资负表 / 现金流 / 关键指标 / AI分析 · Expert" />
-        <div className="px-8 py-10">
-          <div className="mx-auto max-w-md rounded-card border border-warning/30 bg-warning/[0.04] p-8 text-center">
-            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-warning/10">
-              <Lock className="h-6 w-6 text-warning" />
-            </div>
-            <h3 className="mt-4 text-base font-semibold text-foreground">需要 Expert 套餐</h3>
-            <p className="mt-2 text-xs leading-relaxed text-secondary">
-              财务数据接口仅 Expert 套餐可用。升级后此页自动显示财务数据面板。
-            </p>
-          </div>
-        </div>
-      </>
-    )
-  }
-
   const handleSync = (table: string) => {
     // 防重复点击:syncing 中不再触发(后端 trigger 也有 _is_syncing 兜底)
     if (syncing) return
@@ -86,8 +64,9 @@ export function Financials() {
       onSuccess: (r) => {
         // 后端 trigger 立即返回 started 状态;若被防并发跳过(已有同步在进行),
         // 给用户明确反馈,并清空本次误设的记录。
-        if (!r.synced?.started) {
-          if (r.synced?.reason === 'already running') {
+        const syncState = r.synced as { started?: boolean; reason?: string }
+        if (syncState.started === false) {
+          if (syncState.reason === 'already running') {
             toast('财务数据正在同步中,请稍候', 'success')
           }
           setSyncStartedAt(null)
@@ -166,7 +145,7 @@ export function Financials() {
         {syncing && (
           <div className="flex items-center gap-2 rounded-card border border-accent/30 bg-accent/[0.06] px-3 py-2 text-xs text-accent">
             <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
-            正在从 TickFlow 拉取财务数据，请稍候…
+            正在同步财务数据；有 TickFlow Expert 权限时走 TickFlow，否则从本地 quant/Tushare 数据导入。
           </div>
         )}
 
@@ -248,7 +227,7 @@ export function Financials() {
           <div className="rounded-card border border-dashed border-border bg-surface px-6 py-14 text-center">
             <Database className="mx-auto h-8 w-8 text-muted" />
             <div className="mt-3 text-sm text-secondary">暂无财务数据</div>
-            <div className="mt-1 text-xs text-muted">点击右上角"全部同步"从 TickFlow 拉取</div>
+            <div className="mt-1 text-xs text-muted">点击右上角“全部同步”导入可用的财务数据。</div>
           </div>
         ) : (
           <>

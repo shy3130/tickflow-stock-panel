@@ -70,3 +70,14 @@ export function useFinancialSync() {
     },
   })
 }
+
+export function useFinancialLocalQuantImport() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (table: string) => api.financialLocalQuantImport(table),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: FINANCIAL_QK.status })
+      qc.invalidateQueries({ queryKey: ['financials'] })
+    },
+  })
+}

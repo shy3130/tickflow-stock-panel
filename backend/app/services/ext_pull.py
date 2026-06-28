@@ -1,13 +1,18 @@
-"""扩展数据定时拉取引擎 — 从外部 API 拉取数据写入 Parquet。"""
+"""External data pull engine.
+
+Fetches JSON from configured external APIs and writes rows into ext_data
+parquet storage. Existing generic array responses are supported, plus the
+Tushare Pro shape: {"data": {"fields": [...], "items": [[...], ...]}}.
+"""
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
+import os
 import threading
-from datetime import date, datetime, timezone
-from functools import reduce
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -21,44 +26,134 @@ from app.services.ext_data import (
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# 响应解析
-# ---------------------------------------------------------------------------
+def _template_values() -> dict[str, str]:
+    today = date.today()
+    last_weekday = today
+    while last_weekday.weekday() >= 5:
+        last_weekday -= timedelta(days=1)
+    try:
+        from app import secrets_store
+
+        tushare_token = secrets_store.get_tushare_token()
+    except Exception:
+        tushare_token = ""
+    return {
+        "TUSHARE_TOKEN": tushare_token,
+        "TUSHARE_HTTP_URL": secrets_store.get_tushare_http_url(),
+        "TODAY": today.isoformat(),
+        "TODAY_YYYYMMDD": today.strftime("%Y%m%d"),
+        "LAST_WEEKDAY": last_weekday.isoformat(),
+        "LAST_WEEKDAY_YYYYMMDD": last_weekday.strftime("%Y%m%d"),
+        "NOW_ISO": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _render_text_template(value: str, values: dict[str, str]) -> str:
+    rendered = value
+    for key, val in values.items():
+        rendered = rendered.replace("${" + key + "}", val)
+    return rendered
+
+
+def _render_template(value: Any, values: dict[str, str] | None = None) -> Any:
+    vals = values or _template_values()
+    if isinstance(value, str):
+        return _render_text_template(value, vals)
+    if isinstance(value, dict):
+        return {k: _render_template(v, vals) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_render_template(v, vals) for v in value]
+    return value
+
+
+def _normalize_url(url: str) -> str:
+    resolved = str(url or "").strip()
+    if not resolved:
+        return resolved
+    if "://" not in resolved:
+        resolved = f"https://{resolved}"
+    return resolved
+
+
+def _ensure_no_proxy_for_host(url: str) -> None:
+    host = (urlparse(url or "").hostname or "").strip()
+    if not host:
+        return
+    existing = os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or ""
+    entries = [item.strip() for item in existing.split(",") if item.strip()]
+    lowered = {item.lower() for item in entries}
+    if host.lower() not in lowered:
+        entries.append(host)
+    joined = ",".join(entries)
+    os.environ["NO_PROXY"] = joined
+    os.environ["no_proxy"] = joined
+
+
+def _rows_from_fields_items(value: Any) -> list[dict] | None:
+    if not isinstance(value, dict):
+        return None
+    fields = value.get("fields")
+    items = value.get("items")
+    if not isinstance(fields, list) or not isinstance(items, list):
+        return None
+    rows: list[dict] = []
+    for item in items:
+        if isinstance(item, dict):
+            rows.append(item)
+        elif isinstance(item, list):
+            rows.append(dict(zip(fields, item)))
+        else:
+            raise ValueError(f"fields/items item is not list/dict: {type(item)}")
+    return rows
+
+
+def _coerce_rows(value: Any, path: str) -> list[dict]:
+    rows = _rows_from_fields_items(value)
+    if rows is not None:
+        return rows
+    if isinstance(value, dict):
+        rows = _rows_from_fields_items(value.get("data"))
+        if rows is not None:
+            return rows
+    if not isinstance(value, list):
+        target = "response" if not path else f"path '{path}'"
+        raise ValueError(f"{target} does not point to rows; got {type(value)}")
+    result: list[dict] = []
+    for row in value:
+        if not isinstance(row, dict):
+            raise ValueError(f"row is not an object: {type(row)}")
+        result.append(row)
+    return result
+
 
 def _extract_rows(data: Any, path: str) -> list[dict]:
-    """按 dot-path 从 JSON 响应中提取行数组。
+    """Extract row objects by dot-path.
 
-    例: path="data.list" → response["data"]["list"]
-    如果 path 为空，直接将 data 视为数组。
+    Empty path treats the whole response as rows. Tushare fields/items payloads
+    can be selected either at "data" or left as the whole response.
     """
     if not path:
-        if isinstance(data, list):
-            return data
-        raise ValueError("response_path 为空但响应不是数组")
+        return _coerce_rows(data, path)
 
-    keys = path.split(".")
     current = data
-    for key in keys:
+    for key in path.split("."):
         if isinstance(current, dict):
             if key not in current:
-                raise ValueError(f"响应中不存在路径 '{path}'，缺失键 '{key}'")
+                raise ValueError(f"response path '{path}' missing key '{key}'")
             current = current[key]
         elif isinstance(current, list):
             try:
                 current = current[int(key)]
             except (ValueError, IndexError) as e:
-                raise ValueError(f"响应路径 '{path}' 解析失败: {e}") from e
+                raise ValueError(f"response path '{path}' failed at '{key}': {e}") from e
         else:
-            raise ValueError(f"响应路径 '{path}' 中间值不是 dict/list: {type(current)}")
+            raise ValueError(f"response path '{path}' reached {type(current)}")
 
-    if not isinstance(current, list):
-        raise ValueError(f"路径 '{path}' 指向的不是数组，而是 {type(current)}")
-
-    return current
+    return _coerce_rows(current, path)
 
 
 def _apply_field_map(rows: list[dict], field_map: dict[str, str]) -> list[dict]:
-    """将外部字段名映射为内部配置字段名。field_map: {外部名: 内部名}。"""
+    """Map external field names to configured internal field names."""
     if not field_map:
         return rows
     mapped = []
@@ -71,65 +166,54 @@ def _apply_field_map(rows: list[dict], field_map: dict[str, str]) -> list[dict]:
     return mapped
 
 
-# ---------------------------------------------------------------------------
-# 拉取执行
-# ---------------------------------------------------------------------------
+async def request_pull_json(pull: PullConfig) -> Any:
+    """Request a pull URL after rendering local placeholders."""
+    values = _template_values()
+    url = _normalize_url(_render_template(pull.url, values))
+    headers = _render_template(dict(pull.headers or {}), values)
+    body = _render_template(pull.body, values) if pull.body else None
+    _ensure_no_proxy_for_host(url)
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        kwargs: dict[str, Any] = {"headers": headers}
+        if pull.method.upper() == "POST" and body:
+            kwargs["content"] = body
+            if "content-type" not in {k.lower() for k in headers}:
+                kwargs["headers"]["Content-Type"] = "application/json"
+        resp = await client.request(pull.method.upper(), url, **kwargs)
+        resp.raise_for_status()
+
+    try:
+        return resp.json()
+    except Exception as e:
+        raise ValueError(f"response is not valid JSON: {e}") from e
+
 
 async def fetch_and_ingest(
     config: ExtConfig,
     data_dir,
 ) -> tuple[int, str]:
-    """执行一次拉取: 请求外部 API → 解析响应 → 写入 Parquet。
-
-    Returns:
-        (rows_written, date_str)
-    """
+    """Run one pull: request external API, parse rows, write parquet."""
     pull = config.pull
     if not pull or not pull.url:
-        raise ValueError("拉取未配置或 URL 为空")
+        raise ValueError("pull config or URL is empty")
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        headers = pull.headers or {}
-        kwargs: dict[str, Any] = {"headers": headers}
-
-        if pull.method.upper() == "POST" and pull.body:
-            kwargs["content"] = pull.body
-            if "content-type" not in {k.lower() for k in headers}:
-                kwargs["headers"]["Content-Type"] = "application/json"
-
-        resp = await client.request(pull.method.upper(), pull.url, **kwargs)
-        resp.raise_for_status()
-
-    # 解析 JSON
-    try:
-        data = resp.json()
-    except Exception as e:
-        raise ValueError(f"响应不是有效 JSON: {e}") from e
-
-    # 提取行
+    data = await request_pull_json(pull)
     rows = _extract_rows(data, pull.response_path)
     if not rows:
-        raise ValueError("提取到的行数为 0")
+        raise ValueError("extracted 0 rows")
 
-    # 字段映射
     rows = _apply_field_map(rows, pull.field_map)
-
-    # 校验 symbol 列
     if rows and "symbol" not in rows[0]:
-        raise ValueError("数据行中缺少 symbol 字段，请配置 field_map 映射")
+        raise ValueError("rows are missing symbol; configure field_map first")
 
-    # 写入
     snap = date.today()
     n = rows_to_parquet(rows, config, data_dir, snapshot_date=snap)
     return n, snap.isoformat()
 
 
-# ---------------------------------------------------------------------------
-# 调度器
-# ---------------------------------------------------------------------------
-
 class PullScheduler:
-    """后台调度器：为每个启用了 pull 的 ExtConfig 维护定时任务。"""
+    """Background scheduler for enabled ext_data pull configs."""
 
     def __init__(self) -> None:
         self._tasks: dict[str, asyncio.Task] = {}
@@ -137,13 +221,11 @@ class PullScheduler:
         self._lock = threading.Lock()
 
     def start(self, data_dir) -> None:
-        """启动调度（在 lifespan startup 调用）。"""
         self._running = True
         self._data_dir = data_dir
         logger.info("PullScheduler started")
 
     def stop(self) -> None:
-        """停止所有任务。"""
         self._running = False
         for task in self._tasks.values():
             task.cancel()
@@ -151,7 +233,6 @@ class PullScheduler:
         logger.info("PullScheduler stopped")
 
     def refresh(self, data_dir) -> None:
-        """重新加载配置，更新调度任务（增/删/改）。"""
         self._data_dir = data_dir
         store = ExtConfigStore(data_dir)
         configs = store.load_all()
@@ -163,12 +244,14 @@ class PullScheduler:
                 continue
             active_ids.add(config.id)
             if config.id not in self._tasks:
-                # 新增调度
                 task = asyncio.create_task(self._run_loop(config))
                 self._tasks[config.id] = task
-                logger.info("PullScheduler: scheduled %s (every %d min)", config.id, config.pull.schedule_minutes)
+                logger.info(
+                    "PullScheduler: scheduled %s (every %d min)",
+                    config.id,
+                    config.pull.schedule_minutes,
+                )
 
-        # 移除不再活跃的
         for cid in list(self._tasks):
             if cid not in active_ids:
                 self._tasks[cid].cancel()
@@ -176,18 +259,16 @@ class PullScheduler:
                 logger.info("PullScheduler: removed %s", cid)
 
     async def _run_loop(self, config: ExtConfig) -> None:
-        """单个配置的定时拉取循环。"""
         try:
             while self._running:
                 pull = config.pull
                 if not pull:
                     break
-                interval = max(pull.schedule_minutes * 60, 60)  # 至少 60s
+                interval = max(pull.schedule_minutes * 60, 60)
                 await asyncio.sleep(interval)
                 if not self._running:
                     break
                 try:
-                    # 重新加载最新配置（用户可能中途修改）
                     store = ExtConfigStore(self._data_dir)
                     fresh = store.get(config.id)
                     if not fresh or not fresh.pull or not fresh.pull.enabled:
@@ -212,5 +293,4 @@ class PullScheduler:
             pass
 
 
-# 全局单例
 pull_scheduler = PullScheduler()

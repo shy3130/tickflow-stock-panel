@@ -98,11 +98,12 @@ def _safe_aggregate(repo, view: str) -> dict | None:
     try:
         row = repo.execute_one(
             f"""SELECT count(*) AS rows,
-                       min(date) AS earliest,
-                       max(date) AS latest,
+                       min(try_cast(date AS DATE)) AS earliest,
+                       max(try_cast(date AS DATE)) AS latest,
                        count(DISTINCT symbol) AS symbols,
-                       count(DISTINCT date) AS trading_days
-                FROM {view}"""
+                       count(DISTINCT try_cast(date AS DATE)) AS trading_days
+                FROM {view}
+                WHERE try_cast(date AS DATE) IS NOT NULL"""
         )
     except Exception as e:  # noqa: BLE001
         logger.debug("aggregate %s failed: %s", view, e)
@@ -118,6 +119,23 @@ def _safe_aggregate(repo, view: str) -> dict | None:
     }
 
 
+def _date_partitions(base_dir: Path) -> list[str]:
+    dates: list[str] = []
+    if not base_dir.exists():
+        return dates
+    for d in base_dir.iterdir():
+        if not d.is_dir() or not d.name.startswith("date="):
+            continue
+        value = d.name[5:]
+        try:
+            datetime.strptime(value, "%Y-%m-%d")
+        except ValueError:
+            continue
+        dates.append(value)
+    dates.sort()
+    return dates
+
+
 def _safe_aggregate_daily(repo, view: str = "kline_daily") -> dict | None:
     """日K轻量统计 — 零数据扫描。
 
@@ -125,20 +143,14 @@ def _safe_aggregate_daily(repo, view: str = "kline_daily") -> dict | None:
     标的数从 instruments 小表获取（~5000行，毫秒级）。
     """
     daily_dir = repo.store.data_dir / "kline_daily"
-    if not daily_dir.exists():
-        return None
-    dates: list[str] = []
-    for d in daily_dir.iterdir():
-        if d.is_dir() and d.name.startswith("date="):
-            dates.append(d.name[5:])
+    dates = _date_partitions(daily_dir)
     if not dates:
         return None
-    dates.sort()
 
     symbols = _count_instruments_symbols(repo)
 
     return {
-        "rows": 0,
+        "rows": _parquet_num_rows(daily_dir),
         "earliest_date": dates[0],
         "latest_date": dates[-1],
         "symbols_covered": symbols,
@@ -163,20 +175,14 @@ def _safe_aggregate_enriched(repo) -> dict | None:
 
     # 日期范围：从分区目录名获取，不扫数据
     enriched_dir = repo.store.data_dir / "kline_daily_enriched"
-    if not enriched_dir.exists():
-        return None
-    dates: list[str] = []
-    for d in enriched_dir.iterdir():
-        if d.is_dir() and d.name.startswith("date="):
-            dates.append(d.name[5:])
+    dates = _date_partitions(enriched_dir)
     if not dates:
         return None
-    dates.sort()
 
     symbols = _count_instruments_symbols(repo)
 
     return {
-        "rows": 0,
+        "rows": _parquet_num_rows(enriched_dir),
         "fields": fields,
         "earliest_date": dates[0],
         "latest_date": dates[-1],
@@ -196,6 +202,24 @@ def _count_instruments_symbols(repo) -> int:
     except Exception:  # noqa: BLE001
         pass
     return 0
+
+
+def _parquet_num_rows(base_dir: Path) -> int:
+    """Return parquet row count from file metadata without loading table data."""
+    if not base_dir.exists():
+        return 0
+    total = 0
+    try:
+        import pyarrow.parquet as pq
+
+        for path in base_dir.rglob("*.parquet"):
+            try:
+                total += pq.ParquetFile(path).metadata.num_rows
+            except Exception:  # noqa: BLE001
+                logger.debug("read parquet metadata failed: %s", path)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("pyarrow parquet metadata unavailable: %s", e)
+    return total
 
 
 def _safe_aggregate_instruments(repo) -> dict | None:
@@ -301,19 +325,9 @@ def _safe_aggregate_minute(repo) -> dict | None:
     无需 count(*) / count(DISTINCT ...) 等昂贵查询。
     """
     minute_dir = repo.store.data_dir / "kline_minute"
-    if not minute_dir.exists():
-        return None
-
-    # 从 date=YYYY-MM-DD 目录名提取交易日
-    dates: list[str] = []
-    for d in minute_dir.iterdir():
-        if d.is_dir() and d.name.startswith("date="):
-            dates.append(d.name[5:])
-
+    dates = _date_partitions(minute_dir)
     if not dates:
         return None
-
-    dates.sort()
     return {
         "rows": 0,  # 不再查询行数
         "earliest_date": dates[0],

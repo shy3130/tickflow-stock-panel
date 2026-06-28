@@ -608,6 +608,9 @@ export interface SettingsState {
   mode: 'none' | 'free' | 'api_key'
   tickflow_api_key_masked: string
   has_tickflow_key: boolean
+  tushare_token_masked: string
+  has_tushare_token: boolean
+  tushare_http_url: string
   tier_label: string
   current_endpoint: string
   probe_log: string[]
@@ -639,9 +642,12 @@ export interface SaveTickflowKeyResult {
 
 export interface Preferences {
   realtime_quotes_enabled: boolean
+  realtime_allowed?: boolean
   indices_nav_pinned: boolean
   minute_sync_enabled: boolean
   minute_sync_days: number
+  minute_sync_source: 'tickflow' | 'local_quant'
+  daily_pipeline_enabled: boolean
   pipeline_schedule: { hour: number; minute: number }
   instruments_schedule: { hour: number; minute: number }
   enriched_batch_size: number
@@ -684,6 +690,22 @@ export const api = {
     }),
   clearTickflowKey: () =>
     request<any>('/api/settings/tickflow-key', { method: 'DELETE' }),
+  tushareStatus: () =>
+    request<{ configured: boolean; token_masked: string; http_url: string }>('/api/tushare/status'),
+  saveTushareToken: (token: string) =>
+    request<{ configured: boolean; token_masked: string; http_url: string }>('/api/tushare/token', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    }),
+  clearTushareToken: () =>
+    request<{ configured: boolean; token_masked: string; http_url: string }>('/api/tushare/token', { method: 'DELETE' }),
+  saveTushareHttpUrl: (url: string) =>
+    request<{ configured: boolean; token_masked: string; http_url: string }>('/api/tushare/http-url', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    }),
+  clearTushareHttpUrl: () =>
+    request<{ configured: boolean; token_masked: string; http_url: string }>('/api/tushare/http-url', { method: 'DELETE' }),
 
   /** 标记首次使用向导完成（持久化到后端 preferences） */
   completeOnboarding: () =>
@@ -703,10 +725,15 @@ export const api = {
     request<{ ok: boolean }>('/api/settings/ai', { method: 'DELETE' }),
 
   preferences: () => request<Preferences>('/api/settings/preferences'),
-  updateMinuteSync: (enabled: boolean, days: number) =>
+  updateMinuteSync: (enabled: boolean, days: number, source: 'tickflow' | 'local_quant' = 'tickflow') =>
     request<Preferences>('/api/settings/preferences/minute-sync', {
       method: 'PUT',
-      body: JSON.stringify({ minute_sync_enabled: enabled, minute_sync_days: days }),
+      body: JSON.stringify({ minute_sync_enabled: enabled, minute_sync_days: days, minute_sync_source: source }),
+    }),
+  updateDailyPipelineEnabled: (enabled: boolean) =>
+    request<{ daily_pipeline_enabled: boolean }>('/api/settings/preferences/daily-pipeline-enabled', {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
     }),
   updateRealtimeQuotes: (enabled: boolean) =>
     request<{ realtime_quotes_enabled: boolean }>('/api/settings/preferences/realtime-quotes', {
@@ -1062,10 +1089,39 @@ export const api = {
     request<{ active_id: string | null; jobs: PipelineJobSummary[] }>(
       `/api/pipeline/jobs?limit=${limit}`,
     ),
+  pipelineCancel: (id: string) =>
+    request<{ cancelled: string }>(`/api/pipeline/jobs/${id}/cancel`, { method: 'POST' }),
 
   dataStatus: () => request<DataStatus>('/api/data/status'),
   dataClear: () => request<{ deleted_files: number }>('/api/data/clear', { method: 'POST' }),
   enrichedSchema: (table: string) => request<EnrichedField[]>(`/api/data/schema/${table}`),
+  localQuantCompare: () => request<LocalQuantCompare>('/api/local-quant/compare'),
+  localQuantImportDaily: (body: { start_date?: string | null; end_date?: string | null; days?: number | null; compute_enriched?: boolean }) =>
+    request<LocalQuantImportResult>('/api/local-quant/import/daily', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  localQuantImportDailyJob: (body: { start_date?: string | null; end_date?: string | null; days?: number | null; compute_enriched?: boolean; chunk_days?: number }) =>
+    request<{ status: 'started' | 'reused'; job_id: string }>('/api/local-quant/import/daily/job', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  localQuantImportAdjFactor: () =>
+    request<{ status: string; synced: Record<string, number> }>('/api/local-quant/import/adj-factor', { method: 'POST' }),
+  localQuantImportGlobalIndexDaily: () =>
+    request<{ status: string; synced: Record<string, number> }>('/api/local-quant/import/global-index-daily', { method: 'POST' }),
+  localQuantImportMinute: (body: { days?: number }) =>
+    request<{ status: string; synced: Record<string, any> }>('/api/local-quant/import/minute', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  tushareImportInstruments: () =>
+    request<{ status: string; rows_written: number }>('/api/tushare/import/instruments', { method: 'POST' }),
+  tushareImportDailyJob: (body: { start_date?: string | null; end_date?: string | null; days?: number | null; compute_enriched?: boolean }) =>
+    request<{ status: 'started' | 'reused'; job_id: string }>('/api/tushare/import/daily/job', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 
   testEndpoint: (url: string, rounds?: number) =>
     request<{
@@ -1137,6 +1193,9 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+
+  extDataCreateTushareDailyPreset: () =>
+    request<ExtDataConfig>('/api/ext-data/presets/tushare-daily', { method: 'POST' }),
 
   extDataUpdate: (id: string, body: { label?: string; fields?: { name: string; dtype: string; label: string }[]; description?: string }) =>
     request<ExtDataConfig>(`/api/ext-data/${id}`, {
@@ -1230,6 +1289,11 @@ export const api = {
   financialSync: (table: string) =>
     request<{ status: string; synced: { started: boolean; reason?: string } }>(
       `/api/financials/sync/${table}`, { method: 'POST' },
+    ),
+
+  financialLocalQuantImport: (table: string) =>
+    request<{ status: string; synced: Record<string, number> }>(
+      `/api/financials/local-quant/import/${table}`, { method: 'POST' },
     ),
 
   /** AI 分析报告 CRUD */
@@ -1572,6 +1636,69 @@ export interface DataStatus {
   last_pipeline_run: string | null
   last_instruments_run: string | null
   checked_at: string
+}
+
+export interface LocalQuantCompare {
+  tickflow: {
+    available: boolean
+    rows: number
+    symbols: number
+    min_date: string | null
+    max_date: string | null
+  }
+  local_quant: {
+    available: boolean
+    adjusted_tables: number
+    rows_estimated?: number
+    latest_table?: string
+    latest_table_rows?: number
+    symbols: number
+    min_date: string | null
+    max_date: string | null
+  }
+  minute?: {
+    tickflow: {
+      available: boolean
+      rows: number
+      symbols: number
+      min_time: string | null
+      max_time: string | null
+    }
+    local_quant: {
+      available: boolean
+      table: string
+      rows: number
+      symbols: number
+      min_time: string | null
+      max_time: string | null
+      error?: string
+    }
+  }
+  mode: {
+    env_value: string
+    auto_import_enabled: boolean
+    daily_source: 'local_quant' | 'tickflow'
+    source_root: string
+  }
+  diagnostics: {
+    latest_aligned: boolean
+    history_gap_days: number
+    symbol_gap: number
+    tickflow_history_days: number
+    local_history_days: number
+    suggested_import_days: number[]
+  }
+  recommendation: string
+}
+
+export interface LocalQuantImportResult {
+  status: string
+  rows_written: number
+  symbols?: number
+  start_date?: string | null
+  end_date?: string | null
+  instrument_rows?: number
+  enriched_rows_written?: number
 }
 
 export interface EnrichedField {

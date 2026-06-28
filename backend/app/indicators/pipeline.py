@@ -24,6 +24,7 @@ import polars as pl
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+PARQUET_SCAN_CAST_OPTIONS = pl.ScanCastOptions(integer_cast="allow-float")
 
 
 # ── 自定义信号缓存 ─────────────────────────────────────
@@ -506,14 +507,16 @@ def compute_limit_signals(df: pl.DataFrame, instruments: pl.DataFrame) -> pl.Dat
     df = df.join(inst_subset, on="symbol", how="left", suffix="_inst")
 
     # 计算换手率(%) = volume(手) * 10000 / float_shares(股)
-    if "float_shares" in df.columns and "volume" in df.columns:
+    if "turnover_rate" in df.columns:
+        df = df.with_columns(pl.col("turnover_rate").cast(pl.Float64, strict=False))
+    elif "float_shares" in df.columns and "volume" in df.columns:
         df = df.with_columns(
             pl.when(pl.col("float_shares") > 0)
               .then(pl.col("volume") * 10000.0 / pl.col("float_shares"))
               .otherwise(None)
               .alias("turnover_rate")
         )
-    elif "turnover_rate" not in df.columns:
+    else:
         df = df.with_columns(pl.lit(None).cast(pl.Float64).alias("turnover_rate"))
 
     # 前一日参考收盘价（交易所涨跌停基准价）
@@ -802,7 +805,7 @@ def run_pipeline(data_dir: Path | None = None,
         return 0
 
     daily_glob = (daily_dir / "**" / "*.parquet").as_posix()
-    _cast = pl.ScanCastOptions(integer_cast="allow-float")
+    _cast = PARQUET_SCAN_CAST_OPTIONS
     written = 0
 
     # 加载 instruments (涨跌停+换手率需要)
@@ -847,7 +850,7 @@ def run_pipeline(data_dir: Path | None = None,
             if not hist_df.is_empty():
                 # 只取基础行情列做历史前缀
                 hist_cols = [c for c in ["symbol", "date", "open", "high", "low", "close",
-                                         "volume", "amount", "raw_close", "raw_high", "raw_low"]
+                                         "volume", "amount", "raw_close", "raw_high", "raw_low", "turnover_rate"]
                              if c in hist_df.columns]
                 raw_full = pl.concat([hist_df.select(hist_cols), raw_new], how="diagonal_relaxed")
             else:
@@ -1060,7 +1063,7 @@ def _load_recent_history(enriched_base: Path, symbols: list[str], days: int) -> 
 
     try:
         lf = (
-            pl.scan_parquet(str(enriched_base / "**" / "*.parquet"), cast_options=_cast)
+            pl.scan_parquet(str(enriched_base / "**" / "*.parquet"), cast_options=PARQUET_SCAN_CAST_OPTIONS)
             .filter(
                 (pl.col("symbol").is_in(symbols))
                 & (pl.col("date") >= cutoff)
@@ -1068,7 +1071,7 @@ def _load_recent_history(enriched_base: Path, symbols: list[str], days: int) -> 
             .sort(["symbol", "date"])
         )
         hist_cols = [c for c in ["symbol", "date", "open", "high", "low", "close",
-                                 "volume", "amount", "raw_close", "raw_high", "raw_low"]
+                                 "volume", "amount", "raw_close", "raw_high", "raw_low", "turnover_rate"]
                     if c in lf.schema]
         return lf.select(hist_cols).collect()
     except Exception as e:  # noqa: BLE001

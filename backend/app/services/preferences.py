@@ -71,6 +71,36 @@ def get_minute_sync_days() -> int:
     return max(1, min(30, load().get("minute_sync_days", 5)))
 
 
+def get_minute_sync_source() -> str:
+    source = str(load().get("minute_sync_source", "tickflow")).strip().lower()
+    return source if source in {"tickflow", "local_quant"} else "tickflow"
+
+
+def set_minute_sync(enabled: bool, days: int, source: str | None = None) -> dict:
+    updates = {
+        "minute_sync_enabled": bool(enabled),
+        "minute_sync_days": max(1, min(30, int(days or 5))),
+    }
+    if source is not None:
+        normalized = str(source).strip().lower()
+        updates["minute_sync_source"] = normalized if normalized in {"tickflow", "local_quant"} else "tickflow"
+    save(updates)
+    return {
+        "minute_sync_enabled": updates["minute_sync_enabled"],
+        "minute_sync_days": updates["minute_sync_days"],
+        "minute_sync_source": get_minute_sync_source(),
+    }
+
+
+def get_daily_pipeline_enabled() -> bool:
+    return bool(load().get("daily_pipeline_enabled", True))
+
+
+def set_daily_pipeline_enabled(enabled: bool) -> bool:
+    save({"daily_pipeline_enabled": bool(enabled)})
+    return bool(enabled)
+
+
 def get_pipeline_schedule() -> dict:
     """返回盘后管道调度时间 {"hour": 15, "minute": 30}。"""
     d = load().get("pipeline_schedule", {"hour": 15, "minute": 30})

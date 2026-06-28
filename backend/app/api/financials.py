@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 import polars as pl
 from fastapi import APIRouter, HTTPException, Request
@@ -10,7 +11,9 @@ from pydantic import BaseModel
 
 from app.services.financial_sync import get_financial_df
 from app.services.financial_analyzer import analyze_financials_stream
-from app.services import ai_reports
+from app import secrets_store
+from app.services.local_quant_financials import import_local_quant_financials, import_tushare_financials
+from app.services import ai_reports, preferences
 from app.tickflow.capabilities import Cap
 
 logger = logging.getLogger(__name__)
@@ -18,16 +21,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/financials", tags=["financials"])
 
 
-@router.get("/status")
-def financial_status(request: Request):
-    """返回各财务表的同步状态。无需 FINANCIAL 权限（前端根据 available 决定是否展示）。"""
-    capset = request.app.state.capabilities
-    if not capset.has(Cap.FINANCIAL):
-        return {"available": False, "tables": {}}
-
-    data_dir = request.app.state.repo.store.data_dir
+def _local_financial_tables(data_dir) -> dict[str, dict]:
     tables = {}
-
     for table in ("metrics", "income", "balance_sheet", "cash_flow"):
         path = data_dir / "financials" / table / "part.parquet"
         if path.exists():
@@ -37,10 +32,44 @@ def financial_status(request: Request):
                     "rows": len(df),
                     "symbols": df["symbol"].n_unique() if not df.is_empty() else 0,
                 }
+                continue
             except Exception:
-                tables[table] = {"rows": 0, "symbols": 0}
-        else:
-            tables[table] = {"rows": 0, "symbols": 0}
+                pass
+        tables[table] = {"rows": 0, "symbols": 0}
+    return tables
+
+
+def _has_local_financials(data_dir) -> bool:
+    return any(item["rows"] > 0 for item in _local_financial_tables(data_dir).values())
+
+
+def _record_local_financial_sync(request: Request, result: dict[str, int]) -> None:
+    ts = datetime.now(timezone.utc).isoformat()
+    fs = getattr(request.app.state, "financial_scheduler", None)
+    for table in result:
+        if table.startswith("_"):
+            continue
+        preferences.set_financial_sync_time(table, ts)
+        if fs is not None and hasattr(fs, "_last_sync"):
+            fs._last_sync[table] = ts
+
+
+def _require_financial_or_local(request: Request) -> None:
+    capset = request.app.state.capabilities
+    data_dir = request.app.state.repo.store.data_dir
+    if not capset.has(Cap.FINANCIAL) and not _has_local_financials(data_dir):
+        capset.require(Cap.FINANCIAL)
+
+
+@router.get("/status")
+def financial_status(request: Request):
+    """返回各财务表的同步状态。无需 FINANCIAL 权限（前端根据 available 决定是否展示）。"""
+    capset = request.app.state.capabilities
+    data_dir = request.app.state.repo.store.data_dir
+    tables = _local_financial_tables(data_dir)
+    has_local = any(item["rows"] > 0 for item in tables.values())
+    if not capset.has(Cap.FINANCIAL) and not has_local:
+        return {"available": False, "tables": tables}
 
     fs = getattr(request.app.state, "financial_scheduler", None)
     last_sync = fs.last_sync if fs else {}
@@ -59,9 +88,11 @@ def financial_status(request: Request):
 def get_metrics(request: Request, symbol: str | None = None):
     """查询核心财务指标。"""
     capset = request.app.state.capabilities
-    capset.require(Cap.FINANCIAL)
+    data_dir = request.app.state.repo.store.data_dir
+    if not capset.has(Cap.FINANCIAL) and not _has_local_financials(data_dir):
+        capset.require(Cap.FINANCIAL)
 
-    df = get_financial_df(request.app.state.repo.store.data_dir, "metrics")
+    df = get_financial_df(data_dir, "metrics")
     if df.is_empty():
         return {"data": []}
     if symbol:
@@ -73,9 +104,11 @@ def get_metrics(request: Request, symbol: str | None = None):
 def get_income(request: Request, symbol: str | None = None):
     """查询利润表。"""
     capset = request.app.state.capabilities
-    capset.require(Cap.FINANCIAL)
+    data_dir = request.app.state.repo.store.data_dir
+    if not capset.has(Cap.FINANCIAL) and not _has_local_financials(data_dir):
+        capset.require(Cap.FINANCIAL)
 
-    df = get_financial_df(request.app.state.repo.store.data_dir, "income")
+    df = get_financial_df(data_dir, "income")
     if df.is_empty():
         return {"data": []}
     if symbol:
@@ -87,9 +120,11 @@ def get_income(request: Request, symbol: str | None = None):
 def get_balance_sheet(request: Request, symbol: str | None = None):
     """查询资产负债表。"""
     capset = request.app.state.capabilities
-    capset.require(Cap.FINANCIAL)
+    data_dir = request.app.state.repo.store.data_dir
+    if not capset.has(Cap.FINANCIAL) and not _has_local_financials(data_dir):
+        capset.require(Cap.FINANCIAL)
 
-    df = get_financial_df(request.app.state.repo.store.data_dir, "balance_sheet")
+    df = get_financial_df(data_dir, "balance_sheet")
     if df.is_empty():
         return {"data": []}
     if symbol:
@@ -101,9 +136,11 @@ def get_balance_sheet(request: Request, symbol: str | None = None):
 def get_cash_flow(request: Request, symbol: str | None = None):
     """查询现金流量表。"""
     capset = request.app.state.capabilities
-    capset.require(Cap.FINANCIAL)
+    data_dir = request.app.state.repo.store.data_dir
+    if not capset.has(Cap.FINANCIAL) and not _has_local_financials(data_dir):
+        capset.require(Cap.FINANCIAL)
 
-    df = get_financial_df(request.app.state.repo.store.data_dir, "cash_flow")
+    df = get_financial_df(data_dir, "cash_flow")
     if df.is_empty():
         return {"data": []}
     if symbol:
@@ -111,7 +148,7 @@ def get_cash_flow(request: Request, symbol: str | None = None):
     return {"data": df.to_dicts()}
 
 
-@router.post("/sync/{table}")
+@router.api_route("/sync/{table}", methods=["GET", "POST"])
 def sync_table(request: Request, table: str):
     """手动触发同步(立即返回,后台异步执行)。
 
@@ -119,12 +156,36 @@ def sync_table(request: Request, table: str):
     同步在后台线程执行,全量同步需数分钟。本接口立即返回 started 状态,
     前端通过轮询 GET /status 的 syncing 字段观察进度。
     """
-    capset = request.app.state.capabilities
-    capset.require(Cap.FINANCIAL)
-
     valid_tables = {"metrics", "income", "balance_sheet", "cash_flow", "all"}
     if table not in valid_tables:
         raise HTTPException(400, f"invalid table: {table}, expected one of {valid_tables}")
+
+    capset = request.app.state.capabilities
+    data_dir = request.app.state.repo.store.data_dir
+    if not capset.has(Cap.FINANCIAL):
+        target = None if table == "all" else table
+        try:
+            result = import_local_quant_financials(data_dir, target)
+            source = "local_quant"
+        except Exception as local_exc:
+            if not secrets_store.get_tushare_token():
+                raise HTTPException(500, f"local quant financial import failed: {local_exc}") from local_exc
+            try:
+                result = import_tushare_financials(data_dir, target)
+                source = "tushare"
+            except Exception as tushare_exc:
+                raise HTTPException(
+                    500,
+                    f"local quant financial import failed: {local_exc}; Tushare financial import failed: {tushare_exc}",
+                ) from tushare_exc
+        try:
+            _record_local_financial_sync(request, result)
+            request.app.state.repo.store._register_views()
+            request.app.state.repo.clear_cache()
+            request.app.state.repo.refresh_cache()
+            return {"status": "ok", "synced": {"started": True, "source": source, "rows": result}}
+        except Exception as e:
+            raise HTTPException(500, f"financial import post-process failed: {e}") from e
 
     fs = getattr(request.app.state, "financial_scheduler", None)
     if not fs:
@@ -134,6 +195,24 @@ def sync_table(request: Request, table: str):
     result = fs.trigger(target)
 
     return {"status": "ok", "synced": result}
+
+
+@router.post("/local-quant/import/{table}")
+def import_local_quant_table(request: Request, table: str):
+    valid_tables = {"metrics", "income", "balance_sheet", "cash_flow", "all"}
+    if table not in valid_tables:
+        raise HTTPException(400, f"invalid table: {table}, expected one of {valid_tables}")
+    data_dir = request.app.state.repo.store.data_dir
+    target = None if table == "all" else table
+    try:
+        result = import_local_quant_financials(data_dir, target)
+        _record_local_financial_sync(request, result)
+        request.app.state.repo.store._register_views()
+        request.app.state.repo.clear_cache()
+        request.app.state.repo.refresh_cache()
+        return {"status": "ok", "synced": result}
+    except Exception as e:
+        raise HTTPException(500, f"local quant financial import failed: {e}") from e
 
 
 class AnalyzeRequest(BaseModel):
@@ -150,8 +229,7 @@ async def analyze_financials(request: Request, req: AnalyzeRequest):
     逐 chunk 以 SSE 形式推给前端(JSON per line, 非 text/event-stream,
     以便前端用 ReadableStream 逐行解析,更简单可靠)。
     """
-    capset = request.app.state.capabilities
-    capset.require(Cap.FINANCIAL)
+    _require_financial_or_local(request)
 
     if not req.symbol:
         raise HTTPException(400, "symbol 不能为空")
@@ -187,7 +265,8 @@ class SaveReportRequest(BaseModel):
 def list_reports(request: Request):
     """获取全部历史报告(按时间降序,后端已裁剪到上限)。无需 FINANCIAL 能力读取列表元信息。"""
     capset = request.app.state.capabilities
-    if not capset.has(Cap.FINANCIAL):
+    data_dir = request.app.state.repo.store.data_dir
+    if not capset.has(Cap.FINANCIAL) and not _has_local_financials(data_dir):
         return {"reports": []}
     return {"reports": ai_reports.list_reports()}
 
@@ -195,8 +274,7 @@ def list_reports(request: Request):
 @router.post("/reports")
 def save_report(request: Request, req: SaveReportRequest):
     """保存一条报告。"""
-    capset = request.app.state.capabilities
-    capset.require(Cap.FINANCIAL)
+    _require_financial_or_local(request)
     report = ai_reports.save_report({
         "symbol": req.symbol,
         "name": req.name,
@@ -211,7 +289,6 @@ def save_report(request: Request, req: SaveReportRequest):
 @router.delete("/reports/{report_id}")
 def delete_report(request: Request, report_id: str):
     """删除一条报告。"""
-    capset = request.app.state.capabilities
-    capset.require(Cap.FINANCIAL)
+    _require_financial_or_local(request)
     ok = ai_reports.delete_report(report_id)
     return {"ok": ok}

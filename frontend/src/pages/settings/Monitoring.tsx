@@ -46,8 +46,8 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const { data: intervalData } = useQuoteInterval()
   const updateInterval = useUpdateQuoteInterval()
   const toggleQuote = useToggleRealtimeQuotes()
-  // none/free 档(无实时行情权限)→ rank < starter(1)
-  const isFreeTier = tierRank(caps?.label ?? '') < 1
+  // TickFlow none/free 通常没有实时行情；保存了 Tushare Token 或配置了本地分钟库时后端会放开。
+  const realtimeAllowed = prefs?.realtime_allowed ?? tierRank(caps?.label ?? '') >= 1
   const realtimeEnabled = prefs?.realtime_quotes_enabled ?? false
   const refreshPages = prefs?.sse_refresh_pages ?? {}
   const limitLadderMonitor = prefs?.limit_ladder_monitor_enabled ?? false
@@ -125,8 +125,8 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     }
   }, [highlight])
 
-  // Free 档位 — 显示升级提示
-  if (isFreeTier) {
+  // 无 TickFlow 实时权限且没有可用的 Tushare/本地分钟行情 — 显示配置提示
+  if (!realtimeAllowed) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center">
         <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl

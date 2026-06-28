@@ -5,8 +5,9 @@
  */
 import { useSearchParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { BarChart3, Key, Radio, SlidersHorizontal, Sparkles, Settings2, Zap } from 'lucide-react'
+import { BarChart3, Database, Key, Radio, SlidersHorizontal, Sparkles, Settings2, Zap } from 'lucide-react'
 import { SettingsKeysPanel } from './settings/Keys'
+import { SettingsTusharePanel } from './settings/Tushare'
 import { SettingsAIPanel } from './settings/AI'
 import { SettingsMonitoringPanel } from './settings/Monitoring'
 import { SettingsExtPagesPanel } from './settings/ExtPages'
@@ -20,6 +21,7 @@ import { cn } from '@/lib/cn'
 
 const TABS = [
   { key: 'account',    label: 'TickFlow',   icon: Key,       panel: SettingsKeysPanel },
+  { key: 'tushare',    label: 'Tushare',    icon: Database,  panel: SettingsTusharePanel },
   { key: 'ai',         label: 'AI 设置',    icon: Sparkles,  panel: SettingsAIPanel },
   { key: 'monitoring', label: '实时监控',   icon: Radio,     panel: SettingsMonitoringPanel },
   { key: 'ext-pages',  label: '扩展页面',   icon: BarChart3, panel: SettingsExtPagesPanel },

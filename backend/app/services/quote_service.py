@@ -205,7 +205,13 @@ class QuoteService:
         none/free 档走 free-api 服务器,无实时行情权限 → 不允许;
         starter+ 付费档走付费端点,有实时行情 → 允许。
         """
-        return cls._current_tier() not in ("none", "free")
+        if cls._current_tier() not in ("none", "free"):
+            return True
+        try:
+            from app.services.tushare_import import tushare_realtime_available
+            return tushare_realtime_available()
+        except Exception:  # noqa: BLE001
+            return False
 
     @classmethod
     def _tier_min_interval(cls) -> float:
@@ -300,16 +306,19 @@ class QuoteService:
 
     def _fetch_quotes(self) -> None:
         """拉取全市场行情 → 写 daily + 计算 enriched + 更新缓存。"""
-        from app.tickflow.client import get_client
-
-        tf = get_client()
         t0 = time.perf_counter()
         now_ts = time.perf_counter()
 
         try:
             all_index_symbols = set(self._repo.get_index_symbol_set()) if self._repo else set()
             all_index_symbols.update(self.CORE_INDEX_SYMBOLS)
-            resp = tf.quotes.get_by_universes(universes=["CN_Equity_A", "CN_Index"])
+            if self._current_tier() in ("none", "free"):
+                from app.services.tushare_import import fetch_realtime_quotes
+                resp = fetch_realtime_quotes()
+            else:
+                from app.tickflow.client import get_client
+                tf = get_client()
+                resp = tf.quotes.get_by_universes(universes=["CN_Equity_A", "CN_Index"])
         except Exception as e:  # noqa: BLE001
             logger.warning("行情拉取失败: %s", e)
             return

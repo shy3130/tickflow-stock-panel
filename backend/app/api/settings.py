@@ -40,10 +40,14 @@ def get_settings() -> dict:
     from app.services import preferences
 
     key = secrets_store.get_tickflow_key()
+    tushare_token = secrets_store.get_tushare_token()
     return {
         "mode": tf_client.current_mode(),
         "tickflow_api_key_masked": secrets_store.mask(key),
         "has_tickflow_key": bool(key),
+        "tushare_token_masked": secrets_store.mask(tushare_token),
+        "has_tushare_token": bool(tushare_token),
+        "tushare_http_url": secrets_store.get_tushare_http_url(),
         "tier_label": tier_label(),
         "current_endpoint": tf_client.current_endpoint(),
         "probe_log": probe_log(),
@@ -275,6 +279,11 @@ def _realtime_allowed() -> bool:
 class MinuteSyncPrefs(BaseModel):
     minute_sync_enabled: bool
     minute_sync_days: int = 5
+    minute_sync_source: str = "tickflow"
+
+
+class DailyPipelineEnabledPrefs(BaseModel):
+    enabled: bool
 
 
 @router.get("/preferences")
@@ -287,6 +296,8 @@ def get_preferences() -> dict:
         "indices_nav_pinned": preferences.get_indices_nav_pinned(),
         "minute_sync_enabled": preferences.get_minute_sync_enabled(),
         "minute_sync_days": preferences.get_minute_sync_days(),
+        "minute_sync_source": preferences.get_minute_sync_source(),
+        "daily_pipeline_enabled": preferences.get_daily_pipeline_enabled(),
         "pipeline_schedule": preferences.get_pipeline_schedule(),
         "instruments_schedule": preferences.get_instruments_schedule(),
         "enriched_batch_size": preferences.get_enriched_batch_size(),
@@ -367,17 +378,30 @@ def update_screener_result_columns(req: dict) -> dict:
 
 @router.put("/preferences/minute-sync")
 def update_minute_sync(req: MinuteSyncPrefs) -> dict:
-    """保存分钟 K 同步偏好。"""
+    """Save minute K sync preferences."""
     from app.services import preferences
-    days = max(1, min(30, req.minute_sync_days))
-    preferences.save({
-        "minute_sync_enabled": req.minute_sync_enabled,
-        "minute_sync_days": days,
-    })
-    return {
-        "minute_sync_enabled": req.minute_sync_enabled,
-        "minute_sync_days": days,
-    }
+    return preferences.set_minute_sync(
+        req.minute_sync_enabled,
+        req.minute_sync_days,
+        req.minute_sync_source,
+    )
+
+
+@router.put("/preferences/daily-pipeline-enabled")
+def update_daily_pipeline_enabled(req: DailyPipelineEnabledPrefs, request: Request) -> dict:
+    """Save daily incremental pipeline switch and pause/resume the scheduler job."""
+    from app.services import preferences
+    enabled = preferences.set_daily_pipeline_enabled(req.enabled)
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler:
+        try:
+            if enabled:
+                scheduler.resume_job("daily_pipeline")
+            else:
+                scheduler.pause_job("daily_pipeline")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("toggle daily_pipeline scheduler failed: %s", exc)
+    return {"daily_pipeline_enabled": enabled}
 
 
 class RealtimeQuotesPrefs(BaseModel):

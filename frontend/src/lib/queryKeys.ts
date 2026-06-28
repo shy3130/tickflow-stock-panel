@@ -40,6 +40,7 @@ export const QK = {
 
   // Data / Pipeline
   dataStatus:           ['data-status'] as const,
+  localQuantCompare:    ['local-quant-compare'] as const,
   pipelineJobs:         ['pipeline-jobs'] as const,
   pipelineJob:          (id: string) => ['pipeline-job', id] as const,
   extData:              ['ext-data'] as const,

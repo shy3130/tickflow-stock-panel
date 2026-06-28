@@ -1,6 +1,8 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
+const backendPort = process.env.BACKEND_PORT || '3018';
+const backendTarget = `http://localhost:${backendPort}`;
 export default defineConfig({
     plugins: [react()],
     resolve: {
@@ -14,7 +16,7 @@ export default defineConfig({
         proxy: {
             // dev 时 /api 转发到 FastAPI
             '/api': {
-                target: 'http://localhost:3018',
+                target: backendTarget,
                 // SSE 端点需要禁用缓冲
                 configure: (proxy) => {
                     proxy.on('proxyReq', (_proxyReq, req) => {
@@ -26,7 +28,7 @@ export default defineConfig({
                     });
                 },
             },
-            '/health': 'http://localhost:3018',
+            '/health': backendTarget,
         },
     },
     build: {

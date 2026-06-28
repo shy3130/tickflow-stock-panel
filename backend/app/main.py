@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import analysis, backtest, data, ext_data, financials, indices, intraday, kline, monitor_rules, alerts, overview, pipeline, screener, settings as settings_api, signals, stock_analysis, strategy, watchlist
+from app.api import analysis, backtest, data, ext_data, financials, indices, intraday, kline, local_quant, monitor_rules, alerts, overview, pipeline, screener, settings as settings_api, signals, stock_analysis, strategy, tushare, watchlist
 from app.api.routes import router as core_router
 from app.config import settings
 from app.jobs import daily_pipeline
@@ -181,6 +181,8 @@ app.add_middleware(
 # 路由
 app.include_router(core_router)
 app.include_router(kline.router)
+app.include_router(local_quant.router)
+app.include_router(tushare.router)
 app.include_router(watchlist.router)
 app.include_router(screener.router)
 app.include_router(backtest.router)
