@@ -313,6 +313,52 @@ def get_strategy_source(strategy_id: str, request: Request):
     return {"code": path.read_text(encoding="utf-8"), "source": s.source}
 
 
+def _normalize_openai_base_url(url: str) -> str:
+    """Return the OpenAI-compatible base URL expected by the OpenAI SDK."""
+    base = (url or "").strip().rstrip("/")
+    if base.endswith("/chat/completions"):
+        base = base[: -len("/chat/completions")].rstrip("/")
+    if not base.endswith("/v1"):
+        base = f"{base}/v1"
+    return base
+
+
+def _format_ai_test_response(resp: Any) -> dict:
+    """Format OpenAI-compatible test response without assuming SDK object shape."""
+    if isinstance(resp, str):
+        return {"ok": False, "error": "AI 接口返回非标准响应(字符串),请检查 API 地址是否为 OpenAI 兼容的 /v1 接口"}
+
+    if isinstance(resp, dict):
+        model = resp.get("model")
+        usage_obj = resp.get("usage")
+    else:
+        model = getattr(resp, "model", None)
+        usage_obj = getattr(resp, "usage", None)
+
+    if not model:
+        return {"ok": False, "error": "AI 接口返回非标准响应,缺少 model 字段;请检查 API 地址、模型名和中转站兼容性"}
+
+    usage = None
+    if usage_obj:
+        if isinstance(usage_obj, dict):
+            prompt = usage_obj.get("prompt_tokens")
+            completion = usage_obj.get("completion_tokens")
+        else:
+            prompt = getattr(usage_obj, "prompt_tokens", None)
+            completion = getattr(usage_obj, "completion_tokens", None)
+        if prompt is not None and completion is not None:
+            usage = {"prompt": prompt, "completion": completion}
+
+    return {"ok": True, "model": model, "usage": usage}
+
+
+def _friendly_ai_error(exc: Exception) -> str:
+    msg = str(exc)
+    if "object has no attribute 'model'" in msg or 'object has no attribute "model"' in msg:
+        return "AI 接口返回非标准响应,不是 OpenAI Chat Completions 格式;请检查 API 地址是否包含 /v1、模型名是否正确,以及中转站是否支持 /v1/chat/completions"
+    return msg
+
+
 @router.post("/ai/test")
 async def ai_test(request: Request):
     """测试 AI 连通性 — 发送简单请求验证 Key 和模型"""
@@ -328,18 +374,18 @@ async def ai_test(request: Request):
         # User-Agent: 默认浏览器标识,绕过 Cloudflare 等 CDN/WAF 的 Bot 拦截(Issue #8)。
         client = AsyncOpenAI(
             api_key=ai_key,
-            base_url=settings.ai_base_url,
-            default_headers={"User-Agent": settings.ai_user_agent or "Mozilla/5.0"},
+            base_url=_normalize_openai_base_url(secrets_store.get_ai_config("ai_base_url", settings.ai_base_url)),
+            default_headers={"User-Agent": secrets_store.get_ai_config("ai_user_agent", settings.ai_user_agent) or "Mozilla/5.0"},
         )
         resp = await client.chat.completions.create(
-            model=settings.ai_model,
+            model=secrets_store.get_ai_config("ai_model", settings.ai_model),
             messages=[{"role": "user", "content": "回复 OK"}],
             max_tokens=5,
             timeout=15,
         )
-        return {"ok": True, "model": resp.model, "usage": {"prompt": resp.usage.prompt_tokens, "completion": resp.usage.completion_tokens} if resp.usage else None}
+        return _format_ai_test_response(resp)
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": _friendly_ai_error(e)}
 
 
 @router.post("/build")

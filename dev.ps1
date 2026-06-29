@@ -146,6 +146,10 @@ $frontendPidFile = [System.IO.Path]::GetTempFileName()
 $backendJob = Start-Job -Name 'backend' -ScriptBlock {
     param($pidFile, $dir, $port)
     $PID | Out-File -FilePath $pidFile -Encoding ascii -Force
+    try {
+        [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
+        $OutputEncoding           = New-Object System.Text.UTF8Encoding $false
+    } catch {}
     $env:PYTHONUNBUFFERED = '1'
     Set-Location $dir
     & .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 0.0.0.0 --port $port 2>&1
@@ -154,6 +158,10 @@ $backendJob = Start-Job -Name 'backend' -ScriptBlock {
 $frontendJob = Start-Job -Name 'frontend' -ScriptBlock {
     param($pidFile, $dir, $port)
     $PID | Out-File -FilePath $pidFile -Encoding ascii -Force
+    try {
+        [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
+        $OutputEncoding           = New-Object System.Text.UTF8Encoding $false
+    } catch {}
     Set-Location $dir
     & pnpm dev --host 0.0.0.0 --port $port 2>&1
 } -ArgumentList $frontendPidFile, $FrontendDir, $FrontendPort

@@ -88,9 +88,11 @@ class AIStrategyGenerator:
         from app.config import settings
         user_agent = secrets_store.get_ai_config("ai_user_agent", "") or settings.ai_user_agent
 
+        from app.api.strategy import _normalize_openai_base_url
+
         client = AsyncOpenAI(
             api_key=ai_key,
-            base_url=secrets_store.get_ai_config("ai_base_url", "https://api.alysc.top"),
+            base_url=_normalize_openai_base_url(secrets_store.get_ai_config("ai_base_url", "https://api.alysc.top")),
             timeout=180.0,
             max_retries=2,
             default_headers={"User-Agent": user_agent},
