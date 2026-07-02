@@ -64,6 +64,16 @@ def normalize_codex_command(command: str | None, *, strict: bool = True) -> str:
     return CODEX_DEFAULT_COMMAND
 
 
+def normalize_openai_base_url(url: str) -> str:
+    """Return the OpenAI-compatible base URL expected by the OpenAI SDK."""
+    base = (url or "").strip().rstrip("/")
+    if base.endswith("/chat/completions"):
+        base = base[: -len("/chat/completions")].rstrip("/")
+    if not base.endswith("/v1"):
+        base = f"{base}/v1"
+    return base
+
+
 def codex_cli_available() -> bool:
     try:
         _codex_base_command()
@@ -177,7 +187,7 @@ def _openai_client(api_key: str, timeout: float):
     user_agent = secrets_store.get_ai_config("ai_user_agent", "") or settings.ai_user_agent
     return AsyncOpenAI(
         api_key=api_key,
-        base_url=secrets_store.get_ai_config("ai_base_url", settings.ai_base_url),
+        base_url=normalize_openai_base_url(secrets_store.get_ai_config("ai_base_url", settings.ai_base_url)),
         timeout=timeout,
         max_retries=2,
         default_headers={"User-Agent": user_agent},
