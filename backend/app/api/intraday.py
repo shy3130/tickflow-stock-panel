@@ -114,91 +114,72 @@ def index_quotes(
 
 @router.get("/stream")
 async def quote_stream(request: Request):
-    """SSE 端点: 行情更新 + 告警推送 + 五档修正。
+    """SSE 端点: 行情更新 + 告警推送 + 五档修正 + 复盘进度。
 
     使用 sse-starlette EventSourceResponse:
     - 标准 SSE event 字段，前端按 event name 监听
     - 内置断线检测，客户端断开立即终止 generator
     - 内置 ping 心跳，保持连接活跃
+
+    每个连接注册一个独立订阅者 (QuoteSubscriber: 独立事件 + 独立队列),
+    事件由 QuoteService 广播 — 多客户端 (多标签页/设备) 各自收到全量事件。
+    此前四通道共用服务级 Event + pop 取走语义, 告警只会被先醒的连接消费。
     """
     qs = _get_quote_service(request)
 
     async def event_generator():
-        while True:
-            # 同时等待三类信号: 行情更新 / 告警 / 五档修正
-            tasks: dict[str, asyncio.Future] = {
-                "quote": asyncio.ensure_future(
-                    asyncio.to_thread(qs.wait_for_update, timeout=5.0) if qs else asyncio.sleep(5)
-                ),
-                "alert": asyncio.ensure_future(
-                    asyncio.to_thread(qs.wait_for_alert, timeout=5.0) if qs else asyncio.sleep(5)
-                ),
-                "depth": asyncio.ensure_future(
-                    asyncio.to_thread(qs.wait_for_depth_update, timeout=5.0) if qs else asyncio.sleep(5)
-                ),
-                "review": asyncio.ensure_future(
-                    asyncio.to_thread(qs.wait_for_review, timeout=5.0) if qs else asyncio.sleep(5)
-                ),
-            }
+        if qs is None:
+            # 无行情服务: 保持连接 (EventSourceResponse 自带 ping), 不推事件
+            while True:
+                await asyncio.sleep(30)
 
-            done, pending = await asyncio.wait(
-                list(tasks.values()),
-                timeout=30.0,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            for t in pending:
-                t.cancel()
+        sub = qs.subscribe()
+        try:
+            while True:
+                # 等待任一通道有新信号 (5s 超时保持循环, 便于断线时尽快退出)
+                await asyncio.to_thread(sub.wait, 5.0)
+                data = sub.pop()
 
-            # 先推送告警 (如果有)
-            if qs:
-                alerts = qs.pop_alerts()
-                if alerts:
-                    for chunk_start in range(0, len(alerts), 20):
-                        chunk = alerts[chunk_start:chunk_start + 20]
-                        yield {
-                            "event": "strategy_alert",
-                            "data": json.dumps({
-                                "ts": int(time.time() * 1000),
-                                "alerts": chunk,
-                            }, ensure_ascii=False),
-                        }
+                # 告警 (分片推送, 避免单条 SSE 过大)
+                alerts = data["alerts"]
+                for chunk_start in range(0, len(alerts), 20):
+                    chunk = alerts[chunk_start:chunk_start + 20]
+                    yield {
+                        "event": "strategy_alert",
+                        "data": json.dumps({
+                            "ts": int(time.time() * 1000),
+                            "alerts": chunk,
+                        }, ensure_ascii=False),
+                    }
 
-                # 推送复盘进度 (定时复盘流式生成时) — 前端 reviewStore 直接消费
+                # 复盘进度 (定时复盘流式生成时) — 前端 reviewStore 直接消费
                 # 事件已是 recap_market_stream 产出的 JSON 字符串, 逐条转发
-                for evt_json in qs.pop_review_events():
+                for evt_json in data["reviews"]:
                     yield {
                         "event": "review_progress",
                         "data": evt_json,
                     }
 
-            # 推送行情更新 (行情信号触发)
-            if tasks["quote"] in done:
-                try:
-                    update_result = tasks["quote"].result()
-                except Exception:  # noqa: BLE001
-                    update_result = False
-                if update_result:
+                # 行情更新
+                if data["quote_updated"]:
                     yield {
                         "event": "quotes_updated",
                         "data": json.dumps({
                             "ts": int(time.time() * 1000),
-                            "symbol_count": qs._symbol_count if qs else 0,
+                            "symbol_count": qs._symbol_count,
                         }),
                     }
 
-            # 推送五档修正完成 (depth 信号触发) — 前端刷新连板梯队封单数据
-            if tasks["depth"] in done:
-                try:
-                    depth_result = tasks["depth"].result()
-                except Exception:  # noqa: BLE001
-                    depth_result = False
-                if depth_result:
+                # 五档修正完成 — 前端刷新连板梯队封单数据
+                if data["depth_updated"]:
                     yield {
                         "event": "depth_updated",
                         "data": json.dumps({
                             "ts": int(time.time() * 1000),
                         }),
                     }
+        finally:
+            qs.unsubscribe(sub)
 
     return EventSourceResponse(event_generator())
 
