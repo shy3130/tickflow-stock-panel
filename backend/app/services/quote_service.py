@@ -26,9 +26,11 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from datetime import date, datetime, time as dt_time
+from datetime import date, time as dt_time
 
 import polars as pl
+
+from app.market_time import cn_now, cn_today
 
 logger = logging.getLogger(__name__)
 
@@ -584,7 +586,7 @@ class QuoteService:
         if not select_exprs:
             return pl.DataFrame()
         result = df.select(select_exprs).with_columns(
-            pl.lit(date.today()).cast(pl.Date).alias("date"),
+            pl.lit(cn_today()).cast(pl.Date).alias("date"),
         )
         # 修复: API 在非交易时段可能返回 open/high/low=0 或 null,
         # 导致蜡烛从 0 开始。用 close 填充这些异常值。
@@ -643,7 +645,8 @@ class QuoteService:
 
     @staticmethod
     def _is_trading_hours() -> bool:
-        now = datetime.now()
+        # 显式北京时间: 容器/服务器本地时区可能是 UTC, 用 naive now() 会整体错开轮询窗口
+        now = cn_now()
         t = now.time()
         morning = dt_time(9, 15) <= t <= dt_time(11, 35)
         afternoon = dt_time(12, 55) <= t <= dt_time(15, 5)
@@ -879,7 +882,7 @@ class QuoteService:
                      不写 daily, 直接传给 compute_enriched_today 避免重复计算。
         """
         try:
-            today = date.today()
+            today = cn_today()
             t0 = time.perf_counter()
 
             # ---- 尝试增量路径 ----

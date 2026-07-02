@@ -19,6 +19,7 @@ from typing import Any, Callable
 
 import polars as pl
 
+from app.market_time import cn_today
 from app.strategy.custom_signals import _OP_BUILDERS  # type: ignore  # 复用运算符构造器
 from app.strategy import config as _strategy_config
 
@@ -555,7 +556,7 @@ class MonitorRuleEngine:
         # 现接入 history_loader, 拼历史窗口 + 今日实时行情, 经 precomputed_history 喂给引擎。
         # loader 为 None (未装配) 时退回跳过, 保持旧行为, 不破坏无历史场景。
         run_kwargs: dict = {
-            "as_of": _dt.date.today(),
+            "as_of": cn_today(),
             "overrides": overrides,
         }
         if s.filter_history_fn:
@@ -563,7 +564,7 @@ class MonitorRuleEngine:
                 logger.debug("策略 %s 需要历史数据但未注入 history_loader, 跳过实时监控", sid)
                 return []
             try:
-                today = _dt.date.today()
+                today = cn_today()
                 lookback = max(1, getattr(s, "lookback_days", 30))
                 hist_df = self._history_loader(today, lookback)
                 if hist_df is None or hist_df.is_empty():
@@ -597,7 +598,7 @@ class MonitorRuleEngine:
             import math
             self._latest_strategy_results[sid] = {
                 "total": result.total,
-                "as_of": str(_dt.date.today()),
+                "as_of": str(cn_today()),
                 "rows": [
                     {k: (None if isinstance(v, float) and not math.isfinite(v) else v)
                      for k, v in row.items()}

@@ -24,7 +24,9 @@ import logging
 import math
 import threading
 import time
-from datetime import date, datetime, time as dt_time
+from datetime import date, time as dt_time
+
+from app.market_time import cn_now, cn_today
 from pathlib import Path
 
 import polars as pl
@@ -89,7 +91,7 @@ class DepthService:
         if not self._has_capability():
             logger.info("depth sealed: 无 DEPTH5_BATCH 能力, 跳过启动补跑")
             return
-        today = date.today()
+        today = cn_today()
         if self._persisted_for_date(today):
             # parquet 已存在: 恢复内存缓存(避免重启后每次查询都读 parquet)
             self._restore_from_parquet(today)
@@ -579,7 +581,8 @@ class DepthService:
 
     @staticmethod
     def _is_trading_hours() -> bool:
-        now = datetime.now()
+        # 显式北京时间: 容器/服务器本地时区可能是 UTC, 用 naive now() 会整体错开轮询窗口
+        now = cn_now()
         t = now.time()
         morning = dt_time(9, 25) <= t <= dt_time(11, 35)
         afternoon = dt_time(12, 55) <= t <= dt_time(15, 5)
