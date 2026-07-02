@@ -72,7 +72,10 @@ def list_recent(
     source: str | None = None,
     type: str | None = None,
 ) -> list[dict]:
-    """读取近 N 天记录,按时间倒序,支持按 source/type 过滤。"""
+    """读取近 N 天记录,按时间倒序,支持按 source/type 过滤。
+
+    持锁读: prune/delete/clear 会整文件重写, 无锁读可能读到截断内容。
+    """
     import time
     cutoff = (time.time() - days * 86400) * 1000  # 毫秒
     out: list[dict] = []
@@ -80,7 +83,7 @@ def list_recent(
     if not p.exists():
         return []
     try:
-        with p.open("r", encoding="utf-8") as f:
+        with _lock, p.open("r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -159,16 +162,15 @@ def delete_one(data_dir: Path, ts: int) -> bool:
             logger.warning("alert_store delete_one write failed: %s", e)
             return False
         return True
-        return count
 
 
 def count(data_dir: Path) -> int:
-    """返回当前记录总数。"""
+    """返回当前记录总数。持锁读, 防与整文件重写并发。"""
     p = _path(data_dir)
     if not p.exists():
         return 0
     try:
-        with p.open("r", encoding="utf-8") as f:
+        with _lock, p.open("r", encoding="utf-8") as f:
             return sum(1 for line in f if line.strip())
     except Exception:
         return 0

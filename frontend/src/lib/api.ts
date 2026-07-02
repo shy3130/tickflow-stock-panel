@@ -11,6 +11,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const isFormData = init?.body instanceof FormData
   const headers: Record<string, string> = {}
   if (!isFormData) headers['Content-Type'] = 'application/json'
+  // 合并调用方传入的 headers (此前会被整体覆盖丢弃)
+  Object.assign(headers, init?.headers as Record<string, string> | undefined)
   const res = await fetch(`${BASE}${path}`, { ...init, headers })
   if (!res.ok) {
     let detail = ''

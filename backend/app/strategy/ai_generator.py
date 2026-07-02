@@ -95,13 +95,15 @@ class AIStrategyGenerator:
             content = content.split("```", 1)[1].split("```", 1)[0].strip()
         return content
 
-    @staticmethod
-    def _validate_safety(code: str) -> None:
-        """AST 级安全检查"""
+    # import 白名单: 策略文件只允许 polars (见 strategy-guide.md「只 import polars」)。
+    # 白名单而非黑名单 — 黑名单挡不住 ctypes/importlib/builtins/pickle 等未列出的危险模块。
+    _ALLOWED_IMPORT_MODULES = frozenset({"polars", "__future__"})
+
+    @classmethod
+    def _validate_safety(cls, code: str) -> None:
+        """AST 级安全检查: import 白名单 + 危险内建调用拦截。"""
         tree = ast.parse(code)
 
-        forbidden_modules = {"os", "sys", "subprocess", "socket", "shutil",
-                             "pathlib", "http", "urllib", "requests", "httpx"}
         forbidden_calls = {"open", "exec", "eval", "compile", "__import__",
                            "globals", "locals", "vars", "dir", "getattr",
                            "setattr", "delattr", "type", "input"}
@@ -109,28 +111,26 @@ class AIStrategyGenerator:
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    if alias.name.split(".")[0] not in ("polars",):
-                        if alias.name.split(".")[0] in forbidden_modules:
-                            raise ValueError(f"禁止 import {alias.name}")
+                    if alias.name.split(".")[0] not in cls._ALLOWED_IMPORT_MODULES:
+                        raise ValueError(f"禁止 import {alias.name} (策略只允许 import polars)")
             if isinstance(node, ast.ImportFrom):
-                if node.module and node.module.split(".")[0] not in ("polars",):
-                    if node.module.split(".")[0] in forbidden_modules:
-                        raise ValueError(f"禁止 from {node.module} import")
+                mod = (node.module or "").split(".")[0]
+                if mod not in cls._ALLOWED_IMPORT_MODULES:
+                    raise ValueError(f"禁止 from {node.module} import (策略只允许 import polars)")
             if isinstance(node, ast.Call):
                 if isinstance(node.func, ast.Name) and node.func.id in forbidden_calls:
                     raise ValueError(f"禁止调用 {node.func.id}()")
 
     @staticmethod
     def _extract_meta(code: str) -> dict:
-        """从代码字符串中提取 META 字典（不执行代码）"""
+        """从代码字符串中提取 META 字典（不执行代码, 仅接受字面量）"""
         tree = ast.parse(code)
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
                 for target in node.targets:
                     if isinstance(target, ast.Name) and target.id == "META":
-                        # 找到 META 赋值，用 compile+eval 安全提取
-                        # 只允许字面量
-                        meta_node = node.value
-                        code_obj = compile(ast.Expression(meta_node), "<meta>", "eval")
-                        return eval(code_obj, {"__builtins__": {}})  # noqa: S307
+                        try:
+                            return ast.literal_eval(node.value)
+                        except (ValueError, SyntaxError) as e:
+                            raise ValueError(f"META 必须是纯字面量字典: {e}") from e
         return {}
