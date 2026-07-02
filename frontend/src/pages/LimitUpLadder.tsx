@@ -1,16 +1,16 @@
 import { useState, useCallback, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { RefreshCw, ChevronDown, Flame, Settings2, X } from 'lucide-react'
+import { RefreshCw, ChevronDown, Flame, Settings2, X, Bell, BellOff, AlertCircle } from 'lucide-react'
 import { DatePicker } from '@/components/DatePicker'
-import { api, type LimitLadderTier, type LimitLadderStock } from '@/lib/api'
+import { api, type LimitLadderTier, type LimitLadderStock, type MonitorRule } from '@/lib/api'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
 import { fmtPct, priceColorClass } from '@/lib/format'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
-import { useCapabilities } from '@/lib/useSharedQueries'
+import { useCapabilities, usePreferences } from '@/lib/useSharedQueries'
 import { SealedBadge } from '@/components/SealedBadge'
 import type { ExtColumnDisplayConfig } from '@/lib/watchlist-columns'
 
@@ -216,13 +216,19 @@ function useSealedDegrade(asOf: string, latestDate: string | undefined, sealedRe
 
 // ===== 单只股票卡片 =====
 
-function StockCard({ stock, extFields, direction, sealMode, onClick }: {
+function StockCard({ stock, extFields, direction, sealMode, monitored, monitorRule, onMonitorChange, hasDepth, onClick }: {
   stock: LimitLadderStock
   extFields: ExtFieldConfig
   direction: Direction
   sealMode: 'vol' | 'amount'
+  monitored: boolean
+  monitorRule?: MonitorRule
+  onMonitorChange: () => void
+  hasDepth: boolean
   onClick: () => void
 }) {
+  const [showMonitorMenu, setShowMonitorMenu] = useState(false)
+  const [menuAnchor, setMenuAnchor] = useState<DOMRect | null>(null)
   const code = stock.symbol.replace(/\.BJ$/, '').replace(/\.SZ$/, '').replace(/\.SH$/, '')
   const tag = boardTag(stock.symbol)
   const status = stock.status || (direction === 'down' ? 'limit_down' : 'limit_up')
@@ -247,10 +253,40 @@ function StockCard({ stock, extFields, direction, sealMode, onClick }: {
 
   const hasTags = conceptTags.length > 0 || industryTags.length > 0
 
+  // 齿轮始终可见: 让免费用户也能看到功能入口, 点开后在菜单内提示权限不足。
+  // Pro+ 用户正常设置; 免费用户保存按钮禁用 + 显示升级提示。
   return (
-    <button
+    <div className="relative group w-full">
+      {/* 监控设置按钮 (右上角): 不能嵌在卡片 button 内 */}
+      <button
+        onClick={e => {
+          e.stopPropagation()
+          setMenuAnchor(e.currentTarget.getBoundingClientRect())
+          setShowMonitorMenu(v => !v)
+        }}
+        title={monitored ? '封单监控已开启' : '开启封单监控'}
+        className={`absolute top-1 right-1 z-20 p-0.5 rounded transition-opacity cursor-pointer ${
+          monitored ? 'opacity-100 text-amber-400' : 'opacity-0 group-hover:opacity-70 text-muted hover:!opacity-100'
+        }`}
+      >
+        {monitored ? <Bell className="h-3 w-3" /> : <BellOff className="h-3 w-3" />}
+      </button>
+      {/* 监控菜单 */}
+      {showMonitorMenu && menuAnchor && (
+        <MonitorMenu
+          stock={stock}
+          direction={direction}
+          sealMode={sealMode}
+          monitorRule={monitorRule}
+          anchorRect={menuAnchor}
+          hasDepth={hasDepth}
+          onClose={() => setShowMonitorMenu(false)}
+          onChanged={onMonitorChange}
+        />
+      )}
+      <button
       onClick={onClick}
-      className={`group flex flex-col items-start gap-1 px-2.5 py-2 rounded-md transition-all duration-200 cursor-pointer hover:opacity-100 ${style.bg} ${style.bar}`}
+      className={`w-full flex flex-col items-start gap-1 px-2.5 py-2 rounded-md transition-all duration-200 cursor-pointer hover:opacity-100 ${style.bg} ${style.bar} ${monitored ? 'ring-1 ring-amber-400/50 ring-inset' : ''}`}
       style={style.cardStyle ? { ...style.cardStyle } : undefined}
       onMouseEnter={e => {
         if (!style.cardStyle || !style.hoverShadow) return
@@ -262,7 +298,7 @@ function StockCard({ stock, extFields, direction, sealMode, onClick }: {
       }}
     >
       {/* 名称行 */}
-      <div className="flex items-center gap-1.5 w-full min-w-0">
+      <div className="flex items-center gap-1.5 w-full min-w-0 pr-4">
         <span className={`${style.nameCls} font-medium truncate`}>{stock.name}</span>
         {tag && (
           <span className={`shrink-0 text-[9px] px-1 py-px rounded-full border leading-none ${tag.cls}`}>{tag.label}</span>
@@ -317,6 +353,228 @@ function StockCard({ stock, extFields, direction, sealMode, onClick }: {
         </div>
       )}
     </button>
+    </div>
+  )
+}
+
+// ===== 封单监控菜单 =====
+
+function MonitorMenu({ stock, direction, sealMode, monitorRule, anchorRect, hasDepth, onClose, onChanged }: {
+  stock: LimitLadderStock
+  direction: Direction
+  sealMode: 'vol' | 'amount'
+  monitorRule?: MonitorRule
+  anchorRect: DOMRect
+  hasDepth: boolean
+  onClose: () => void
+  onChanged: () => void
+}) {
+  const ruleId = `mr_ladder_${stock.symbol.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase()}`
+  const existing = monitorRule
+
+  // 推送外部开关默认值: 取偏好设置中的全局默认 (已有规则沿用其值)
+  const { data: prefs } = usePreferences()
+  const webhookDefault = prefs?.webhook_enabled_default ?? false
+
+  // 单位倍率: 输入值 × 倍率 = 原始单位 (量=手, 额=元)
+  const VOL_UNITS = [
+    { key: '1', label: '手', mult: 1 },
+    { key: '10000', label: '万手', mult: 10000 },
+  ]
+  const AMT_UNITS = [
+    { key: '1', label: '元', mult: 1 },
+    { key: '10000', label: '万元', mult: 10000 },
+    { key: '100000000', label: '亿元', mult: 100000000 },
+  ]
+
+  const [metric, setMetric] = useState<'sealed_vol' | 'sealed_amount'>(existing?.metric ?? (sealMode === 'amount' ? 'sealed_amount' : 'sealed_vol'))
+  const units = metric === 'sealed_amount' ? AMT_UNITS : VOL_UNITS
+  // 已有规则: 反算到最大便捷单位 (选能整除的最大倍率); 新建: 额默认亿元, 量默认万手
+  const initUnit = (() => {
+    if (!existing || !existing.threshold) return metric === 'sealed_amount' ? '100000000' : '10000'
+    const thr = existing.threshold
+    const matched = [...units].reverse().find(u => thr >= u.mult && thr % u.mult === 0)
+    return matched ? matched.key : units[0].key
+  })()
+  const [unitKey, setUnitKey] = useState(initUnit)
+  const [threshold, setThreshold] = useState<string>(() => {
+    if (!existing || !existing.threshold) return ''
+    const mult = units.find(u => u.key === initUnit)?.mult ?? 1
+    return String(existing.threshold / mult)
+  })
+  const [pushExternal, setPushExternal] = useState(existing?.webhook_enabled ?? webhookDefault)
+  const [saving, setSaving] = useState(false)
+
+  const warnLabel = direction === 'down' ? '翘板预警' : '炸板预警'
+
+  // 切 metric 时重置单位 (额默认亿元, 量默认万手) + 清空阈值
+  const switchMetric = (m: 'sealed_vol' | 'sealed_amount') => {
+    setMetric(m)
+    // 额选亿元(key=100000000), 量选万手(key=10000)
+    const defaultKey = m === 'sealed_amount' ? '100000000' : '10000'
+    setUnitKey(defaultKey)
+    setThreshold('')
+  }
+
+  const handleSave = async () => {
+    const inputValue = Number(threshold)
+    if (!threshold || isNaN(inputValue) || inputValue < 0) return
+    const mult = units.find(u => u.key === unitKey)?.mult ?? 1
+    const thr = Math.round(inputValue * mult)  // 换算回原始单位 (量=手, 额=元)
+    setSaving(true)
+    try {
+      await api.monitorRuleSave({
+        id: ruleId,
+        name: `封单监控 · ${stock.name ?? stock.symbol}`,
+        enabled: true,
+        type: 'ladder',
+        scope: 'symbols',
+        symbols: [stock.symbol],
+        direction: direction === 'down' ? 'down' : 'up',
+        metric,
+        threshold: thr,
+        conditions: [],
+        logic: 'and',
+        cooldown_seconds: existing?.cooldown_seconds ?? 600,
+        severity: 'warn',
+        message: '',
+        webhook_enabled: pushExternal,
+      } as MonitorRule)
+      onChanged()
+      onClose()
+    } catch { /* toast 已在 api 层处理 */ }
+    finally { setSaving(false) }
+  }
+
+  const handleRemove = async () => {
+    setSaving(true)
+    try {
+      await api.monitorRuleDelete(ruleId)
+      onChanged()
+      onClose()
+    } catch { /* ignore */ }
+    finally { setSaving(false) }
+  }
+
+  // 基于齿轮按钮位置算菜单坐标 (fixed 定位, 脱离父级 overflow-hidden 裁剪)
+  const MENU_W = 240  // w-60 = 15rem = 240px
+  const MENU_H = 340  // 预估高度 (含标题栏 + 4 行设置 + 权限提示 + 按钮区)
+  const anchorRight = anchorRect.right
+  const anchorBottom = anchorRect.bottom
+  // 水平: 默认右对齐齿轮; 超出右边则左移
+  const left = Math.max(8, Math.min(anchorRight - MENU_W, window.innerWidth - MENU_W - 8))
+  // 垂直: 默认在齿轮下方; 超出底部则上方
+  const top = anchorBottom + MENU_H > window.innerHeight
+    ? Math.max(8, anchorRect.top - MENU_H)
+    : anchorBottom + 4
+
+  return (
+    <>
+      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <div
+        className="fixed z-50 w-60 rounded-lg bg-surface border border-border shadow-xl text-xs overflow-hidden"
+        style={{ left, top }}
+      >
+        {/* 标题栏: 股票名 + 预警类型 */}
+        <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-elevated/40">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <Bell className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+            <span className="font-medium text-foreground truncate">{stock.name ?? stock.symbol}</span>
+          </div>
+          <button onClick={onClose} className="text-muted hover:text-foreground shrink-0"><X className="h-3.5 w-3.5" /></button>
+        </div>
+
+        <div className="px-3 py-2.5 space-y-2.5">
+          {/* 预警类型徽章 */}
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-muted shrink-0">类型</span>
+            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${direction === 'down' ? 'bg-bear/15 text-bear' : 'bg-bull/15 text-bull'}`}>
+              {warnLabel}
+            </span>
+          </div>
+
+          {/* 监控指标: 段控风格 */}
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-muted shrink-0 w-8">指标</span>
+            <div className="flex gap-0.5 flex-1 bg-elevated/50 rounded p-0.5">
+              <button
+                onClick={() => switchMetric('sealed_vol')}
+                className={`flex-1 px-2 py-1 rounded text-[11px] transition-colors ${metric === 'sealed_vol' ? 'bg-surface text-foreground shadow-sm' : 'text-muted hover:text-secondary'}`}
+              >封单量</button>
+              <button
+                onClick={() => switchMetric('sealed_amount')}
+                className={`flex-1 px-2 py-1 rounded text-[11px] transition-colors ${metric === 'sealed_amount' ? 'bg-surface text-foreground shadow-sm' : 'text-muted hover:text-secondary'}`}
+              >封单额</button>
+            </div>
+          </div>
+
+          {/* 阈值: 输入 + 单位 */}
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-muted shrink-0 w-8">阈值</span>
+            <input
+              type="number"
+              value={threshold}
+              onChange={e => setThreshold(e.target.value)}
+              placeholder="≤ 报警"
+              className="flex-1 min-w-0 h-7 px-2 rounded bg-base border border-border text-foreground text-center tabular-nums placeholder:text-muted/40 focus:outline-none focus:border-accent/50"
+            />
+            <select
+              value={unitKey}
+              onChange={e => setUnitKey(e.target.value)}
+              className="h-7 px-1.5 rounded bg-base border border-border text-secondary text-[11px] focus:outline-none focus:border-accent/50 cursor-pointer"
+            >
+              {units.map(u => (
+                <option key={u.key} value={u.key}>{u.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* 推送渠道: 胶囊标签 (后续可扩展钉钉/企微等), 选中带强调色 */}
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-muted shrink-0 w-8">推送</span>
+            <button
+              type="button"
+              onClick={() => setPushExternal(v => !v)}
+              className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium transition-colors border cursor-pointer ${
+                pushExternal
+                  ? 'bg-accent/15 text-accent border-accent/40'
+                  : 'bg-elevated/40 text-muted border-border hover:text-secondary'
+              }`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${pushExternal ? 'bg-accent' : 'bg-muted/50'}`} />
+              飞书
+            </button>
+          </div>
+
+          {/* 权限提示 (免费用户) */}
+          {!hasDepth && (
+            <div className="flex items-start gap-1.5 rounded border border-amber-400/30 bg-amber-400/5 px-2 py-1.5 text-[10px] leading-relaxed text-amber-400/90">
+              <AlertCircle className="h-3 w-3 shrink-0 mt-px" />
+              <span>当前 Key 权限无法获取五档行情,后续会适配免费数据源</span>
+            </div>
+          )}
+        </div>
+
+        {/* 底部按钮区 */}
+        <div className="flex items-center gap-2 px-3 py-2.5 border-t border-border bg-elevated/30">
+          {existing && (
+            <button
+              onClick={handleRemove}
+              disabled={saving || !hasDepth}
+              className="shrink-0 h-7 px-2.5 rounded text-[11px] text-muted hover:text-danger hover:bg-danger/5 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors"
+            >关闭监控</button>
+          )}
+          <button
+            onClick={handleSave}
+            disabled={saving || !threshold || !hasDepth}
+            title={!hasDepth ? '需 Pro+ 套餐 (批量五档能力)' : ''}
+            className="flex-1 h-7 rounded text-[11px] font-medium transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed bg-accent text-white hover:bg-accent/90 active:scale-[0.98] disabled:active:scale-100"
+          >
+            {saving ? '保存中…' : !hasDepth ? '需 Pro+ 套餐' : existing ? '更新监控' : '开启监控'}
+          </button>
+        </div>
+      </div>
+    </>
   )
 }
 
@@ -609,7 +867,7 @@ function TagStats({ title, tiers, extFields, fieldKey, color, selectedTag, onSel
 
 // ===== 梯队分组 =====
 
-function TierGroup({ tier, defaultOpen, extFields, filterKeys, bf, onStockClick, selectedTag, onSelectTag, direction, sealMode }: {
+function TierGroup({ tier, defaultOpen, extFields, filterKeys, bf, onStockClick, selectedTag, onSelectTag, direction, sealMode, monitoredSymbols, ladderRules, onMonitorChange, hasDepth }: {
   tier: LimitLadderTier
   defaultOpen: boolean
   extFields: ExtFieldConfig
@@ -620,6 +878,10 @@ function TierGroup({ tier, defaultOpen, extFields, filterKeys, bf, onStockClick,
   onSelectTag: (sel: { fieldKey: 'concept' | 'industry'; tag: string } | null) => void
   direction: Direction
   sealMode: 'vol' | 'amount'
+  monitoredSymbols: Set<string>
+  ladderRules: Map<string, MonitorRule>
+  onMonitorChange: () => void
+  hasDepth: boolean
 }) {
   const [open, setOpen] = useState(defaultOpen)
   const cfg = { ...DEFAULT_BF, ...bf }
@@ -757,6 +1019,10 @@ function TierGroup({ tier, defaultOpen, extFields, filterKeys, bf, onStockClick,
                   return tags.includes(selectedTag.tag)
                 })
                 .sort((a, b) => {
+                  // 开启监控的卡片排到分组最前
+                  const ma = monitoredSymbols.has(a.symbol) ? 0 : 1
+                  const mb = monitoredSymbols.has(b.symbol) ? 0 : 1
+                  if (ma !== mb) return ma - mb
                   const ord = (s: string) => {
                     if (s === 'limit_up' || s === 'limit_down' || !s) return 0
                     if (s === 'broken' || s === 'recovery') return 1
@@ -784,6 +1050,10 @@ function TierGroup({ tier, defaultOpen, extFields, filterKeys, bf, onStockClick,
                   extFields={extFields}
                   direction={direction}
                   sealMode={sealMode}
+                  monitored={monitoredSymbols.has(s.symbol)}
+                  monitorRule={ladderRules.get(s.symbol)}
+                  onMonitorChange={onMonitorChange}
+                  hasDepth={hasDepth}
                   onClick={() => onStockClick(s.symbol, s.name ?? undefined)}
                 />
               ))}
@@ -1096,6 +1366,24 @@ export function LimitUpLadder() {
   const [showConcept, setShowConcept] = useState(() => storage.limitLadderShowExt.get({ concept: true, industry: true }).concept)
   const [showIndustry, setShowIndustry] = useState(() => storage.limitLadderShowExt.get({ concept: true, industry: true }).industry)
 
+  // 连板梯队封单监控规则 (type=ladder): {symbol → rule} 映射
+  const { data: monitorRulesData, refetch: refetchMonitorRules } = useQuery({
+    queryKey: ['monitor-rules'],
+    queryFn: () => api.monitorRulesList(),
+    staleTime: 30 * 1000,
+  })
+  const ladderRules = useMemo(() => {
+    const all = monitorRulesData?.rules ?? []
+    const m = new Map<string, typeof all[number]>()
+    for (const r of all) {
+      if (r.type === 'ladder' && r.enabled && r.symbols[0]) {
+        m.set(r.symbols[0], r)
+      }
+    }
+    return m
+  }, [monitorRulesData])
+  const monitoredSymbols = useMemo(() => new Set(ladderRules.keys()), [ladderRules])
+
   const toggleDirection = useCallback((d: Direction) => {
     setDirection(d)
     storage.limitLadderDirection.set(d)
@@ -1374,6 +1662,10 @@ export function LimitUpLadder() {
             onSelectTag={handleSelectTag}
             direction={direction}
             sealMode={sealMode}
+            monitoredSymbols={monitoredSymbols}
+            ladderRules={ladderRules}
+            onMonitorChange={refetchMonitorRules}
+            hasDepth={sealedDegrade.hasDepth}
           />
         ))}
       </div>

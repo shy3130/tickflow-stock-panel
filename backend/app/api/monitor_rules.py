@@ -50,6 +50,9 @@ class RuleModel(BaseModel):
     webhook_url: str = ""     # Webhook 推送地址 (推送到 QMT 等外部软件, 待定)
     webhook_enabled: bool = False
     message: str = ""
+    # ladder 专属 (连板梯队封单监控)
+    metric: str = "sealed_vol"   # sealed_vol=封单量(手) | sealed_amount=封单额(元)
+    threshold: float = 0         # 封单 <= 此值时报警 (原始单位: 量=手, 额=元)
 
 
 # ── 字段选项 ─────────────────────────────────────────────
@@ -128,6 +131,16 @@ def list_rules(request: Request):
 @router.post("")
 def save_rule(req: RuleModel, request: Request):
     rule = monitor_rules.normalize(req.model_dump())
+    # 连板梯队封单监控 (type=ladder) 依赖五档盘口数据, 需 Pro+ (DEPTH5_BATCH 能力)。
+    # 无能力时拒绝创建, 避免规则存了却永远无法触发。
+    if rule.get("type") == "ladder":
+        from app.tickflow.capabilities import Cap
+        capset = getattr(request.app.state, "capabilities", None)
+        if capset is None or not capset.has(Cap.DEPTH5_BATCH):
+            raise HTTPException(
+                status_code=403,
+                detail="封单监控需要 Pro+ 套餐 (批量五档能力),请升级后在「设置」页配置",
+            )
     # 编辑现有规则时, 保留原 created_at (避免按时间排序时位置跳动)
     existing = monitor_rules.load_one(_data_dir(request), rule["id"])
     if existing and existing.get("created_at"):
@@ -233,3 +246,254 @@ def seed_demo_rules(request: Request):
         i += 1
     _sync_engine(request)
     return {"ok": True, "generated": len(created), "ids": created}
+
+
+# ── 封单监控模拟触发 (Dev 调试用) ─────────────────────
+@router.post("/test-ladder")
+def test_ladder(request: Request):
+    """模拟触发所有 ladder 规则, 返回命中结果 (不落盘、不推送飞书)。
+
+    用当前 depth_service 的封单数据 + enriched 最新日 close 构造 mock DataFrame,
+    跑 _evaluate_ladder 判断哪些规则会触发。供 Dev 页面调试验证。
+    """
+    import polars as pl
+
+    repo = request.app.state.repo
+    depth_svc = getattr(request.app.state, "depth_service", None)
+    engine = getattr(request.app.state, "monitor_engine", None)
+
+    if not depth_svc:
+        raise HTTPException(status_code=503, detail="depth 服务未初始化")
+    if not engine or not engine.has_rule_type("ladder"):
+        raise HTTPException(status_code=400, detail="无 ladder 类型监控规则")
+
+    # 最新交易日
+    latest = repo.enriched_latest_date()
+    if not latest:
+        raise HTTPException(status_code=400, detail="无 enriched 数据")
+
+    # 取涨停+跌停封单 {symbol: vol}
+    sealed: dict[str, int] = {}
+    for is_down in (False, True):
+        m = depth_svc.get_sealed_map(latest, is_down=is_down)
+        for sym, info in m.items():
+            vol = (info or {}).get("vol")
+            if vol and vol > 0:
+                sealed[sym] = vol
+
+    if not sealed:
+        raise HTTPException(status_code=400, detail="无封单数据 (depth 未拉取或无涨停/跌停股)")
+
+    # 取这些 symbol 的 close (算封单额用)
+    enriched_today, _ = repo.get_enriched_latest()
+    cols = ["symbol", "close", "change_pct"]
+    avail = [c for c in cols if c in enriched_today.columns]
+    mock = enriched_today.select(avail).filter(pl.col("symbol").is_in(list(sealed.keys())))
+
+    # 注入 _sealed_vol
+    sealed_df = pl.DataFrame({
+        "symbol": list(sealed.keys()),
+        "_sealed_vol": list(sealed.values()),
+    })
+    mock = mock.join(sealed_df, on="symbol", how="inner")
+
+    # 取所有 ladder 规则, 逐条纯条件判断 (绕过引擎 cooldown, 不污染 _last_fire)
+    ladder_rules = [r for r in engine.rules.values() if r.get("type") == "ladder" and r.get("enabled", True)]
+    all_events = []
+    not_triggered = []
+
+    for rule in ladder_rules:
+        syms = rule.get("symbols", [])
+        sym = syms[0] if syms else None
+        metric = rule.get("metric", "sealed_vol")
+        thr = rule.get("threshold", 0)
+        direction = rule.get("direction", "up")
+        warn_label = "炸板预警" if direction == "up" else "翘板预警"
+
+        # 取该 symbol 的封单数据
+        cur_vol = sealed.get(sym) if sym else None
+        row = mock.filter(pl.col("symbol") == sym) if sym else mock.clear()
+        cur_close = row["close"][0] if len(row) and "close" in row.columns else None
+        cur_amt = (cur_vol * 100 * cur_close) if (cur_vol and cur_close) else None
+        cur_val = cur_amt if metric == "sealed_amount" else cur_vol
+
+        # 条件判断: 封单 > 0 且 比较值 <= 阈值
+        if cur_val is not None and cur_val > 0 and cur_val <= thr:
+            if metric == "sealed_amount":
+                sv_text = f"{cur_val / 1e4:.0f}万元"
+                th_text = f"{thr / 1e4:.0f}万元"
+            else:
+                sv_text = f"{cur_val:,.0f} 手"
+                th_text = f"{thr:,.0f} 手"
+            all_events.append({
+                "rule_id": rule["id"],
+                "rule_name": rule.get("name", ""),
+                "symbol": sym,
+                "name": sym,
+                "type": warn_label,
+                "message": f"{warn_label} · 封单 {sv_text} ≤ {th_text}",
+                "severity": rule.get("severity", "warn"),
+                "sealed_value": cur_val,
+                "sealed_metric": metric,
+                "current_sealed_vol": cur_vol,
+                "current_sealed_amount": cur_amt,
+            })
+        else:
+            reason = "封单数据缺失" if cur_val is None else (
+                f"封单 {cur_val:,.0f} > 阈值 {thr:,.0f}" if cur_val > thr else "封单为 0"
+            )
+            not_triggered.append({
+                "rule_id": rule["id"],
+                "rule_name": rule.get("name", ""),
+                "symbol": sym,
+                "metric": metric,
+                "threshold": thr,
+                "current_value": cur_val,
+                "current_sealed_vol": cur_vol,
+                "current_sealed_amount": cur_amt,
+                "reason": reason,
+            })
+
+    return {
+        "ok": True,
+        "as_of": str(latest),
+        "sealed_count": len(sealed),
+        "triggered": all_events,
+        "not_triggered": not_triggered,
+    }
+
+
+@router.post("/trigger-ladder")
+def trigger_ladder(request: Request):
+    """真实触发一次 ladder 预警 (落盘 + 飞书推送 + SSE), 供 Dev 调试验证完整效果。
+
+    与 test-ladder 区别: 本端点会真的把预警写入 alerts.jsonl、推送飞书、触发 SSE,
+    让用户看到真实的预警通知。绕过 cooldown 强制触发。
+    """
+    import time
+    from app.services import alert_store
+
+    repo = request.app.state.repo
+    depth_svc = getattr(request.app.state, "depth_service", None)
+    engine = getattr(request.app.state, "monitor_engine", None)
+    quote_svc = getattr(request.app.state, "quote_service", None)
+
+    if not depth_svc:
+        raise HTTPException(status_code=503, detail="depth 服务未初始化")
+    if not engine or not engine.has_rule_type("ladder"):
+        raise HTTPException(status_code=400, detail="无 ladder 类型监控规则")
+
+    latest = repo.enriched_latest_date()
+    if not latest:
+        raise HTTPException(status_code=400, detail="无 enriched 数据")
+
+    # 取封单
+    sealed: dict[str, int] = {}
+    for is_down in (False, True):
+        m = depth_svc.get_sealed_map(latest, is_down=is_down)
+        for sym, info in m.items():
+            vol = (info or {}).get("vol")
+            if vol and vol > 0:
+                sealed[sym] = vol
+    if not sealed:
+        raise HTTPException(status_code=400, detail="无封单数据")
+
+    # 构造真实 rule_events (与 _evaluate_ladder 产出格式一致)
+    import polars as pl
+    enriched_today, _ = repo.get_enriched_latest()
+    cols = [c for c in ["symbol", "close", "change_pct"] if c in enriched_today.columns]
+    mock = enriched_today.select(cols).filter(pl.col("symbol").is_in(list(sealed.keys())))
+    sealed_df = pl.DataFrame({"symbol": list(sealed.keys()), "_sealed_vol": list(sealed.values())})
+    mock = mock.join(sealed_df, on="symbol", how="inner")
+
+    now = time.time()
+    rule_events: list[dict] = []
+    name_map = {}
+    try:
+        inst = repo.get_instruments()
+        if not inst.is_empty() and "name" in inst.columns:
+            name_map = {r["symbol"]: r["name"] for r in inst.select(["symbol", "name"]).iter_rows(named=True) if r.get("name")}
+    except Exception:  # noqa: BLE001
+        pass
+
+    for rule in engine.rules.values():
+        if rule.get("type") != "ladder" or not rule.get("enabled", True):
+            continue
+        sym = rule.get("symbols", [""])[0] if rule.get("symbols") else ""
+        metric = rule.get("metric", "sealed_vol")
+        thr = rule.get("threshold", 0)
+        direction = rule.get("direction", "up")
+        warn_label = "炸板预警" if direction == "up" else "翘板预警"
+
+        row = mock.filter(pl.col("symbol") == sym)
+        if row.is_empty():
+            continue
+        cur_vol = row["_sealed_vol"][0]
+        close_v = row["close"][0] if "close" in row.columns else None
+        cur_val = cur_vol * 100 * close_v if metric == "sealed_amount" else cur_vol
+        if not cur_val or cur_val <= 0 or cur_val > thr:
+            continue  # 不满足条件, 跳过
+
+        if metric == "sealed_amount":
+            sv_text = f"{cur_val / 1e4:.0f}万元"
+            th_text = f"{thr / 1e4:.0f}万元"
+        else:
+            sv_text = f"{cur_val:,.0f} 手"
+            th_text = f"{thr:,.0f} 手"
+
+        rule_events.append({
+            "ts": int(now * 1000),
+            "rule_id": rule["id"],
+            "rule_name": rule.get("name", ""),
+            "source": "ladder",
+            "type": warn_label,
+            "symbol": sym,
+            "name": name_map.get(sym, sym),
+            "message": f"{warn_label} · 封单 {sv_text} ≤ {th_text}",
+            "price": close_v,
+            "change_pct": row["change_pct"][0] if "change_pct" in row.columns else None,
+            "signals": [],
+            "severity": rule.get("severity", "warn"),
+            "conditions": [],
+            "logic": "and",
+            "sealed_value": cur_val,
+            "sealed_metric": metric,
+        })
+
+    if not rule_events:
+        raise HTTPException(status_code=400, detail="当前无 ladder 规则满足触发条件 (封单均 > 阈值)")
+
+    # 1. 落盘到 alerts.jsonl
+    try:
+        alert_store.append_many(repo.store.data_dir, rule_events)
+    except Exception as e:  # noqa: BLE001
+        pass  # 落盘失败不阻断推送
+
+    # 2. SSE 推送 (入 pending_alerts 队列)
+    if quote_svc:
+        sse_alerts = [{
+            "source": ev["source"], "type": ev["type"], "rule_id": ev["rule_id"],
+            "strategy_id": None, "symbol": ev["symbol"], "name": ev["name"],
+            "message": ev["message"], "price": ev["price"], "change_pct": ev["change_pct"],
+            "signals": ev["signals"], "severity": ev["severity"],
+            "conditions": ev["conditions"], "logic": ev["logic"],
+        } for ev in rule_events]
+        try:
+            with quote_svc._lock:
+                quote_svc._pending_alerts.extend(sse_alerts)
+            quote_svc._alert_event.set()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # 3. 飞书推送
+    if quote_svc:
+        try:
+            quote_svc._maybe_send_webhook(rule_events, engine)
+        except Exception:  # noqa: BLE001
+            pass
+
+    return {
+        "ok": True,
+        "triggered": len(rule_events),
+        "events": [{"symbol": ev["symbol"], "name": ev["name"], "message": ev["message"]} for ev in rule_events],
+    }

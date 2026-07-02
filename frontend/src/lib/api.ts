@@ -409,12 +409,12 @@ export interface MonitorRule {
   id: string
   name: string
   enabled: boolean
-  type: 'strategy' | 'signal' | 'price' | 'market'
+  type: 'strategy' | 'signal' | 'price' | 'market' | 'ladder'
   scope: 'symbols' | 'all' | 'sector'
   symbols: string[]
   sector?: string | null
   strategy_id?: string | null
-  direction: 'entry' | 'exit' | 'both'
+  direction: 'entry' | 'exit' | 'both' | 'up' | 'down'
   conditions: MonitorCondition[]
   logic: 'and' | 'or'
   cooldown_seconds: number
@@ -423,6 +423,9 @@ export interface MonitorRule {
   webhook_url?: string
   webhook_enabled?: boolean
   created_at?: string
+  // ladder 专属: 封单监控
+  metric?: 'sealed_vol' | 'sealed_amount'  // 量(手) / 额(元)
+  threshold?: number                        // 封单 <= 此值时报警
 }
 
 export interface MonitorRuleOptions {
@@ -1561,6 +1564,48 @@ export const api = {
     }
   },
 
+  /** AI 概念轮动分析 — 流式 NDJSON。 */
+  async *rotationAnalyzeStream(days: number, focus?: string): AsyncGenerator<{
+    type: 'meta' | 'delta' | 'error' | 'done'
+    days?: number
+    summary?: string
+    content?: string
+    message?: string
+  }> {
+    const res = await fetch('/api/rps/rotation-analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ days, focus: focus ?? '' }),
+    })
+    if (!res.ok) {
+      let detail = ''
+      try { const j = JSON.parse(await res.text()); detail = j.detail ?? j.message ?? '' } catch { /* ignore */ }
+      const msg = detail || `${res.status} ${res.statusText}`
+      toast(msg, 'error')
+      throw new Error(msg)
+    }
+    if (!res.body) throw new Error('响应无 body')
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buf = ''
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      const lines = buf.split('\n')
+      buf = lines.pop() ?? ''
+      for (const line of lines) {
+        const s = line.trim()
+        if (!s) continue
+        try { yield JSON.parse(s) } catch { /* ignore */ }
+      }
+    }
+    if (buf.trim()) {
+      try { yield JSON.parse(buf.trim()) } catch { /* ignore */ }
+    }
+  },
+
   // ===== Strategy Engine =====
   strategyList: () =>
     request<{ strategies: StrategyDetail[] }>('/api/strategies'),
@@ -1627,6 +1672,34 @@ export const api = {
 
   monitorRuleDelete: (id: string) =>
     request<{ ok: boolean }>(`/api/monitor-rules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** 模拟触发 ladder 封单监控 (Dev 调试, 不落盘不推送) */
+  monitorRuleTestLadder: () =>
+    request<{
+      ok: boolean
+      as_of: string
+      sealed_count: number
+      triggered: Array<{
+        rule_id: string; rule_name: string; symbol: string; name?: string
+        type: string; message: string; severity: string
+        sealed_value: number; sealed_metric: string
+        current_sealed_vol?: number; current_sealed_amount?: number
+      }>
+      not_triggered: Array<{
+        rule_id: string; rule_name: string; symbol: string
+        metric: string; threshold: number; current_value: number | null
+        current_sealed_vol?: number; current_sealed_amount?: number | null
+        reason: string
+      }>
+    }>('/api/monitor-rules/test-ladder', { method: 'POST' }),
+
+  /** 真实触发 ladder 预警 (落盘+飞书+SSE), Dev 调试用 */
+  monitorRuleTriggerLadder: () =>
+    request<{
+      ok: boolean
+      triggered: number
+      events: Array<{ symbol: string; name: string; message: string }>
+    }>('/api/monitor-rules/trigger-ladder', { method: 'POST' }),
 
   /** 生成演示监控规则 (Dev 页用) */
   monitorRuleSeed: () =>
