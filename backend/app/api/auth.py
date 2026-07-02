@@ -64,15 +64,22 @@ def _is_local_network(host: str | None) -> bool:
 
 
 def _client_ip(request: Request) -> str:
-    """取真实客户端 IP(信任反代 X-Forwarded-For)。"""
+    """取真实客户端 IP。
+
+    安全关键: 仅当直连 peer(request.client.host)本身是回环/内网地址
+    (即请求确实经过同机/内网的可信反代)时, 才采信 X-Forwarded-For。
+    否则公网请求可伪造 `X-Forwarded-For: 127.0.0.1` 冒充内网, 绕过
+    「未设密码仅本机可访问」闸门、抢占 setup 端点、并绕过登录限流。
+    """
+    direct = request.client.host if request.client else ""
     xff = request.headers.get("x-forwarded-for")
-    if xff:
+    if xff and direct and _is_local_network(direct):
         return xff.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    return direct or "unknown"
 
 
 def _check_login_rate_limit(ip: str) -> None:
-    """登录失败限流检查, 触发则抛 429。"""
+    """登录失败限流检查, 触发则抛 429。锁定过期后重置计数(重新给 5 次机会)。"""
     with _fail_lock:
         count, until = _fail_counter.get(ip, (0, 0.0))
         now = time.time()
@@ -82,11 +89,19 @@ def _check_login_rate_limit(ip: str) -> None:
                 status_code=429,
                 detail=f"登录失败次数过多, 请 {wait} 秒后重试",
             )
+        if until and until <= now:
+            # 锁定已过期: 清除旧计数, 否则之后每失败一次都会立刻再锁 5 分钟
+            _fail_counter.pop(ip, None)
 
 
 def _record_login_fail(ip: str) -> None:
     """记录一次登录失败, 达阈值则锁定。"""
     with _fail_lock:
+        # 防内存膨胀: 条目过多时清掉已过锁定期的记录
+        if len(_fail_counter) > 1000:
+            now = time.time()
+            for stale in [k for k, (_, u) in _fail_counter.items() if u <= now]:
+                _fail_counter.pop(stale, None)
         count, until = _fail_counter.get(ip, (0, 0.0))
         count += 1
         if count >= _MAX_FAILS:
