@@ -276,6 +276,9 @@ class KlineRepository:
         self.store = store
         self.db = store.db
         self._lock = threading.Lock()
+        # 序列化 parquet 分区的读-改-写: 实时轮询线程、手动 refresh、盘后管道
+        # 可能并发 merge/flush 同一分区文件, 无锁会互相覆盖丢数据
+        self._write_lock = threading.Lock()
 
         # ---- Polars 缓存 ----
         self._enriched_cache: pl.DataFrame | None = None       # 最新一天 (~5500行)
@@ -1308,7 +1311,7 @@ class KlineRepository:
             return
         out = self.store.data_dir / "instruments_index" / "instruments_index.parquet"
         out.parent.mkdir(parents=True, exist_ok=True)
-        df.unique(subset=["symbol"], keep="last").sort("symbol").write_parquet(out)
+        self._atomic_write_parquet(df.unique(subset=["symbol"], keep="last").sort("symbol"), out)
         self._index_instruments_cache = None
         self._etf_instruments_cache = None
         self._refresh_index_instruments()
@@ -1321,7 +1324,7 @@ class KlineRepository:
             df = df.with_columns(pl.lit("etf").alias("asset_type"))
         out = self.store.data_dir / "instruments_etf" / "instruments_etf.parquet"
         out.parent.mkdir(parents=True, exist_ok=True)
-        df.unique(subset=["symbol"], keep="last").sort("symbol").write_parquet(out)
+        self._atomic_write_parquet(df.unique(subset=["symbol"], keep="last").sort("symbol"), out)
         self._etf_instruments_cache = None
         self._refresh_etf_instruments()
 
@@ -1351,21 +1354,34 @@ class KlineRepository:
         with self._lock:
             self.store._register_unified_views()
 
+    @staticmethod
+    def _atomic_write_parquet(df: pl.DataFrame, out: Path) -> None:
+        """先写临时文件再原子替换, 避免进程中断留下损坏的 parquet。
+
+        直接 write_parquet(out) 在进程被 kill (dev.sh 清端口用 kill -9)
+        或断电时会留下半截文件, 之后 scan_parquet glob 整条链路报错。
+        临时文件后缀 .tmp 不匹配 *.parquet glob, 不会被扫描误读。
+        """
+        tmp = out.with_name(out.name + ".tmp")
+        df.write_parquet(tmp)
+        tmp.replace(out)  # 同目录 rename, POSIX/NTFS 均为原子操作
+
     def _write_daily_partition(self, df: pl.DataFrame, table: str) -> None:
         """按 date 分区写入 parquet，每个日期一个文件，支持 merge-upsert。"""
         base = self.store.data_dir / table
-        for date_df in df.partition_by("date"):
-            dt = date_df["date"][0]
-            ds = dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
-            out = base / f"date={ds}" / "part.parquet"
-            out.parent.mkdir(parents=True, exist_ok=True)
-            if out.exists():
-                existing = pl.read_parquet(out)
-                date_df = pl.concat([existing, date_df], how="diagonal_relaxed").unique(
-                    subset=["symbol", "date"], keep="last"
-                )
-            date_df = date_df.sort(["symbol", "date"])
-            date_df.write_parquet(out)
+        with self._write_lock:
+            for date_df in df.partition_by("date"):
+                dt = date_df["date"][0]
+                ds = dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
+                out = base / f"date={ds}" / "part.parquet"
+                out.parent.mkdir(parents=True, exist_ok=True)
+                if out.exists():
+                    existing = pl.read_parquet(out)
+                    date_df = pl.concat([existing, date_df], how="diagonal_relaxed").unique(
+                        subset=["symbol", "date"], keep="last"
+                    )
+                date_df = date_df.sort(["symbol", "date"])
+                self._atomic_write_parquet(date_df, out)
 
     def merge_live_daily_asset(self, asset_type: str, df: pl.DataFrame) -> None:
         """按 symbol 合并当天指定资产日K分区。用于少量自选实时，不覆盖全市场。"""
@@ -1383,13 +1399,14 @@ class KlineRepository:
         ds = dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
         out = base / f"date={ds}" / "part.parquet"
         out.parent.mkdir(parents=True, exist_ok=True)
-        date_df = df.sort(["symbol", "date"])
-        if out.exists():
-            existing = pl.read_parquet(out)
-            date_df = pl.concat([existing, date_df], how="diagonal_relaxed").unique(
-                subset=["symbol", "date"], keep="last"
-            )
-        date_df.sort(["symbol", "date"]).write_parquet(out)
+        with self._write_lock:
+            date_df = df.sort(["symbol", "date"])
+            if out.exists():
+                existing = pl.read_parquet(out)
+                date_df = pl.concat([existing, date_df], how="diagonal_relaxed").unique(
+                    subset=["symbol", "date"], keep="last"
+                )
+            self._atomic_write_parquet(date_df.sort(["symbol", "date"]), out)
 
     def merge_live_enriched_asset(self, asset_type: str, df: pl.DataFrame) -> None:
         """按 symbol 合并当天 enriched 分区和内存缓存。用于少量自选实时。"""
@@ -1428,12 +1445,13 @@ class KlineRepository:
         ds = dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
         out = base / f"date={ds}" / "part.parquet"
         out.parent.mkdir(parents=True, exist_ok=True)
-        if out.exists():
-            existing = pl.read_parquet(out)
-            df_storage = pl.concat([existing, df_storage], how="diagonal_relaxed").unique(
-                subset=["symbol", "date"], keep="last"
-            )
-        df_storage.sort(["symbol"]).write_parquet(out)
+        with self._write_lock:
+            if out.exists():
+                existing = pl.read_parquet(out)
+                df_storage = pl.concat([existing, df_storage], how="diagonal_relaxed").unique(
+                    subset=["symbol", "date"], keep="last"
+                )
+            self._atomic_write_parquet(df_storage.sort(["symbol"]), out)
 
     def flush_live_daily(self, df: pl.DataFrame) -> None:
         """覆写当天 kline_daily 分区 (实时行情落盘, 非merge)。"""
@@ -1457,7 +1475,8 @@ class KlineRepository:
         ds = dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
         out = base / f"date={ds}" / "part.parquet"
         out.parent.mkdir(parents=True, exist_ok=True)
-        df.sort(["symbol", "date"]).write_parquet(out)
+        with self._write_lock:
+            self._atomic_write_parquet(df.sort(["symbol", "date"]), out)
 
     def flush_live_enriched(self, df: pl.DataFrame) -> None:
         """覆写当天 kline_daily_enriched 分区 (实时 enriched 落盘, 非merge)。
@@ -1491,4 +1510,5 @@ class KlineRepository:
         ds = dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
         out = base / f"date={ds}" / "part.parquet"
         out.parent.mkdir(parents=True, exist_ok=True)
-        df_storage.write_parquet(out)
+        with self._write_lock:
+            self._atomic_write_parquet(df_storage, out)
