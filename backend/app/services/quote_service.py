@@ -52,6 +52,9 @@ class QuoteService:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        # 串行化行情拉取: 手动 POST /refresh 与后台轮询线程可能并发调用
+        # _fetch_quotes, 两者同时写同一批 parquet/缓存会互相覆盖
+        self._fetch_lock = threading.Lock()
         self._running = False
         self._enabled = False      # 全局开关 (持久化到 preferences)
         self._interval = self.DEFAULT_INTERVAL
@@ -125,6 +128,7 @@ class QuoteService:
             self._thread = threading.Thread(target=self._poll_loop, daemon=True)
             self._thread.start()
         logger.info("行情服务已启用, 轮询间隔 %.1fs", self._interval)
+        return True
 
     def disable(self) -> None:
         """关闭自动行情。"""
@@ -347,11 +351,12 @@ class QuoteService:
                 waited += 0.5
 
     def _fetch_quotes(self) -> None:
-        """按当前档位拉取行情。"""
-        if self.realtime_mode() == "watchlist":
-            self._fetch_watchlist_quotes()
-            return
-        self._fetch_full_market_quotes()
+        """按当前档位拉取行情。加锁串行化 (后台轮询 vs 手动 refresh)。"""
+        with self._fetch_lock:
+            if self.realtime_mode() == "watchlist":
+                self._fetch_watchlist_quotes()
+                return
+            self._fetch_full_market_quotes()
 
     def _fetch_full_market_quotes(self) -> None:
         """拉取全市场行情 → 写 daily + 计算 enriched + 更新缓存。"""
@@ -407,7 +412,9 @@ class QuoteService:
             if change_amount is None and last_price is not None and prev_close is not None:
                 change_amount = float(last_price) - float(prev_close)
             if change_pct is None and change_amount is not None and prev_close not in (None, 0):
-                change_pct = float(change_amount) / float(prev_close) * 100
+                # 与 API ext.change_pct 同为小数制 (0.0366 = 3.66%),
+                # enriched 全项目约定小数 (见 pipeline.py), 此处不可乘 100
+                change_pct = float(change_amount) / float(prev_close)
             records.append({
                 "symbol": q.get("symbol"),
                 "name": q.get("name") or ext.get("name"),
@@ -516,7 +523,8 @@ class QuoteService:
             if change_amount is None and last_price is not None and prev_close is not None:
                 change_amount = float(last_price) - float(prev_close)
             if change_pct is None and change_amount is not None and prev_close not in (None, 0):
-                change_pct = float(change_amount) / float(prev_close) * 100
+                # 小数制, 与 ext.change_pct / enriched 口径一致 (不乘 100)
+                change_pct = float(change_amount) / float(prev_close)
             records.append({
                 "symbol": q.get("symbol"),
                 "name": q.get("name") or ext.get("name"),
