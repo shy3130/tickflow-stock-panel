@@ -5,7 +5,8 @@
 
 [![声明:个人开源](https://img.shields.io/badge/⚠️_声明-个人开源_非_TickFlow_官方项目-green?style=for-the-badge&labelColor=red)](https://github.com/shy3130/tickflow-stock-panel)
 
-**本开源项目，非 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 官方项目。** 仅供学习研究使用，与 TickFlow 官方无任何隶属或合作关系。QQ 交流群：109338242。
+**本开源项目，非 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 官方项目。** 仅供学习研究使用，与 TickFlow 官方无任何隶属或合作关系。
+
 
 
 **自托管、零运维的 A 股「选股 + 监控 + 回测」量化工作台**
@@ -22,6 +23,8 @@
 </div>
 
 <div align="center">
+  
+
 
 **[快速开始](#-快速开始)** · **[核心功能](#-核心功能)** · **[配置](#️-配置)** · **[完整文档](#-完整文档)**
 
@@ -30,7 +33,7 @@
 
 
 
-基于 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 数据源。**明确不做**:不对标同花顺 / 通达信,不内置「AI 荐股 / 涨停预测」。
+基于 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 数据源,并非tickflow官方项目。**明确不做**:不对标同花顺 / 通达信,不内置「AI 荐股 / 涨停预测」。
 
 > ⚠️ 考虑到 tickflow 数据源没有人气/资金流向等个性化数据,我将开放自有的第三方数据以供大佬们研究使用,包括但不限于当前内置的 ths 概念/ths 行业(后续更新在这里)。
 
