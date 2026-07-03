@@ -14,7 +14,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # 策略开发文档路径
-GUIDE_PATH = Path(__file__).resolve().parent.parent.parent.parent / "docs" / "strategy-guide.md"
+GUIDE_PATH = Path(__file__).resolve().parent / "prompts" / "strategy-guide.md"
 
 _SYSTEM_PREFIX = """你是A股量化策略设计专家。根据用户描述的需求，参考下方的《策略开发指南》生成一个完整的策略Python文件。
 

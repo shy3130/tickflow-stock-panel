@@ -1,0 +1,26 @@
+diff --git a/backend/app/strategy/ai_generator.py b/backend/app/strategy/ai_generator.py
+index a76e6a8..30d1d9f 100644
+--- a/backend/app/strategy/ai_generator.py
++++ b/backend/app/strategy/ai_generator.py
+@@ -14,7 +14,7 @@ from pathlib import Path
+ logger = logging.getLogger(__name__)
+ 
+ # 策略开发文档路径
+-GUIDE_PATH = Path(__file__).resolve().parent.parent.parent.parent / "docs" / "strategy-guide.md"
++GUIDE_PATH = Path(__file__).resolve().parent / "prompts" / "strategy-guide.md"
+ 
+ _SYSTEM_PREFIX = """你是A股量化策略设计专家。根据用户描述的需求，参考下方的《策略开发指南》生成一个完整的策略Python文件。
+ 
+diff --git a/backend/app/strategy/prompt_builder.py b/backend/app/strategy/prompt_builder.py
+index 896e3ec..ca545a9 100644
+--- a/backend/app/strategy/prompt_builder.py
++++ b/backend/app/strategy/prompt_builder.py
+@@ -7,7 +7,7 @@ from __future__ import annotations
+ 
+ from pathlib import Path
+ 
+-_DOCS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "docs"
++_DOCS_DIR = Path(__file__).resolve().parent / "prompts"
+ _cache: dict[str, str] = {}
+ 
+ 

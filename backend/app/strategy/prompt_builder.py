@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-_DOCS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "docs"
+_DOCS_DIR = Path(__file__).resolve().parent / "prompts"
 _cache: dict[str, str] = {}
 
 
