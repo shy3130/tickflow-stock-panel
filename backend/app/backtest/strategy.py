@@ -35,6 +35,8 @@ class StrategyBacktestConfig:
     entry_fill: Literal["close_t", "open_t+1"] | None = None
     exit_fill: Literal["close_t", "open_t+1"] | None = None
     fees_pct: float = 0.0002
+    commission_pct: float | None = None
+    stamp_tax_pct: float | None = None
     slippage_bps: float = 5.0
     max_positions: int = 10
     max_exposure_pct: float = 1.0
@@ -198,6 +200,8 @@ class StrategyBacktestService:
             entry_fill=config.entry_fill,
             exit_fill=config.exit_fill,
             fees_pct=config.fees_pct,
+            commission_pct=config.commission_pct,
+            stamp_tax_pct=config.stamp_tax_pct,
             slippage_bps=config.slippage_bps,
             stop_loss_pct=stop_loss,
             take_profit_pct=take_profit,
@@ -653,6 +657,8 @@ class StrategyBacktestService:
             "entry_fill": c.entry_fill,
             "exit_fill": c.exit_fill,
             "fees_pct": c.fees_pct,
+            "commission_pct": c.commission_pct,
+            "stamp_tax_pct": c.stamp_tax_pct,
             "slippage_bps": c.slippage_bps,
             "max_positions": c.max_positions,
             "max_exposure_pct": c.max_exposure_pct,

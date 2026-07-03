@@ -34,7 +34,11 @@ class MatcherConfig:
     matching: Literal["close_t", "open_t+1"] = "close_t"
     entry_fill: Literal["close_t", "open_t+1"] | None = None
     exit_fill: Literal["close_t", "open_t+1"] | None = None
+    # 成本模型: 优先使用拆分口径 (佣金双边 + 印花税仅卖出 + 滑点双边)。
+    # 未设 commission_pct 时回退到 fees_pct 作为双边佣金 (向后兼容, 无印花税)。
     fees_pct: float = 0.0002
+    commission_pct: float | None = None
+    stamp_tax_pct: float | None = None
     slippage_bps: float = 5.0
     stop_loss_pct: float | None = None
     take_profit_pct: float | None = None
@@ -55,6 +59,19 @@ class MatcherConfig:
             self.entry_fill = self.matching
         if self.exit_fill is None:
             self.exit_fill = self.matching
+
+    def _commission_pct(self) -> float:
+        # commission_pct 显式给出时优先, 否则回退 fees_pct (向后兼容双边佣金)。
+        return self.commission_pct if self.commission_pct is not None else self.fees_pct
+
+    def buy_cost_pct(self) -> float:
+        # 买入腿: 佣金 + 滑点。
+        return self._commission_pct() + self.slippage_bps / 10000.0
+
+    def sell_cost_pct(self) -> float:
+        # 卖出腿: 佣金 + 印花税 + 滑点。印花税未设时为 0 (向后兼容)。
+        stamp = self.stamp_tax_pct if self.stamp_tax_pct is not None else 0.0
+        return self._commission_pct() + stamp + self.slippage_bps / 10000.0
 
 
 @dataclass
@@ -340,7 +357,7 @@ class BacktestEngine:
                     if exit_triggered:
                         exit_price = float(sym_exit_prices[i])
                         pnl_pct = (exit_price - entry_price) / entry_price if entry_price > 0 else 0.0
-                        fee_cost = config.fees_pct * 2 + config.slippage_bps / 10000.0 * 2
+                        fee_cost = config.buy_cost_pct() + config.sell_cost_pct()
                         pnl_pct -= fee_cost
 
                         e_date = sym_dates[entry_idx]
@@ -462,8 +479,8 @@ class BacktestEngine:
             row_pos_in_symbol[i] = len(rows)
             rows.append(i)
 
-        buy_cost_pct = config.fees_pct + config.slippage_bps / 10000.0
-        sell_cost_pct = config.fees_pct + config.slippage_bps / 10000.0
+        buy_cost_pct = config.buy_cost_pct()
+        sell_cost_pct = config.sell_cost_pct()
         score_min = getattr(config, "score_min", None)
         score_max = getattr(config, "score_max", None)
         trades: list[TradeRecord] = []
@@ -808,8 +825,8 @@ class BacktestEngine:
         if not all_dates:
             return self._empty_result()
 
-        buy_cost_pct = config.fees_pct + config.slippage_bps / 10000.0
-        sell_cost_pct = config.fees_pct + config.slippage_bps / 10000.0
+        buy_cost_pct = config.buy_cost_pct()
+        sell_cost_pct = config.sell_cost_pct()
         cash = float(config.initial_capital)
         peak = cash
         max_positions = max(int(config.max_positions), 0)
