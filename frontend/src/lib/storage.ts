@@ -91,6 +91,7 @@ export const storage = {
     entryFill: 'close_t' | 'open_t+1'
     exitFill: 'close_t' | 'open_t+1'
     fees: string
+    stampTax?: string
     slippage: string
     maxPositions: string
     maxExposure: string

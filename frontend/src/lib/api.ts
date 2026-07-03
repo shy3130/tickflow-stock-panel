@@ -1174,6 +1174,8 @@ export const api = {
     entry_fill?: 'close_t' | 'open_t+1' | null
     exit_fill?: 'close_t' | 'open_t+1' | null
     fees_pct?: number
+    commission_pct?: number
+    stamp_tax_pct?: number
     slippage_bps?: number
     max_positions?: number
     initial_capital?: number

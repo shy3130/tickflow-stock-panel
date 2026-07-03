@@ -75,12 +75,19 @@ def test_commission_pct_overrides_fees_pct():
     assert cfg.sell_cost_pct() == 0.0009  # stamp 未设 → 0
 
 
+def test_commission_pct_zero_is_not_treated_as_unset():
+    """commission_pct=0.0 是有效值, 不应因 falsy 而回退到 fees_pct。"""
+    cfg = MatcherConfig(fees_pct=0.0002, commission_pct=0.0, slippage_bps=0)
+    assert cfg.buy_cost_pct() == 0.0
+    assert cfg.sell_cost_pct() == 0.0
+
+
 # ---------------------------------------------------------------
 # 2. 撮合传导: 印花税只影响卖出腿
 # ---------------------------------------------------------------
 
-def _round_trip_pnl(cfg_kwargs: dict) -> float:
-    """价格恒定的一次买卖来回, 返回唯一成交的 pnl_amount。"""
+def _round_trip_trade(cfg_kwargs: dict):
+    """价格恒定的一次买卖来回, 返回唯一成交的 TradeRecord。"""
     panel = _panel(
         ["A"],
         days=3,
@@ -104,29 +111,28 @@ def _round_trip_pnl(cfg_kwargs: dict) -> float:
         ),
     )
     assert len(result.trades) == 1
-    return result.trades[0].pnl_amount
+    return result.trades[0]
 
 
 def test_stamp_tax_only_deducts_on_sell_leg():
-    """价格不变时, 加印花税后的亏损增量应恰等于 卖出市值 乘以 印花税率。
+    """价格不变时, 加印花税只影响卖出腿, 不改变买入腿的持仓股数。
 
-    买入腿成本不含印花税 → 两次运行的持仓股数相同, 差额只来自卖出腿。
+    本 PR 最需守护的不变量: 卖出成本不得反向污染买入腿的 sizing。
+    因此断言 (a) 两次运行 shares 相等, (b) 亏损差额恰为 卖出市值 乘以 印花税率,
+    卖出市值用反推的 shares 计算, 不硬编码 (避免 sizing 逻辑变动导致误报/漏报)。
     """
-    base = dict(commission_pct=0.0003, stamp_tax_pct=0.0, slippage_bps=0)
-    with_stamp = dict(commission_pct=0.0003, stamp_tax_pct=0.001, slippage_bps=0)
+    stamp = 0.001
+    t_no_stamp = _round_trip_trade(dict(commission_pct=0.0003, stamp_tax_pct=0.0, slippage_bps=0))
+    t_with_stamp = _round_trip_trade(dict(commission_pct=0.0003, stamp_tax_pct=stamp, slippage_bps=0))
 
-    pnl_no_stamp = _round_trip_pnl(base)
-    pnl_with_stamp = _round_trip_pnl(with_stamp)
+    # (a) 核心不变量: 买入腿由 buy_cost_pct 决定, 与印花税无关 → 股数必须一致。
+    assert t_no_stamp.shares == t_with_stamp.shares
+    shares = t_no_stamp.shares
 
-    # 卖出市值 = shares * 10 * (1 - commission)。股数由买入腿决定, 两次一致。
-    # 差额 = -shares * 10 * stamp。用 no_stamp 的 exit_value 反推 shares 不必要,
-    # 直接断言: 加印花税更亏, 且差额为正的印花税扣减。
-    delta = pnl_no_stamp - pnl_with_stamp
+    # (b) 差额恰等于 卖出市值(shares * 卖出价 10) 乘以 印花税率。
+    delta = t_no_stamp.pnl_amount - t_with_stamp.pnl_amount
     assert delta > 0
-    # 差额应约等于 卖出市值 * 印花税率; 卖出市值≈ 无印花税时的 |exit 成本| 基准
-    # 用 shares=9900 (floor(100000/(10*1.0003)/100)*100) 精确校验
-    shares = 9900
-    assert abs(delta - shares * 10 * 0.001) < 1e-6
+    assert abs(delta - shares * 10 * stamp) < 1e-6
 
 
 def test_independent_candidate_pnl_pct_includes_decomposed_costs():
@@ -147,3 +153,21 @@ def test_independent_candidate_pnl_pct_includes_decomposed_costs():
     assert len(result.trades) == 1
     # buy_cost=0.0003, sell_cost=0.0003+0.001=0.0013 → 合计 -0.0016
     assert abs(result.trades[0].pnl_pct - (-(0.0003 + 0.0013))) < 1e-9
+
+
+# ---------------------------------------------------------------
+# 3. SSE 任务缓存键: 成本参数必须参与, 否则不同成本命中同一缓存 / cancel 失配
+# ---------------------------------------------------------------
+
+def test_job_key_distinguishes_commission_and_stamp():
+    """成本参数不同的两次回测必须得到不同 job_key (避免缓存碰撞与 cancel 失配)。"""
+    from app.api.backtest import _make_job_key
+
+    base_args = ("s", None, None, None, "open_t+1", None, None, 0.0002, 5.0, 10, 1.0, 1e6, "equal", None, None, "position", 5)
+    k_none = _make_job_key(*base_args)
+    k_comm = _make_job_key(*base_args, commission_pct=0.0009)
+    k_stamp = _make_job_key(*base_args, stamp_tax_pct=0.001)
+
+    assert k_none != k_comm
+    assert k_none != k_stamp
+    assert k_comm != k_stamp

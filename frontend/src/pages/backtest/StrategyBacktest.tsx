@@ -662,6 +662,7 @@ export function StrategyBacktest() {
   const [entryFill, setEntryFill] = useState<'close_t' | 'open_t+1'>(saved?.entryFill ?? saved?.matching ?? 'open_t+1')
   const [exitFill, setExitFill] = useState<'close_t' | 'open_t+1'>(saved?.exitFill ?? saved?.matching ?? 'close_t')
   const [fees, setFees] = useState(saved?.fees ?? '2')
+  const [stampTax, setStampTax] = useState(saved?.stampTax ?? '1')
   const [slippage, setSlippage] = useState(saved?.slippage ?? '5')
   const [maxPositions, setMaxPositions] = useState(saved?.maxPositions ?? '10')
   const [maxExposure, setMaxExposure] = useState(saved?.maxExposure ?? '100')
@@ -768,6 +769,7 @@ export function StrategyBacktest() {
         entryFill,
         exitFill,
         fees,
+        stampTax,
         slippage,
         maxPositions,
         maxExposure,
@@ -792,7 +794,8 @@ export function StrategyBacktest() {
       matching,
       entry_fill: entryFill,
       exit_fill: exitFill,
-      fees_pct: Number(fees) / 10000,
+      commission_pct: Number(fees) / 10000,
+      stamp_tax_pct: Number(stampTax) / 1000,
       slippage_bps: Number(slippage),
       max_positions: Number(maxPositions),
       max_exposure_pct: Number(maxExposure) / 100,
@@ -1298,7 +1301,11 @@ export function StrategyBacktest() {
           </div>
           <div>
             <label className="text-xs font-medium text-secondary block mb-1.5">佣金(万分之)</label>
-            <input type="number" value={fees} onChange={e => setFees(e.target.value)} className={INPUT_CLS} />
+            <input type="number" min={0} value={fees} onChange={e => setFees(e.target.value)} className={INPUT_CLS} />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-secondary block mb-1.5">印花税(千分之)</label>
+            <input type="number" min={0} value={stampTax} onChange={e => setStampTax(e.target.value)} className={INPUT_CLS} />
           </div>
           <div>
             <label className="text-xs font-medium text-secondary block mb-1.5">滑点(万分之)</label>

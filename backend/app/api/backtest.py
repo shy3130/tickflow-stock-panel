@@ -457,6 +457,10 @@ async def strategy_cancel(request: Request):
     p = parse_qs(qs)
     def _get(key: str, default: str = "") -> str:
         return p.get(key, [default])[0]
+    def _get_opt_float(key: str) -> float | None:
+        # 可选成本参数: 缺省或空串 → None (与 stream 侧 float | None 口径一致, 保证 job_key 对齐)。
+        v = _get(key)
+        return float(v) if v else None
     job_key = _make_job_key(
         _get("strategy_id"),
         _get("symbols") or None,
@@ -475,6 +479,8 @@ async def strategy_cancel(request: Request):
         _get("overrides") or None,
         _get("mode", "position"),
         int(_get("holding_days", "5")),
+        commission_pct=_get_opt_float("commission_pct"),
+        stamp_tax_pct=_get_opt_float("stamp_tax_pct"),
     )
     job = _running_jobs.get(job_key)
     if job and not job.done:
