@@ -60,7 +60,12 @@ export function Data() {
   const settings = useSettings()
 
   const status = useDataStatus({
-    refetchInterval: activeJobId ? 2_000 : 30_000,
+    refetchInterval: (query) => {
+      const data = query.state.data
+      // 指标异步预热中 或 有活跃 job → 加快轮询到 2s
+      if (activeJobId || data?.indicators_ready === false) return 2_000
+      return 30_000
+    },
   })
 
   const history = useQuery({
@@ -392,7 +397,7 @@ export function Data() {
             capLimits={caps.data?.capabilities}
             tierLabel={caps.data?.label}
             auto
-            subLabel="字段 · 指标 · 信号"
+            subLabel={status.data?.indicators_ready === false ? '字段 · 指标计算中…' : '字段 · 指标 · 信号'}
             localBadgeSuffix={`${prefs.data?.enriched_batch_size ?? 1000}只/批`}
             onShowFields={() => setSchemaTable('enriched')}
             onSettings={hasData ? () => setOpenSettings(v => v === 'enriched' ? null : 'enriched') : undefined}

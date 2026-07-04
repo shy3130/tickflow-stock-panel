@@ -71,7 +71,10 @@ export function useVersion() {
 }
 
 /** 数据状态 — Data / Screener 共用 */
-export function useDataStatus(opts?: { staleTime?: number; refetchInterval?: number | false }) {
+export function useDataStatus(opts?: {
+  staleTime?: number
+  refetchInterval?: number | false | ((query: any) => number | false | undefined)
+}) {
   return useQuery({
     queryKey: QK.dataStatus,
     queryFn: api.dataStatus,

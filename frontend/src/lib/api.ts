@@ -1854,6 +1854,7 @@ export interface DataStatus {
   last_pipeline_run: string | null
   last_instruments_run: string | null
   checked_at: string
+  indicators_ready?: boolean
 }
 
 export interface EnrichedField {

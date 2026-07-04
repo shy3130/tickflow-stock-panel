@@ -47,9 +47,13 @@ async def lifespan(app: FastAPI):
     repo = KlineRepository(store)
     app.state.datastore = store
     app.state.repo = repo
+    # 指标异步预热标志: enriched 缓存在后台线程构建, 完成后置 True
+    app.state.indicators_ready = False
+    repo._on_warmup_done = lambda: setattr(app.state, "indicators_ready", True)  # noqa: SLF001
 
-    # Polars 缓存预热
-    repo.refresh_cache()
+    # Polars 缓存预热 — enriched 的重计算 (107万行 compute_indicators) 推后台,
+    # instruments/index/ETF 仍同步 (毫秒级)。应用立即 ready, 指标算完后自动替换。
+    repo.refresh_cache(background=True)
 
     # 能力探测
     capset = detect_capabilities()

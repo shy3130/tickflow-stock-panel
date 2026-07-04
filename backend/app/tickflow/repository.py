@@ -16,6 +16,7 @@ import logging
 import sys
 import threading
 import time
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
@@ -301,6 +302,16 @@ class KlineRepository:
         self._etf_live_agg_cache_date: date | None = None
         self._etf_instruments_cache: pl.DataFrame | None = None
 
+        # ---- enriched 后台预热 ----
+        # 启动时 compute_indicators (107万行, 低配机 50s+) 移出 lifespan 关键路径,
+        # 推到 daemon 线程异步完成。预热期间 get_enriched_latest / get_live_agg
+        # 返回空表 (上层优雅降级), 不触发同步重算 (否则会抵消异步化收益)。
+        self._enriched_warming: bool = False
+        self._warmup_thread: threading.Thread | None = None
+        self._warmup_lock = threading.Lock()
+        # 预热完成后的回调 (lifespan 注入, 用于设置 app.state.indicators_ready)
+        self._on_warmup_done: Callable[[], None] | None = None
+
         # parquet glob 路径
         self._enriched_glob = str(store.data_dir / "kline_daily_enriched" / "**" / "*.parquet")
         self._index_enriched_glob = str(store.data_dir / "kline_index_enriched" / "**" / "*.parquet")
@@ -325,10 +336,16 @@ class KlineRepository:
     # Polars 缓存管理
     # ================================================================
 
-    def refresh_cache(self) -> None:
-        """刷新 Polars 缓存。在 pipeline 完成后、服务启动时调用。"""
+    def refresh_cache(self, background: bool = False) -> None:
+        """刷新 Polars 缓存。在 pipeline 完成后、服务启动时调用。
+
+        background=True (启动时): instruments/index/ETF 同步刷新 (毫秒级),
+        enriched 的重计算 (compute_indicators, 107万行) 推到 daemon 线程,
+        不阻塞 FastAPI lifespan。预热期间上层走空表降级。
+        background=False (盘后管道/手动刷新): 全部同步, 保证数据即时一致。
+        """
         started = time.perf_counter()
-        logger.info("cache refresh start")
+        logger.info("cache refresh start (background=%s)", background)
 
         step = time.perf_counter()
         logger.info("cache refresh step start: instruments")
@@ -345,12 +362,60 @@ class KlineRepository:
         self._refresh_etf_instruments()
         logger.info("cache refresh step done: ETF instruments (%.2fs)", time.perf_counter() - step)
 
-        step = time.perf_counter()
-        logger.info("cache refresh step start: enriched")
-        self._refresh_enriched()
-        logger.info("cache refresh step done: enriched (%.2fs)", time.perf_counter() - step)
+        if background:
+            logger.info("cache refresh: enriched 推后台线程预热")
+            self._start_enriched_warmup()
+        else:
+            step = time.perf_counter()
+            logger.info("cache refresh step start: enriched")
+            self._refresh_enriched()
+            logger.info("cache refresh step done: enriched (%.2fs)", time.perf_counter() - step)
 
         logger.info("cache refresh done (%.2fs)", time.perf_counter() - started)
+
+    def _start_enriched_warmup(self) -> None:
+        """启动后台 daemon 线程预热 enriched 缓存 (compute_indicators)。
+
+        仿 QuoteService 的线程模式: 设 warming 标志 → 起 daemon → 完成后清标志 +
+        触发回调。重复调用时若已有线程在跑则跳过 (避免重复预热)。
+        """
+        with self._warmup_lock:
+            if self._enriched_warming:
+                logger.info("enriched warmup already in progress, skip")
+                return
+            self._enriched_warming = True
+
+        def _warmup() -> None:
+            t0 = time.perf_counter()
+            try:
+                logger.info("enriched warmup thread started")
+                self._refresh_enriched()
+                logger.info("enriched warmup thread done (%.1fs)", time.perf_counter() - t0)
+            except Exception:  # noqa: BLE001
+                logger.exception("enriched warmup thread failed")
+            finally:
+                with self._warmup_lock:
+                    self._enriched_warming = False
+                cb = self._on_warmup_done
+                if cb is not None:
+                    try:
+                        cb()
+                    except Exception:  # noqa: BLE001
+                        logger.warning("enriched warmup callback failed", exc_info=True)
+
+        self._warmup_thread = threading.Thread(
+            target=_warmup, name="enriched-warmup", daemon=True,
+        )
+        self._warmup_thread.start()
+
+    @property
+    def enriched_ready(self) -> bool:
+        """enriched 缓存是否已就绪 (非 None 且不在后台预热中)。"""
+        return (
+            not self._enriched_warming
+            and self._enriched_cache is not None
+            and self._live_agg_cache is not None
+        )
 
     def clear_cache(self) -> None:
         """清空所有 Polars 内存缓存。
@@ -816,8 +881,14 @@ class KlineRepository:
             logger.info("ETF instruments 缓存已加载: %d 只", len(df_all))
 
     def get_enriched_latest(self) -> tuple[pl.DataFrame, date | None]:
-        """返回缓存的 enriched 最新日 DataFrame + 日期。如无缓存则懒加载。"""
+        """返回缓存的 enriched 最新日 DataFrame + 日期。如无缓存则懒加载。
+
+        后台预热期间 (_enriched_warming=True) 返回空表, 不触发同步重算 ——
+        否则首次访问会把异步化想避免的 50s+ 计算拉回同步路径。
+        """
         if self._enriched_cache is None:
+            if self._enriched_warming:
+                return pl.DataFrame(), None
             self._refresh_enriched()
         if self._enriched_cache is None:
             return pl.DataFrame(), self._enriched_cache_date
@@ -902,6 +973,9 @@ class KlineRepository:
         仅当 today 变化时才查磁盘确认 (DuckDB 扫 132 万行约 100ms+) 并按需重建。
         """
         if self._live_agg_cache is None:
+            if self._enriched_warming:
+                # 后台预热中: 返回空表, 不触发同步重算 (同 get_enriched_latest 守卫)
+                return pl.DataFrame()
             self._refresh_enriched()
             self._live_agg_check_date = date.today()  # 刚建过, 当天不必再查磁盘
         else:
