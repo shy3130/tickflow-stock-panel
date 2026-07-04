@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 
 JobStatus = Literal["pending", "running", "succeeded", "failed"]
 
+# 运行超过此秒数视为卡死(reload 后孤儿 task / 网络读无限阻塞等)。
+# 由 reap_stale() 在 /run 和 /jobs/{id} 轮询端点检查 — 保证卡死后能自愈,
+# 无需用户再次点击「同步」。
+STALE_JOB_TIMEOUT_S = 600
+
 
 def _default_store_dir() -> Path:
     from app.config import settings
@@ -207,6 +212,36 @@ class JobStore:
 
     def active_id(self) -> str | None:
         return self._active_id
+
+    def reap_stale(self, timeout_s: int = STALE_JOB_TIMEOUT_S) -> None:
+        """回收运行超过 timeout_s 的卡死 running job(标记为 failed)。
+
+        在 /run 和 /jobs/{id} 轮询端点都会调用 — 保证卡死后任意轮询都能自愈,
+        无需用户再次手动触发同步。reload 后的孤儿 task(内存里已无 job 记录)
+        不在此处理:它们没有 active_id,只能靠 executor 线程自然结束或进程重启。
+        """
+        with self._lock:
+            jid = self._active_id
+            if not jid:
+                return
+            j = self._active_jobs.get(jid)
+            if not j or j.get("status") != "running":
+                return
+            started = j.get("started_at")
+            if not started:
+                return
+        # 时间计算放到锁外(避免 datetime 解析持锁)。
+        # started_at 形如 "2026-07-04T12:00:00Z"(start() 用 datetime.utcnow 存)。
+        # 两端都用 timezone-aware UTC 比较,避免 naive/aware 混用导致 TypeError。
+        try:
+            start_dt = datetime.fromisoformat(started.replace("Z", "+00:00"))
+            elapsed = (datetime.now(start_dt.tzinfo) - start_dt).total_seconds()
+        except Exception:  # noqa: BLE001
+            return
+        if elapsed > timeout_s:
+            logger.warning("reap_stale: 强制取消卡死 job %s (已运行 %.0fs)",
+                           jid, elapsed)
+            self.fail(jid, f"超时自动取消 (运行 {int(elapsed)}s, 疑似卡死)")
 
     def clear(self) -> None:
         """清空所有任务（内存 + 磁盘文件）。"""

@@ -29,22 +29,9 @@ async def run_now(request: Request) -> dict:
     repo = request.app.state.repo
     capset = request.app.state.capabilities
 
-    # 检测卡死的 running job (如 reload 后孤儿 task)
-    existing_id = job_store.active_id()
-    if existing_id:
-        existing = job_store.get(existing_id)
-        if existing and existing["status"] == "running":
-            from datetime import datetime, timezone
-            started = existing.get("started_at")
-            if started:
-                try:
-                    start_dt = datetime.fromisoformat(started.replace("Z", "+00:00"))
-                    elapsed = (datetime.now(timezone.utc) - start_dt).total_seconds()
-                    if elapsed > 600:  # 超过 10 分钟视为卡死
-                        logger.warning("强制取消卡死 job %s (已运行 %.0fs)", existing_id, elapsed)
-                        job_store.fail(existing_id, "超时自动取消 (疑似 reload 后孤儿 task)")
-                except Exception:
-                    pass
+    # 检测卡死的 running job (如 reload 后孤儿 task / 网络读无限阻塞)。
+    # reap_stale 会在 /run 和 /jobs/{id} 轮询端点都调用,保证卡死后能自愈。
+    job_store.reap_stale()
 
     job_id = job_store.create()
 
@@ -81,6 +68,9 @@ async def run_now(request: Request) -> dict:
 
 @router.get("/jobs/{job_id}")
 def get_job(job_id: str) -> dict:
+    # 每次轮询都检查卡死 job — 前端每秒轮询,STALE_JOB_TIMEOUT_S(10min)后必定自愈,
+    # 无需用户再次手动点「同步」。
+    job_store.reap_stale()
     j = job_store.get(job_id)
     if not j:
         raise HTTPException(status_code=404, detail="job not found")

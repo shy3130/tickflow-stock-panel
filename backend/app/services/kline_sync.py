@@ -92,7 +92,7 @@ def sync_daily_batch(symbols: list[str],
         chunks = [symbols[i:i + batch_size] for i in range(0, len(symbols), batch_size)]
 
     for i, chunk in enumerate(chunks):
-        if i > 0 and interval > 0 and len(chunks) > rpm:
+        if i > 0 and interval > 0:
             time.sleep(interval)
         try:
             if start_time and end_time:
@@ -295,7 +295,7 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
     all_dfs: list[pl.DataFrame] = []
 
     for i, chunk in enumerate(chunks):
-        if i > 0 and interval > 0 and len(chunks) > rpm:
+        if i > 0 and interval > 0:
             time.sleep(interval)
         try:
             raw = tf.klines.ex_factors(chunk, **sdk_kwargs)
@@ -427,7 +427,7 @@ def sync_minute_batch(
         chunks = [symbols[i:i + batch_size] for i in range(0, len(symbols), batch_size)]
 
     for i, chunk in enumerate(chunks):
-        if i > 0 and interval > 0 and len(chunks) > rpm:
+        if i > 0 and interval > 0:
             time.sleep(interval)
         try:
             if start_time and end_time:

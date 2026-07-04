@@ -180,7 +180,10 @@ class DataStore:
         for sql in statements:
             try:
                 self.db.execute(sql)
-            except duckdb.IOException:
+            except Exception as e:  # noqa: BLE001
+                # 空数据目录(首次启动)或权限问题时 DuckDB 会抛 IOException;
+                # 跨版本/平台也可能抛 CatalogException 等。空目录缺视图不影响启动
+                # (后续同步写入数据后会重新刷新视图),这里一律降级为 debug 日志。
                 logger.debug("view registration skipped (no parquet yet): %s", sql[:60])
         self._register_unified_views()
 

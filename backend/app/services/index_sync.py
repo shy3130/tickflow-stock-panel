@@ -233,7 +233,7 @@ def sync_and_persist_index_daily(
     interval = (60.0 / rpm) if rpm else 0
     chunks = [symbols[i:i + batch_size] for i in range(0, len(symbols), batch_size)]
     for i, chunk in enumerate(chunks):
-        if i > 0 and interval > 0 and len(chunks) > rpm:
+        if i > 0 and interval > 0:
             import time
             time.sleep(interval)
         raw = kline_sync.sync_daily_batch(
@@ -332,7 +332,7 @@ def sync_and_persist_etf_daily(
     chunks = [symbols[i:i + batch_size] for i in range(0, len(symbols), batch_size)]
     factors = _load_etf_factors(repo)
     for i, chunk in enumerate(chunks):
-        if i > 0 and interval > 0 and len(chunks) > rpm:
+        if i > 0 and interval > 0:
             import time
             time.sleep(interval)
         raw = kline_sync.sync_daily_batch(
