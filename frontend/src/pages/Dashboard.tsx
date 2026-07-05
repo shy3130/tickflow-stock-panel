@@ -385,7 +385,10 @@ function MiniMetric({ label, value, cls = 'text-foreground' }: { label: string; 
   )
 }
 
-function StockList({ title, rows, mode }: { title: string; rows: MarketSnapshotRow[]; mode: 'gain' | 'loss' | 'amount' | 'active' }) {
+function StockList({ title, rows, mode, onStockClick }: {
+  title: string; rows: MarketSnapshotRow[]; mode: 'gain' | 'loss' | 'amount' | 'active';
+  onStockClick?: (symbol: string, name?: string) => void;
+}) {
   return (
     <div className="rounded-card border border-border bg-surface/80 p-2.5">
       <div className="mb-1.5 flex items-center justify-between">
@@ -394,7 +397,11 @@ function StockList({ title, rows, mode }: { title: string; rows: MarketSnapshotR
       </div>
       <div className="space-y-1">
         {rows.slice(0, 8).map((r, idx) => (
-          <div key={`${r.symbol}-${idx}`} className="grid grid-cols-[18px_1fr_auto] items-center gap-1.5 rounded bg-elevated/40 px-1.5 py-1">
+          <div
+            key={`${r.symbol}-${idx}`}
+            className="grid grid-cols-[18px_1fr_auto] items-center gap-1.5 rounded bg-elevated/40 px-1.5 py-1 cursor-pointer hover:bg-elevated hover:brightness-110 transition-colors"
+            onClick={() => onStockClick?.(r.symbol, r.name ?? undefined)}
+          >
             <span className="text-center font-mono text-[10px] text-muted">{idx + 1}</span>
             <div className="min-w-0">
               <div className="truncate text-[11px] text-foreground">{r.name || r.symbol}</div>
@@ -427,7 +434,10 @@ function StockList({ title, rows, mode }: { title: string; rows: MarketSnapshotR
   )
 }
 
-function RankColumn({ title, rows, tone }: { title: string; rows: OverviewDimensionRankItem[]; tone: 'bull' | 'bear' }) {
+function RankColumn({ title, rows, tone, onStockClick }: {
+  title: string; rows: OverviewDimensionRankItem[]; tone: 'bull' | 'bear';
+  onStockClick?: (symbol: string, name?: string) => void;
+}) {
   return (
     <div className="min-w-0 space-y-1">
       <div className={`text-[10px] font-medium ${tone === 'bull' ? 'text-bull' : 'text-bear'}`}>{title}</div>
@@ -436,7 +446,15 @@ function RankColumn({ title, rows, tone }: { title: string; rows: OverviewDimens
           <span className="text-center font-mono text-[9px] text-muted">{idx + 1}</span>
           <div className="min-w-0">
             <div className="truncate text-[11px] text-foreground" title={r.name}>{r.name}</div>
-            <div className="truncate text-[9px] text-muted">{r.count}只 · {r.leader?.name ?? '—'}</div>
+            <div className="truncate text-[9px] text-muted">
+              {r.count}只 · {r.leader?.symbol ? (
+                <button
+                  onClick={(e) => { e.stopPropagation(); onStockClick?.(r.leader!.symbol!, r.leader!.name ?? undefined) }}
+                  className="hover:text-accent cursor-pointer"
+                  title={r.leader?.symbol ?? undefined}
+                >{r.leader?.name ?? '—'}</button>
+              ) : r.leader?.name ?? '—'}
+            </div>
           </div>
           <div className={`font-mono text-[10px] font-semibold ${pctClass(r.avg_pct)}`}>{fmtStockPct(r.avg_pct)}</div>
         </div>
@@ -446,15 +464,18 @@ function RankColumn({ title, rows, tone }: { title: string; rows: OverviewDimens
   )
 }
 
-function HotRankCard({ title, rank, configUrl }: { title: string; rank?: OverviewMarket['concept_rank']; configUrl: string }) {
+function HotRankCard({ title, rank, configUrl, onStockClick }: {
+  title: string; rank?: OverviewMarket['concept_rank']; configUrl: string;
+  onStockClick?: (symbol: string, name?: string) => void;
+}) {
   const hasData = (rank?.leading?.length ?? 0) > 0 || (rank?.lagging?.length ?? 0) > 0
   return (
     <section className="rounded-card border border-border bg-surface/80 p-2.5">
       <SectionTitle icon={Flame} title={title} hint="领涨/领跌" />
       {hasData ? (
         <div className="grid grid-cols-2 gap-2">
-          <RankColumn title="领涨" rows={rank?.leading ?? []} tone="bull" />
-          <RankColumn title="领跌" rows={rank?.lagging ?? []} tone="bear" />
+          <RankColumn title="领涨" rows={rank?.leading ?? []} tone="bull" onStockClick={onStockClick} />
+          <RankColumn title="领跌" rows={rank?.lagging ?? []} tone="bear" onStockClick={onStockClick} />
         </div>
       ) : (
         <div className="py-4 text-center">
@@ -475,6 +496,7 @@ export function Dashboard() {
   const qc = useQueryClient()
   const [selectedDate, setSelectedDate] = useState<string | undefined>()
   const [manualFetching, setManualFetching] = useState(false)
+  const [previewStock, setPreviewStock] = useState<{symbol: string; name?: string} | null>(null)
   // 首次使用(无数据 + 未完成引导)自动弹窗: 同一会话只弹一次
   const [showWelcomeModal, setShowWelcomeModal] = useState(false)
   const dataStatus = useDataStatus({ staleTime: 60_000 })
@@ -729,15 +751,15 @@ export function Dashboard() {
           </div>
 
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <HotRankCard title="概念热度" rank={data.concept_rank} configUrl="/concept-analysis" />
-            <HotRankCard title="行业热度" rank={data.industry_rank} configUrl="/industry-analysis" />
+            <HotRankCard title="概念热度" rank={data.concept_rank} configUrl="/concept-analysis" onStockClick={(symbol, name) => setPreviewStock({symbol, name})} />
+            <HotRankCard title="行业热度" rank={data.industry_rank} configUrl="/industry-analysis" onStockClick={(symbol, name) => setPreviewStock({symbol, name})} />
           </div>
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <StockList title="涨幅榜" rows={data.top_gainers} mode="gain" />
-            <StockList title="跌幅榜" rows={data.top_losers} mode="loss" />
-            <StockList title="成交额榜" rows={data.turnover_leaders} mode="amount" />
-            <StockList title="活跃换手" rows={data.active_leaders} mode="active" />
+            <StockList title="涨幅榜" rows={data.top_gainers} mode="gain" onStockClick={(symbol, name) => setPreviewStock({symbol, name})} />
+            <StockList title="跌幅榜" rows={data.top_losers} mode="loss" onStockClick={(symbol, name) => setPreviewStock({symbol, name})} />
+            <StockList title="成交额榜" rows={data.turnover_leaders} mode="amount" onStockClick={(symbol, name) => setPreviewStock({symbol, name})} />
+            <StockList title="活跃换手" rows={data.active_leaders} mode="active" onStockClick={(symbol, name) => setPreviewStock({symbol, name})} />
           </div>
         </main>
 
@@ -761,6 +783,12 @@ export function Dashboard() {
           </section>
         </aside>
       </div>
+
+      <StockPreviewDialog
+        symbol={previewStock?.symbol ?? null}
+        name={previewStock?.name}
+        onClose={() => setPreviewStock(null)}
+      />
     </div>
   )
 }
