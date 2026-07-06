@@ -159,6 +159,8 @@ docker compose up --build
 # 打开 http://localhost:3018
 ```
 
+镜像已内置 **stock-sdk** 数据源插件(Node 运行时 + 依赖),开箱即用。
+
 > 📖 Docker 进阶、GitHub Actions 自构建、老 CPU 兼容、访问密码设置等见 [docs/deployment.md](./docs/deployment.md)。
 
 ### 跑起来后的第一次使用

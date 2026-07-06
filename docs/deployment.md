@@ -45,6 +45,8 @@ docker compose up --build
 
 Docker 采用两阶段构建,前端 dist 拷进后端镜像,**单容器**运行,数据完全在自己手里。
 
+> 💡 镜像已内置 Node.js 运行时并预装 **stock-sdk** 插件依赖,Docker 部署下开箱即用,无需手动 `npm install`。
+
 更新到新版本:
 
 ```bash
