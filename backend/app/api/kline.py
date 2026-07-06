@@ -40,6 +40,9 @@ def search_instruments(
     默认只搜股票, 保持既有调用方行为不变; 自选等场景传 asset_types=stock,etf
     可一并搜出 ETF, 结果附带 asset_type 字段供前端区分。
     """
+    if not q.strip():
+        return {"results": []}
+
     repo = request.app.state.repo
     import polars as pl
 
@@ -49,12 +52,14 @@ def search_instruments(
         df_t = repo.get_instruments_asset(t)
         if df_t.is_empty() or "symbol" not in df_t.columns:
             continue
+        # dtype 全部归一到 Utf8: 股票/ETF 两份缓存来源不同 (ETF 含 legacy 合并), 防 concat SchemaError
         parts.append(df_t.with_columns([
+            pl.col("symbol").cast(pl.Utf8).alias("symbol"),
             (pl.col("name").cast(pl.Utf8) if "name" in df_t.columns else pl.lit("")).alias("name"),
             (pl.col("code").cast(pl.Utf8) if "code" in df_t.columns else pl.lit("")).alias("code"),
             pl.lit(t).alias("asset_type"),
         ]).select(["symbol", "name", "code", "asset_type"]))
-    if not parts or not q.strip():
+    if not parts:
         return {"results": []}
     df = pl.concat(parts, how="vertical")
 
@@ -91,15 +96,7 @@ def instruments_names(request: Request, symbols: list[str]):
     if not symbols:
         return {"names": {}}
     repo = request.app.state.repo
-    import polars as pl
-    names: dict[str, str] = {}
-    for df in (repo.get_instruments(), repo.get_etf_instruments()):
-        if df.is_empty() or "symbol" not in df.columns or "name" not in df.columns:
-            continue
-        matched = df.filter(pl.col("symbol").is_in(symbols)).select(["symbol", "name"])
-        for row in matched.iter_rows(named=True):
-            names.setdefault(row["symbol"], row["name"])
-    return {"names": names}
+    return {"names": repo.get_name_map(symbols)}
 
 
 def _get_stock_info(repo, symbol: str) -> dict:
@@ -185,17 +182,15 @@ def get_daily(
             logger.debug("单股除权因子拉取失败 %s: %s", symbol, e)
         enriched = compute_enriched(raw, factors=factors)
         rows = enriched.tail(days).to_dicts()
-        # 即使 live 模式也尝试追加实时蜡烛 (实时 enriched 缓存仅覆盖股票)
-        if asset_type == "stock":
-            rows = _maybe_inject_live_candle(request, symbol, rows)
+        # 即使 live 模式也尝试追加实时蜡烛
+        rows = _maybe_inject_live_candle(request, symbol, rows, asset_type)
         resp = {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": rows, "source": "live"}
         return _attach_ext(resp, repo, symbol, ext_columns)
 
     rows = df.to_dicts()
 
-    # 追加/覆盖今日实时蜡烛 (实时 enriched 缓存仅覆盖股票; ETF 今日行情已由 QuoteService 落盘)
-    if asset_type == "stock":
-        rows = _maybe_inject_live_candle(request, symbol, rows)
+    # 追加/覆盖今日实时蜡烛
+    rows = _maybe_inject_live_candle(request, symbol, rows, asset_type)
 
     resp = {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": rows, "source": "enriched"}
     return _attach_ext(resp, repo, symbol, ext_columns)
@@ -266,13 +261,21 @@ def _attach_ext(resp: dict, repo, symbol: str, ext_columns: Optional[str]) -> di
     return resp
 
 
-def _maybe_inject_live_candle(request: Request, symbol: str, rows: list[dict]) -> list[dict]:
-    """如果 QuoteService 有实时 enriched 数据, 用实时数据生成今日蜡烛并追加/覆盖。"""
-    qs = getattr(request.app.state, "quote_service", None)
-    if not qs:
-        return rows
+def _maybe_inject_live_candle(request: Request, symbol: str, rows: list[dict], asset_type: str = "stock") -> list[dict]:
+    """如果有当日实时 enriched 数据, 用实时数据生成今日蜡烛并追加/覆盖。
 
-    df_today, enriched_date = qs.get_enriched_today()
+    stock 走 QuoteService 的股票实时缓存; etf 走 ETF enriched 缓存 (开启实时 ETF
+    拉取时为盘中数据, 否则为磁盘最新日, 由下方"非今日不注入"守卫自然跳过)。
+    """
+    if asset_type == "stock":
+        qs = getattr(request.app.state, "quote_service", None)
+        if not qs:
+            return rows
+        df_today, enriched_date = qs.get_enriched_today()
+    elif asset_type == "etf":
+        df_today, enriched_date = request.app.state.repo.get_enriched_latest_asset("etf")
+    else:
+        return rows
     if df_today.is_empty():
         return rows
 

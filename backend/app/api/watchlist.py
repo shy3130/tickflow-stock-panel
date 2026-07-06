@@ -31,14 +31,8 @@ def _with_names(rows: list[dict], request: Request) -> list[dict]:
     if not rows:
         return rows
     try:
-        repo = request.app.state.repo
-        name_by_symbol: dict[str, str] = {}
-        # 股票 + ETF 两份 instruments 缓存, 自选列表可混合持有
-        for df_i in (repo.get_instruments(), repo.get_etf_instruments()):
-            if df_i.is_empty() or "symbol" not in df_i.columns or "name" not in df_i.columns:
-                continue
-            for symbol, name in df_i.select(["symbol", "name"]).iter_rows():
-                name_by_symbol.setdefault(symbol, name)
+        # 股票 + ETF 名称统一由 repo.get_name_map 解析, 自选列表可混合持有
+        name_by_symbol = request.app.state.repo.get_name_map([r.get("symbol") for r in rows])
         if not name_by_symbol:
             return rows
         return [{**row, "name": name_by_symbol.get(row.get("symbol"))} for row in rows]
@@ -125,33 +119,42 @@ def watchlist_enriched(
     if not symbols:
         return {"rows": [], "as_of": None, "elapsed_ms": 0}
 
+    # 按资产拆分自选 symbol; ETF enriched 是独立缓存, 仅自选真的含 ETF 才去加载
+    # (避免无 ETF 用户在缓存冷启动时触发 ETF 全量懒加载)
+    etf_set = repo.get_etf_symbol_set()
+    stock_symbols = [s for s in symbols if s not in etf_set]
+    etf_symbols = [s for s in symbols if s in etf_set]
+
     df_e, cache_date = repo.get_enriched_latest()
-    # 按 symbol 过滤
-    df = df_e.filter(pl.col("symbol").is_in(symbols)) if not df_e.is_empty() else df_e
+    # 保持原契约: 自选含股票但股票 enriched 未就绪 (预热中) → 返回"未就绪"而非部分结果
+    if stock_symbols and df_e.is_empty():
+        return {"rows": [], "as_of": None, "elapsed_ms": 0}
 
-    # ETF enriched 独立缓存, 自选可混合持有; 缺失列 (换手率/涨跌停信号等) 为 null
-    df_etf_all, etf_date = repo.get_enriched_latest_asset("etf")
-    if not df_etf_all.is_empty():
-        df_etf = df_etf_all.filter(pl.col("symbol").is_in(symbols))
-        if not df_etf.is_empty():
-            df = df_etf if df.is_empty() else pl.concat([df, df_etf], how="diagonal_relaxed")
+    df = df_e.filter(pl.col("symbol").is_in(stock_symbols)) if stock_symbols else pl.DataFrame()
 
-    as_of = cache_date or etf_date
+    # ETF 行合并; 缺失列 (换手率/涨跌停信号等) 为 null
+    etf_date = None
+    if etf_symbols:
+        df_etf_all, etf_date = repo.get_enriched_latest_asset("etf")
+        if not df_etf_all.is_empty():
+            df_etf = df_etf_all.filter(pl.col("symbol").is_in(etf_symbols))
+            if not df_etf.is_empty():
+                df = df_etf if df.is_empty() else pl.concat([df, df_etf], how="diagonal_relaxed")
+
+    # as_of 取两类缓存中较旧者, 避免把旧的 ETF 行标成股票缓存日期
+    dates = [d for d in (cache_date if stock_symbols else None, etf_date) if d is not None]
+    as_of = min(dates) if dates else None
     if df.is_empty():
         return {"rows": [], "as_of": str(as_of) if as_of else None, "elapsed_ms": 0}
 
-    # JOIN instruments 取 name + float_shares (名称合并股票 + ETF, 股本仅股票有)
-    inst = None
+    # JOIN float_shares (仅股票有) + 名称 (股票/ETF 统一走 get_name_map)
     df_i = repo.get_instruments()
-    if not df_i.is_empty() and "name" in df_i.columns:
-        inst_cols = [c for c in ["symbol", "name", "float_shares"] if c in df_i.columns]
-        inst = df_i.select(inst_cols)
-    df_etf_i = repo.get_etf_instruments()
-    if not df_etf_i.is_empty() and "name" in df_etf_i.columns:
-        etf_names = df_etf_i.select(["symbol", "name"])
-        inst = etf_names if inst is None else pl.concat([inst, etf_names], how="diagonal_relaxed")
-    if inst is not None:
-        df = df.join(inst.unique(subset=["symbol"], keep="first"), on="symbol", how="left")
+    if not df_i.is_empty() and "float_shares" in df_i.columns:
+        df = df.join(df_i.select(["symbol", "float_shares"]), on="symbol", how="left")
+    name_map = repo.get_name_map(df["symbol"].to_list())
+    df = df.with_columns(
+        pl.col("symbol").replace_strict(name_map, default=None, return_dtype=pl.Utf8).alias("name")
+    )
 
     # 选择内置需要的列
     keep = [c for c in _WATCHLIST_COLS + ["name", "float_shares"] if c in df.columns]

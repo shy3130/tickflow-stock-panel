@@ -301,6 +301,9 @@ class KlineRepository:
         self._etf_live_agg_cache: pl.DataFrame | None = None
         self._etf_live_agg_cache_date: date | None = None
         self._etf_instruments_cache: pl.DataFrame | None = None
+        # symbol 集合 memo (随对应 instruments 缓存失效): 供每请求资产分流用
+        self._index_symbol_set_cache: set[str] | None = None
+        self._etf_symbol_set_cache: set[str] | None = None
 
         # ---- enriched 后台预热 ----
         # 启动时 compute_indicators (107万行, 低配机 50s+) 移出 lifespan 关键路径,
@@ -361,6 +364,11 @@ class KlineRepository:
         logger.info("cache refresh step start: ETF instruments")
         self._refresh_etf_instruments()
         logger.info("cache refresh step done: ETF instruments (%.2fs)", time.perf_counter() - step)
+
+        # ETF enriched 只失效不重建: 下次访问时按新数据懒加载,
+        # 避免自选无 ETF 的用户在管道后白付全量重算成本
+        self._etf_enriched_cache = None
+        self._etf_enriched_cache_date = None
 
         if background:
             logger.info("cache refresh: enriched 推后台线程预热")
@@ -438,6 +446,8 @@ class KlineRepository:
         self._etf_live_agg_cache = None
         self._etf_live_agg_cache_date = None
         self._etf_instruments_cache = None
+        self._index_symbol_set_cache = None
+        self._etf_symbol_set_cache = None
 
     def _refresh_enriched(self) -> None:
         """从 parquet 加载 enriched 最新日到内存 + 构建聚合表。
@@ -854,6 +864,7 @@ class KlineRepository:
             df = pl.scan_parquet(self._index_inst_glob).collect()
             if not df.is_empty():
                 self._index_instruments_cache = df
+                self._index_symbol_set_cache = None
                 logger.info("index instruments 缓存已加载: %d 只", len(df))
         except Exception as e:  # noqa: BLE001
             logger.debug("index instruments 缓存刷新跳过: %s", e)
@@ -878,6 +889,7 @@ class KlineRepository:
         if parts:
             df_all = pl.concat(parts, how="diagonal_relaxed").unique(subset=["symbol"], keep="last").sort("symbol")
             self._etf_instruments_cache = df_all
+            self._etf_symbol_set_cache = None
             logger.info("ETF instruments 缓存已加载: %d 只", len(df_all))
 
     def get_enriched_latest(self) -> tuple[pl.DataFrame, date | None]:
@@ -1035,30 +1047,50 @@ class KlineRepository:
         return pl.DataFrame()
 
     def get_index_symbol_set(self) -> set[str]:
-        """返回已缓存指数 symbol 集合。"""
-        df = self.get_index_instruments()
-        if df.is_empty() or "symbol" not in df.columns:
-            return set()
-        return set(df["symbol"].cast(pl.Utf8).to_list())
+        """返回已缓存指数 symbol 集合 (memo, 随 instruments 缓存失效)。"""
+        if self._index_symbol_set_cache is None:
+            df = self.get_index_instruments()
+            if df.is_empty() or "symbol" not in df.columns:
+                return set()
+            self._index_symbol_set_cache = set(df["symbol"].cast(pl.Utf8).to_list())
+        return self._index_symbol_set_cache
 
     def get_etf_symbol_set(self) -> set[str]:
-        """返回已缓存 ETF symbol 集合。"""
-        df = self.get_etf_instruments()
-        if df.is_empty() or "symbol" not in df.columns:
-            return set()
-        return set(df["symbol"].cast(pl.Utf8).to_list())
+        """返回已缓存 ETF symbol 集合 (memo, 随 instruments 缓存失效)。"""
+        if self._etf_symbol_set_cache is None:
+            df = self.get_etf_instruments()
+            if df.is_empty() or "symbol" not in df.columns:
+                return set()
+            self._etf_symbol_set_cache = set(df["symbol"].cast(pl.Utf8).to_list())
+        return self._etf_symbol_set_cache
 
     def resolve_asset_type(self, symbol: str) -> str:
         """按 symbol 判定资产类型: etf / index / stock(默认)。
 
         供 API 层对单标的查询做资产分流 (get_daily_asset 等)。
-        ETF/指数集合均为内存缓存, 查询成本可忽略。
+        ETF/指数集合为 memo, 每请求查询成本可忽略。
         """
         if symbol in self.get_etf_symbol_set():
             return "etf"
         if symbol in self.get_index_symbol_set():
             return "index"
         return "stock"
+
+    def get_name_map(self, symbols: list[str] | None = None) -> dict[str, str]:
+        """返回 {symbol: name} 映射, 合并股票 + ETF instruments (股票优先去重)。
+
+        自选列表/名称批查等场景的统一名称解析入口, 避免各调用方自行合并两份缓存。
+        symbols 非 None 时只返回命中的条目。
+        """
+        name_map: dict[str, str] = {}
+        for df in (self.get_instruments(), self.get_etf_instruments()):
+            if df.is_empty() or "symbol" not in df.columns or "name" not in df.columns:
+                continue
+            if symbols is not None:
+                df = df.filter(pl.col("symbol").is_in(symbols))
+            for symbol, name in df.select(["symbol", "name"]).iter_rows():
+                name_map.setdefault(symbol, name)
+        return name_map
 
     def enriched_latest_date(self) -> date | None:
         """返回缓存中的 enriched 最新日期。"""
