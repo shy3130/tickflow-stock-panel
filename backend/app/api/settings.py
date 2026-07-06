@@ -415,8 +415,21 @@ def get_preferences() -> dict:
 def list_data_sources() -> dict:
     """列出已加载的自定义数据源。"""
     from app.data_providers import custom as custom_sources
+    from app.data_providers.stocksdk import availability
+
+    sdk_ok, sdk_reason = availability()
     return {
-        "builtin": [{"name": "tickflow", "display_name": "TickFlow", "datasets": ["daily", "adj_factor", "realtime"]}],
+        "builtin": [
+            {"name": "tickflow", "display_name": "TickFlow", "datasets": ["daily", "adj_factor", "realtime", "minute"]},
+            {
+                "name": "stocksdk",
+                "display_name": "stock-sdk（免费行情）",
+                "datasets": ["daily", "adj_factor", "realtime", "minute"],
+                "available": sdk_ok,
+                "status": sdk_reason,
+                "description": "基于 stock-sdk 的免费 A 股行情, 无需 API Key。日K/除权/分钟/实时全市场。需运行环境含 Node.js。",
+            },
+        ],
         "custom": custom_sources.list_sources(),
         "errors": custom_sources.errors(),
         "config_dir": str(custom_sources.data_sources_dir()),

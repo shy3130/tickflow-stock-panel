@@ -691,6 +691,9 @@ export interface DataSourceItem {
   display_name: string
   datasets: string[]
   path?: string | null
+  available?: boolean
+  status?: string
+  description?: string
 }
 
 export interface DataSourceLoadError {

@@ -29,8 +29,14 @@ FROM python:3.11-slim AS runtime
 ARG USE_CN_MIRROR=1
 ARG PYPI_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
 ARG PYPI_FALLBACK=https://mirrors.aliyun.com/pypi/simple
+ARG NPM_REGISTRY=https://registry.npmmirror.com
 ARG BACKEND_EXTRAS=
 WORKDIR /app
+
+# Node.js 运行时 —— 可选内置数据源 stock-sdk 用 node 桥接脚本抓免费行情。
+# 不装也能跑(该数据源显示"不可用",其余功能不受影响),装上则可作为 TickFlow 免费平替。
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
 
 # 安装 uv(快) —— 国内镜像下三重兜底:主源 → 备用源 → 官方源,
 # 任一成功即可,避免单一镜像同步延迟/故障导致构建失败。
@@ -67,6 +73,14 @@ COPY tiers.yaml /app/tiers.yaml
 ENV STATIC_DIR=/app/static \
     TIERS_YAML=/app/tiers.yaml \
     DATA_DIR=/app/data
+
+# 为 stock-sdk 内置数据源安装 node 依赖(桥接脚本优先解析同目录 node_modules)。
+# npm 缺失/离线时跳过, 不阻断镜像构建; 运行期该数据源会显示不可用。
+RUN if command -v npm >/dev/null 2>&1; then \
+      if [ "$USE_CN_MIRROR" = "1" ]; then npm config set registry "$NPM_REGISTRY"; fi; \
+      npm install --omit=dev --no-audit --no-fund --prefix app/data_providers/stocksdk || \
+        echo "warn: stock-sdk npm install failed, 内置数据源将不可用"; \
+    fi
 
 # Frontend 静态产物
 COPY --from=frontend-builder /build/dist ./static

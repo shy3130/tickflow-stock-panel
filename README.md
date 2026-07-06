@@ -183,6 +183,8 @@ PORT=3018                      # 服务端口
 
 > 📖 完整配置项(数据源档位、AI、服务、密码、老 CPU 兼容)见 [docs/configuration.md](./docs/configuration.md)。
 
+> 💡 **免费平替**:内置 [stock-sdk](https://www.npmjs.com/package/stock-sdk) 数据源,**无需 API Key** 即可获取 A 股日K / 除权因子 / 分钟K / 全市场实时。在 **设置 → 数据源** 一键切换(运行环境需含 Node.js,Docker 镜像已内置)。详见 [docs/configuration.md](./docs/configuration.md#数据源stock-sdk免费内置平替)。
+
 ---
 
 ## 🏗️ 技术栈

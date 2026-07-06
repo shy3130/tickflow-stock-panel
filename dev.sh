@@ -84,6 +84,14 @@ if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
   ok "前端依赖装好了"
 fi
 
+# stock-sdk 内置数据源(可选): 桥接脚本需要其 node 依赖。缺 node 时静默跳过。
+STOCKSDK_DIR="$BACKEND_DIR/app/data_providers/stocksdk"
+if [ ! -d "$STOCKSDK_DIR/node_modules" ] && command -v npm >/dev/null 2>&1; then
+  info "安装 stock-sdk 数据源依赖(可选内置源)..."
+  ( cd "$STOCKSDK_DIR" && npm install --omit=dev --no-audit --no-fund >/dev/null 2>&1 ) \
+    && ok "stock-sdk 数据源就绪" || info "stock-sdk 依赖安装失败, 该内置源将不可用(不影响其他功能)"
+fi
+
 # ===== 4. 启动 + 日志前缀 =====
 PIDS=()
 

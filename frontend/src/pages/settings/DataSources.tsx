@@ -52,11 +52,15 @@ export function SettingsDataSourcesPanel() {
           financial_data_provider: 'tickflow',
         })
       }
+      // 按目标源声明的数据集精确切换; 未声明的数据集回落 tickflow。
+      const item = allItems.find(s => s.name === name)
+      const ds = new Set(item?.datasets ?? ['daily', 'realtime'])
       return api.updateDataProviders({
-        daily_data_provider: name,
+        daily_data_provider: ds.has('daily') ? name : 'tickflow',
         adj_factor_provider: 'same_as_daily',
-        realtime_data_provider: name,
-        financial_data_provider: name,
+        realtime_data_provider: ds.has('realtime') ? name : 'tickflow',
+        minute_data_provider: ds.has('minute') ? name : 'tickflow',
+        financial_data_provider: ds.has('financial') ? name : 'tickflow',
       })
     },
     onSuccess: () => {
@@ -74,6 +78,8 @@ export function SettingsDataSourcesPanel() {
   const customList: DataSourceItem[] = sources.data?.custom ?? []
   const errors = sources.data?.errors ?? []
   const activeName = prefs.data?.daily_data_provider || 'tickflow'
+  const builtinNames = new Set(builtin.map(b => b.name))
+  const isBuiltin = (name: string) => builtinNames.has(name)
 
   // 顶部数据源选择列表 (内置 + 自定义 + 新增)
   const allItems = [
@@ -110,7 +116,7 @@ export function SettingsDataSourcesPanel() {
           <span className="text-[10px] uppercase tracking-widest text-muted">当前</span>
           <span className="h-2 w-2 rounded-full bg-accent animate-pulse" />
           <span className="text-sm font-medium text-foreground">
-            {activeName === 'tickflow' ? 'TickFlow' : customList.find(s => s.name === activeName)?.display_name || activeName}
+            {allItems.find(s => s.name === activeName)?.display_name || activeName}
           </span>
         </div>
 
@@ -124,7 +130,7 @@ export function SettingsDataSourcesPanel() {
                 key={item.name}
                 onClick={() => {
                   setSelected(item.name)
-                  if (item.name !== 'tickflow') {
+                  if (!isBuiltin(item.name)) {
                     editExisting.mutate(item.name)
                   }
                 }}
@@ -139,8 +145,11 @@ export function SettingsDataSourcesPanel() {
                   <span className={`text-sm truncate flex-1 ${isActive ? 'font-medium text-foreground' : 'text-secondary'}`}>
                     {item.display_name}
                   </span>
-                  {item.name === 'tickflow' && (
+                  {isBuiltin(item.name) && (
                     <span className="text-[9px] text-muted/50 uppercase tracking-wider shrink-0">内置</span>
+                  )}
+                  {item.available === false && (
+                    <span className="text-[9px] text-danger/70 uppercase tracking-wider shrink-0" title={item.status}>不可用</span>
                   )}
                   {isActive ? (
                     <span className="inline-flex items-center gap-0.5 text-[9px] text-accent shrink-0">
@@ -156,7 +165,7 @@ export function SettingsDataSourcesPanel() {
                     </button>
                   )}
                 </div>
-                {item.name !== 'tickflow' && item.datasets.length > 0 && (
+                {item.datasets.length > 0 && (
                   <div className="flex flex-wrap gap-1 ml-3.5">
                     {item.datasets.map(ds => (
                       <span key={ds} className="text-[9px] text-muted/60 bg-elevated/60 px-1 py-0.5 rounded">
@@ -164,9 +173,6 @@ export function SettingsDataSourcesPanel() {
                       </span>
                     ))}
                   </div>
-                )}
-                {item.name === 'tickflow' && (
-                  <div className="text-[10px] text-muted/60 ml-3.5">日K · 除权 · 实时 · 分钟K</div>
                 )}
               </div>
             )
@@ -223,6 +229,13 @@ export function SettingsDataSourcesPanel() {
               onSwitch={() => switchProvider.mutate('tickflow')}
               switching={switchProvider.isPending}
             />
+          ) : isBuiltin(selected) ? (
+            <BuiltinDetail
+              item={builtin.find(b => b.name === selected)!}
+              active={activeName === selected}
+              onSwitch={() => switchProvider.mutate(selected)}
+              switching={switchProvider.isPending}
+            />
           ) : (
             <DataSourceEditor
               key={selected}
@@ -276,6 +289,81 @@ export function SettingsDataSourcesPanel() {
         </div>
       )}
     </div>
+  )
+}
+
+function BuiltinDetail({
+  item,
+  active,
+  onSwitch,
+  switching,
+}: {
+  item: DataSourceItem
+  active: boolean
+  onSwitch: () => void
+  switching: boolean
+}) {
+  const unavailable = item.available === false
+  return (
+    <section className="rounded-card border border-border bg-surface p-6">
+      <div className="flex items-start gap-4 mb-5">
+        <div className="h-11 w-11 rounded-xl bg-accent/10 flex items-center justify-center shrink-0">
+          <Database className="h-5 w-5 text-accent" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h2 className="text-base font-semibold text-foreground">{item.display_name}</h2>
+            <span className="text-[10px] text-muted/60 uppercase tracking-wider border border-border rounded px-1.5 py-0.5">内置</span>
+            {active && (
+              <span className="inline-flex items-center gap-1 text-[10px] text-accent bg-accent/10 px-1.5 py-0.5 rounded">
+                <Check className="h-2.5 w-2.5" /> 当前使用
+              </span>
+            )}
+            {unavailable && (
+              <span className="inline-flex items-center gap-1 text-[10px] text-danger bg-danger/10 px-1.5 py-0.5 rounded">
+                <FileWarning className="h-2.5 w-2.5" /> 不可用
+              </span>
+            )}
+          </div>
+          {item.description && (
+            <p className="text-xs text-secondary mt-1.5 leading-relaxed">{item.description}</p>
+          )}
+          {item.status && (
+            <p className={`text-[11px] mt-1 font-mono ${unavailable ? 'text-danger/80' : 'text-muted/60'}`}>{item.status}</p>
+          )}
+        </div>
+      </div>
+
+      {item.datasets.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mb-5">
+          {item.datasets.map(ds => (
+            <div key={ds} className="rounded-lg border border-border/50 bg-elevated/20 px-3 py-2.5">
+              <div className="text-xs font-medium text-foreground">{DATASET_LABEL[ds] || ds}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {unavailable && (
+        <div className="mb-4 flex items-start gap-1.5 px-3 py-2 rounded-lg bg-danger/5 border border-danger/20">
+          <FileWarning className="h-3.5 w-3.5 text-danger shrink-0 mt-0.5" />
+          <div className="text-[11px] text-danger/80 leading-relaxed">
+            当前运行环境无法使用该数据源(通常是未安装 Node.js)。可先切换，抓取时未配置的数据集会自动回退 TickFlow。
+          </div>
+        </div>
+      )}
+
+      {!active && (
+        <button
+          onClick={onSwitch}
+          disabled={switching}
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-btn bg-accent text-white text-sm font-medium hover:bg-accent/90 disabled:opacity-50 transition-colors"
+        >
+          <Zap className="h-3.5 w-3.5" />
+          切换为当前数据源
+        </button>
+      )}
+    </section>
   )
 }
 

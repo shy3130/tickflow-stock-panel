@@ -18,6 +18,21 @@ _LOAD_ERRORS: list[dict] = []
 
 _NAME_RE = re.compile(r"^[a-z0-9_]+$")
 
+# 内置(非 YAML)扩展数据源。它们与 tickflow 一样是代码内置, 但复用本注册表以让
+# services 的「非 tickflow → custom_sources」分流点零改动即可路由过去。
+# 这些名字不出现在「自定义源」列表, 也不可通过 save/delete/get_config 编辑。
+_BUILTIN_NAMES = {"stocksdk"}
+
+
+def _register_builtins() -> None:
+    """把内置扩展 provider 注入注册表(每次 load_all 后重建)。缺依赖也注册, 抓取时才报错。"""
+    try:
+        from app.data_providers.stocksdk import StockSDKProvider
+
+        _PROVIDERS["stocksdk"] = StockSDKProvider()  # type: ignore[assignment]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("stocksdk 内置数据源注册失败: %s", e)
+
 
 def data_sources_dir() -> Path:
     return settings.data_dir / "data_sources"
@@ -47,8 +62,11 @@ def load_all(path: Path | None = None) -> None:
             logger.warning("custom data source load failed %s: %s", file, e)
             _LOAD_ERRORS.append({"path": str(file), "errors": [str(e)]})
 
+    _register_builtins()
+
 
 def list_sources() -> list[dict]:
+    """只列出用户自定义(YAML)源, 内置扩展(stocksdk 等)由各自的 builtin 通道呈现。"""
     return [
         {
             "name": provider.name,
@@ -57,7 +75,12 @@ def list_sources() -> list[dict]:
             "path": str(provider.config.path) if provider.config.path else None,
         }
         for provider in _PROVIDERS.values()
+        if not getattr(provider, "builtin", False)
     ]
+
+
+def is_builtin(name: str) -> bool:
+    return (name or "").lower() in _BUILTIN_NAMES
 
 
 def names() -> set[str]:
@@ -91,7 +114,9 @@ def provider_has_dataset(name: str, dataset: str) -> bool:
 
 
 def get_config_dict(name: str) -> dict | None:
-    """读取一个已加载 custom 源的原始配置 dict(用于前端编辑回填)。"""
+    """读取一个已加载 custom 源的原始配置 dict(用于前端编辑回填)。内置源不可编辑, 返回 None。"""
+    if is_builtin(name):
+        return None
     provider = _PROVIDERS.get((name or "").lower())
     if provider is None:
         return None
@@ -129,6 +154,8 @@ def _config_to_dict(config: CustomSourceConfig) -> dict:
 
 def save_config(name: str, config: dict) -> Path:
     """把一份配置 dict 写成 data/data_sources/{name}.yaml, 返回写入路径。"""
+    if is_builtin(name):
+        raise ValueError(f"'{name}' 是内置数据源, 不可编辑")
     if not _NAME_RE.match(name or ""):
         raise ValueError(f"invalid data source name: {name!r} (only lowercase a-z 0-9 _ allowed)")
     base = data_sources_dir()
@@ -143,6 +170,8 @@ def save_config(name: str, config: dict) -> Path:
 
 def delete_config(name: str) -> bool:
     """删除 data/data_sources/{name}.yaml。返回是否真的删除了。"""
+    if is_builtin(name):
+        raise ValueError(f"'{name}' 是内置数据源, 不可删除")
     if not _NAME_RE.match(name or ""):
         raise ValueError(f"invalid data source name: {name!r}")
     base = data_sources_dir().resolve()
@@ -225,4 +254,8 @@ def _sanitize_dataset(ds_cfg: dict) -> dict:
     if ds_cfg.get("end_param"):
         out["end_param"] = str(ds_cfg["end_param"])
     return out
+
+
+# 导入时即注册内置源, 保证 names()/get_provider() 在 startup load_all 之前也可用。
+_register_builtins()
 
