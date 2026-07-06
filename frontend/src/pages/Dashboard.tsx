@@ -11,6 +11,7 @@ import { useDataStatus, useCapabilities, useSettings } from '@/lib/useSharedQuer
 import { SealedBadge } from '@/components/SealedBadge'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { SettingsModal } from '@/components/data/SettingsModal'
+import { DataSourceQuickPicker } from '@/components/DataSourceQuickPicker'
 import { STAGE_LABELS } from '@/components/data/ActiveJobCard'
 import { cn } from '@/lib/cn'
 import { cnSignal } from '@/lib/signals'
@@ -795,6 +796,14 @@ function FetchDataCard({
             </p>
           )}
 
+          {/* 数据源选择 —— 拉取前可就地切换(如免费的 stock-sdk), 无需深入设置页 */}
+          {!isFetching && (
+            <div className="mt-3">
+              <div className="text-[11px] text-muted mb-1.5">数据源(点击可切换)</div>
+              <DataSourceQuickPicker compact />
+            </div>
+          )}
+
           {isFetching ? (
             <div className="mt-3">
               <div className="flex items-center justify-between text-[11px] text-muted mb-1.5">
@@ -877,6 +886,13 @@ function WelcomeFetchModal({
             ⓘ 当前无需 API Key,None 档即可获取历史日K数据。
           </div>
         )}
+
+        {/* 数据源选择 —— 首拉前即可选用免费的 stock-sdk 等平替 */}
+        <div className="mt-4 text-left">
+          <div className="text-[11px] text-muted mb-1.5">数据源(点击可切换)</div>
+          <DataSourceQuickPicker compact />
+        </div>
+
         <div className="mt-5 flex items-center justify-center gap-2.5">
           <button
             onClick={onClose}

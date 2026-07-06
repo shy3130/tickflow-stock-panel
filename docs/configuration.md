@@ -45,6 +45,8 @@ TICKFLOW_API_KEY=              # 留空 = None 模式(历史日K免费);填 Key 
 | 实时行情 | 全 A 股(5000+)快照,含五档基础字段             |
 | 标的列表 | 全 A 股维表(代码/名称/交易所/股本等)          |
 
+> **实时监控免费开启**:切到 stock-sdk 后,实时行情走其全市场快照(约 5000+ 只),等价于 TickFlow 的 full_market 模式,**无需 TickFlow 档位**。在 **设置 → 实时监控** 直接开启即可(None 档也不再被拦)。
+
 - **运行环境需含 Node.js(>=18)**:该数据源通过打包的 node 桥接脚本调用真实 stock-sdk。Docker 镜像已内置 Node;本地 `./dev.sh` 首次启动会自动安装其 node 依赖。
 - 若环境无 Node,设置页该源会显示「不可用」,不影响 TickFlow 及其他功能。未被 stock-sdk 覆盖的数据集(如财务报表)会自动回退 TickFlow。
 - 可选:用环境变量 `STOCK_SDK_NODE` 指定 node 可执行文件路径。

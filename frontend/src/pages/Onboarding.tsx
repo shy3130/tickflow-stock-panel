@@ -28,9 +28,12 @@ import {
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useCapabilities, useSettings } from '@/lib/useSharedQueries'
+import { useDataSourceList } from '@/lib/dataProviders'
 import { QK } from '@/lib/queryKeys'
 import { CAP_LABELS } from '@/lib/capability-labels'
 import { Logo } from '@/components/Logo'
+import { DataSourceQuickPicker } from '@/components/DataSourceQuickPicker'
+import { toast } from '@/components/Toast'
 
 // ===== 引导页:5 步向导 =====
 // 0. 声明  1. 欢迎  2. 输入 Key(可跳过)  3. 能力探测结果  4. 完成 → 写标记 → 进面板
@@ -321,8 +324,9 @@ function KeyStep({ onNext, onSkip, onBack }: { onNext: () => void; onSkip: () =>
         <h2 className="text-xl font-bold text-foreground">配置 TickFlow API Key</h2>
       </div>
       <p className="mt-2.5 text-sm text-secondary leading-relaxed">
-        本项目基于 TickFlow 这款稳定的数据源为基座进行开发,正在适配其他第三方数据源。
-        如果有任何建议或意见,欢迎发送邮件至{' '}
+        本项目以 TickFlow 为基座,同时内置了免费的 stock-sdk 数据源作为平替。
+        配置 TickFlow Key 可解锁其完整能力;也可跳过 Key,直接使用下方免费数据源。
+        有任何建议欢迎邮件至{' '}
         <a
           href="mailto:415333856@qq.com"
           className="text-accent hover:underline font-medium"
@@ -388,7 +392,7 @@ function KeyStep({ onNext, onSkip, onBack }: { onNext: () => void; onSkip: () =>
           </a>
           获取。
           <span className="block mt-1.5 text-foreground/70">
-            当前数据源基于 TickFlow 基座,其他第三方数据源正在开发适配中。
+            不想注册?下方可直接选用免费的 stock-sdk 数据源,无需任何 Key。
           </span>
         </span>
       </div>
@@ -447,6 +451,28 @@ function KeyStep({ onNext, onSkip, onBack }: { onNext: () => void; onSkip: () =>
         )}
       </form>
 
+      {/* 或:免费数据源(无需 Key) —— 直接切换,可跳过 TickFlow Key */}
+      <div className="mt-5">
+        <div className="flex items-center gap-3 text-[11px] text-muted">
+          <div className="h-px flex-1 bg-border" />
+          <span className="shrink-0">或使用免费数据源(无需 Key)</span>
+          <div className="h-px flex-1 bg-border" />
+        </div>
+        <div className="mt-3">
+          <DataSourceQuickPicker
+            compact
+            onSwitched={(name) => {
+              if (name === 'tickflow') return
+              toast('已切换为免费数据源,可直接下一步', 'success')
+            }}
+          />
+        </div>
+        <p className="mt-2 text-[11px] text-muted/70 leading-relaxed">
+          选「stock-sdk(免费行情)」即可无 Key 使用日K / 除权 / 分钟 / 实时全市场。
+          未覆盖的数据集会自动回退 TickFlow。之后仍可在「设置 → 数据源」随时切换。
+        </p>
+      </div>
+
       {/* 底部操作 */}
       <div className="mt-6 flex items-center justify-between">
         <button
@@ -489,10 +515,13 @@ function KeyStep({ onNext, onSkip, onBack }: { onNext: () => void; onSkip: () =>
 function ResultStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
   const settings = useSettings()
   const caps = useCapabilities()
+  const { activeName, activeItem } = useDataSourceList()
 
   // 是否配置成功 —— 免费档(free)或付费档(api_key)都算;None 档算未配置
   const hasKey = settings.data?.mode === 'free' || settings.data?.mode === 'api_key'
   const capList = caps.data ? Object.entries(caps.data.capabilities) : []
+  // 未配 Key 但已切到免费源(如 stock-sdk): 展示正向确认, 而非「None 档」提示
+  const usingFreeSource = !hasKey && activeName !== 'tickflow'
 
   return (
     <div>
@@ -544,6 +573,20 @@ function ResultStep({ onNext, onBack }: { onNext: () => void; onBack: () => void
             )}
           </div>
         </>
+      ) : usingFreeSource ? (
+        <div className="mt-5 rounded-card border border-accent/30 bg-accent/[0.05] p-6 text-center">
+          <div className="mx-auto w-fit rounded-xl bg-accent/10 p-3">
+            <Database className="h-6 w-6 text-accent" />
+          </div>
+          <div className="mt-3 text-sm font-medium text-foreground">
+            已启用免费数据源:{activeItem?.display_name ?? activeName}
+          </div>
+          <p className="mt-2 text-xs text-secondary leading-relaxed max-w-sm mx-auto">
+            无需 TickFlow Key 即可获取日K、除权因子、分钟K与全市场实时行情。进入看板后可直接拉取历史行情开始使用。
+            未覆盖的数据集会自动回退 TickFlow,随时可在
+            <span className="text-foreground font-medium"> 设置 → 数据源 </span>切换。
+          </p>
+        </div>
       ) : (
         <div className="mt-5 rounded-card border border-border bg-surface/80 backdrop-blur-sm p-6 text-center">
           <div className="mx-auto w-fit rounded-xl bg-elevated p-3">
@@ -551,8 +594,8 @@ function ResultStep({ onNext, onBack }: { onNext: () => void; onBack: () => void
           </div>
           <div className="mt-3 text-sm font-medium text-foreground">将以 None 档继续</div>
           <p className="mt-2 text-xs text-muted leading-relaxed max-w-sm mx-auto">
-            当前未配置有效 Key,仍可使用看板、选股、回测等功能 —— 进入看板后可直接获取近 1 年历史日K数据。配置 Key 后可解锁实时行情监控等能力,随时在
-            <span className="text-foreground font-medium"> 设置 → 账户 </span>填写。
+            当前未配置有效 Key,仍可使用看板、选股、回测等功能 —— 进入看板后可直接获取近 1 年历史日K数据。也可返回上一步选用免费的 stock-sdk 数据源,或配置 Key 后解锁实时行情监控,随时在
+            <span className="text-foreground font-medium"> 设置 → 账户 </span>调整。
           </p>
         </div>
       )}

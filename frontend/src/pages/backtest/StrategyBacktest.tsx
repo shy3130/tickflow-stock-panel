@@ -11,6 +11,7 @@ import {
 } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { tierRank } from '@/lib/capability-labels'
+import { useDatasetProviders } from '@/lib/dataProviders'
 import { storage } from '@/lib/storage'
 import { fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
 import { boardTag } from '@/lib/board'
@@ -674,7 +675,9 @@ export function StrategyBacktest() {
   // 高颗粒回测（分钟K精确回测）— 开发中，Starter+ 功能
   const [highGranularity, setHighGranularity] = useState(false)
   const { data: caps } = useCapabilities()
-  const isFreeTier = tierRank(caps?.label ?? '') < 1
+  // 分钟K可由免费源(stock-sdk)提供 → 不受 TickFlow Starter+ 档位限制。
+  const { usesFreeProvider } = useDatasetProviders()
+  const isFreeTier = tierRank(caps?.label ?? '') < 1 && !usesFreeProvider('minute')
   const [rangeSettingsOpen, setRangeSettingsOpen] = useState(false)
   const [quickRanges, setQuickRanges] = useState(loadQuickRanges)
   const [settingsTab, setSettingsTab] = useState<AdvancedSettingsTab>('params')

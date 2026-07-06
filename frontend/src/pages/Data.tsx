@@ -161,9 +161,14 @@ export function Data() {
     staleTime: 60_000,
   })
   const activeProvider = prefs.data?.daily_data_provider || 'tickflow'
+  // 内置(含 tickflow/stocksdk) + 自定义 合并查找 —— stocksdk 属 builtin, 只查 custom 会漏。
+  const allDataSources = [
+    ...(dataSources.data?.builtin ?? []),
+    ...(dataSources.data?.custom ?? []),
+  ]
   const activeDataSourceName = activeProvider === 'tickflow'
     ? 'TickFlow'
-    : (dataSources.data?.custom?.find(s => s.name === activeProvider)?.display_name || activeProvider)
+    : (allDataSources.find(s => s.name === activeProvider)?.display_name || activeProvider)
 
   // tierKey → 自定义数据集名映射 (用于数据画像 CapBadge 显示数据源名而非 TickFlow 档位)
   const TIERKEY_TO_DATASET: Record<string, string> = {
@@ -173,11 +178,11 @@ export function Data() {
     minute: 'minute',
     financials: 'financial',
   }
-  // 当前 custom 源支持的数据集集合
+  // 当前源(非 tickflow)支持的数据集集合
   const activeCustomDatasets = activeProvider !== 'tickflow'
-    ? new Set(dataSources.data?.custom?.find(s => s.name === activeProvider)?.datasets || [])
+    ? new Set(allDataSources.find(s => s.name === activeProvider)?.datasets || [])
     : new Set<string>()
-  // 给定 tierKey, 返回 custom provider 显示名 (走 custom 时) 或 null (走 TickFlow)
+  // 给定 tierKey, 返回当前源显示名 (走非 tickflow 源时) 或 null (走 TickFlow)
   const getCustomProviderName = (tierKey: string): string | null => {
     if (activeProvider === 'tickflow') return null
     const ds = TIERKEY_TO_DATASET[tierKey]
@@ -227,7 +232,9 @@ export function Data() {
   const toggleQuote = useToggleRealtimeQuotes()
 
   const hasAdjCap = !!caps.data?.capabilities?.['adj_factor']
-  const hasDailyBatchCap = !!caps.data?.capabilities?.['kline.daily.batch']
+  // 批量日K权限: TickFlow 档位 OR 当前日K源为免费源(如 stock-sdk, 后端 index/extend 均走 daily provider)
+  const dailyProviderIsFree = activeProvider !== 'tickflow' && activeCustomDatasets.has('daily')
+  const hasDailyBatchCap = !!caps.data?.capabilities?.['kline.daily.batch'] || dailyProviderIsFree
   const hasMinuteCap = !!caps.data?.capabilities?.['kline.minute.batch']
   const indexAuto = prefs.data?.pipeline_pull_index ?? true
   const etfAuto = prefs.data?.pipeline_pull_etf ?? false
@@ -602,16 +609,20 @@ export function Data() {
 
       <div className="px-8 py-6 space-y-6 max-w-6xl">
         {/* None 档提示 —— 非阻断: 无需 Key 也可获取历史日K, 仅实时行情等扩展能力受限 */}
-        {isNoKey && (
+        {isNoKey && activeProvider === 'tickflow' && (
           <div className="flex items-center gap-2 rounded-card border border-border bg-elevated/40 px-3 py-2 text-xs">
             <Info className="h-4 w-4 shrink-0 text-muted" />
             <span className="text-secondary leading-relaxed">
-              当前为 None 档,将使用免费数据源获取历史日K(无需注册)。
-              配置 API Key 可解锁实时行情监控等扩展能力,前往
-              <Link to="/settings?tab=account" className="mx-0.5 font-medium text-accent hover:underline">
-                配置
+              当前为 None 档,将使用 TickFlow free-api 获取历史日K(无需注册)。
+              想免费解锁除权因子 / 分钟K / 全市场实时,可切换到
+              <Link to="/settings?tab=data-sources" className="mx-0.5 font-medium text-accent hover:underline">
+                stock-sdk 数据源
               </Link>
-              。
+              ;或
+              <Link to="/settings?tab=account" className="mx-0.5 font-medium text-accent hover:underline">
+                配置 TickFlow Key
+              </Link>
+              升级。
             </span>
           </div>
         )}
@@ -1045,11 +1056,15 @@ export function Data() {
                     <>获取数据</>
                   )}
                 </button>
-                {!hasDailyBatchCap && (
+                {!hasDailyBatchCap ? (
                   <span className="text-[10px] text-warning/80 bg-warning/8 rounded px-1.5 py-px font-medium">
                     需 Starter+ / Pro 批量日 K 权限
                   </span>
-                )}
+                ) : dailyProviderIsFree ? (
+                  <span className="text-[10px] text-accent/80 bg-accent/10 rounded px-1.5 py-px font-medium">
+                    由 {activeDataSourceName} 提供
+                  </span>
+                ) : null}
               </div>
             </div>
           </SettingsModal>

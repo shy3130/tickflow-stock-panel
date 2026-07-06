@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Check, Database, Plus, RefreshCw, Zap, FileWarning } from 'lucide-react'
@@ -63,8 +63,10 @@ export function SettingsDataSourcesPanel() {
         financial_data_provider: ds.has('financial') ? name : 'tickflow',
       })
     },
-    onSuccess: () => {
+    onSuccess: (_data, name) => {
       qc.invalidateQueries({ queryKey: QK.preferences })
+      // 切换后让右侧详情/选中态跟随新的当前源, 避免旧源残留高亮造成误导
+      setSelected(name)
       toast('数据源已切换', 'success')
     },
   })
@@ -78,6 +80,16 @@ export function SettingsDataSourcesPanel() {
   const customList: DataSourceItem[] = sources.data?.custom ?? []
   const errors = sources.data?.errors ?? []
   const activeName = prefs.data?.daily_data_provider || 'tickflow'
+
+  // 首次进入时让右侧详情默认对准「当前启用源」, 而非硬编码 tickflow。
+  // 用户手动点选后不再自动跟随(syncedRef 只放行一次)。
+  const syncedRef = useRef(false)
+  useEffect(() => {
+    if (syncedRef.current) return
+    if (!prefs.data) return
+    syncedRef.current = true
+    if (activeName !== 'tickflow' && selected === 'tickflow') setSelected(activeName)
+  }, [prefs.data, activeName, selected])
   const builtinNames = new Set(builtin.map(b => b.name))
   const isBuiltin = (name: string) => builtinNames.has(name)
 
@@ -135,9 +147,11 @@ export function SettingsDataSourcesPanel() {
                   }
                 }}
                 className={`relative cursor-pointer text-left rounded-lg border px-3.5 py-3 transition-all ${
-                  isSelected
-                    ? 'border-accent/50 bg-accent/5 ring-1 ring-accent/20'
-                    : 'border-border/60 bg-elevated/20 hover:bg-elevated/40'
+                  isActive
+                    ? 'border-accent/60 bg-accent/[0.07] ring-1 ring-accent/30'
+                    : isSelected
+                      ? 'border-accent/30 bg-elevated/40'
+                      : 'border-border/60 bg-elevated/20 hover:bg-elevated/40'
                 }`}
               >
                 <div className="flex items-center gap-2 mb-1">

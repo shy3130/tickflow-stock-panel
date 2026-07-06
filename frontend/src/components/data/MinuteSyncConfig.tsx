@@ -4,6 +4,7 @@ import { Loader2 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { isExpertOrAbove } from '@/lib/capability-labels'
+import { useDatasetProviders } from '@/lib/dataProviders'
 
 export function MinuteSyncConfig({ caps, isRunning, onStart }: { caps: { label: string; capabilities: Record<string, { rpm: number | null; batch: number | null; subscribe: number | null }> } | undefined; isRunning: boolean; onStart: () => void }) {
   const qc = useQueryClient()
@@ -17,7 +18,11 @@ export function MinuteSyncConfig({ caps, isRunning, onStart }: { caps: { label: 
     onSuccess: () => qc.invalidateQueries({ queryKey: QK.preferences }),
   })
 
-  const hasMinuteCap = !!caps?.capabilities?.['kline.minute.batch']
+  const { usesFreeProvider, resolve, displayName } = useDatasetProviders()
+  // 分钟K由免费源(如 stock-sdk)提供时, 无需 TickFlow Pro+ 档位即可配置/拉取。
+  const minuteFree = usesFreeProvider('minute')
+  const hasMinuteCap = !!caps?.capabilities?.['kline.minute.batch'] || minuteFree
+  const minuteSourceName = displayName(resolve('minute'))
   const enabled = prefs.data?.minute_sync_enabled ?? false
   const days = prefs.data?.minute_sync_days ?? 5
   const [localDays, setLocalDays] = useState(days)
@@ -50,11 +55,15 @@ export function MinuteSyncConfig({ caps, isRunning, onStart }: { caps: { label: 
             {enabled ? '自动同步' : '已关闭'}
           </span>
         </div>
-        {!hasMinuteCap && (
+        {!hasMinuteCap ? (
           <span className="text-[10px] text-warning/80 bg-warning/8 rounded px-1.5 py-px font-medium">
             需 Pro+
           </span>
-        )}
+        ) : minuteFree ? (
+          <span className="text-[10px] text-accent/80 bg-accent/10 rounded px-1.5 py-px font-medium" title={`分钟K由 ${minuteSourceName} 提供`}>
+            {minuteSourceName}
+          </span>
+        ) : null}
       </div>
 
       <div className="flex items-center justify-between">
@@ -89,7 +98,7 @@ export function MinuteSyncConfig({ caps, isRunning, onStart }: { caps: { label: 
 
       <div className="pt-2 border-t border-border space-y-2.5">
         <div className="text-[10px] text-secondary">向前扩展历史数据</div>
-        <MinuteExtendControls hasMinuteCap={hasMinuteCap} tierLabel={caps?.label ?? ''} isRunning={isRunning} onStart={onStart} />
+        <MinuteExtendControls hasMinuteCap={hasMinuteCap} minuteFree={minuteFree} tierLabel={caps?.label ?? ''} isRunning={isRunning} onStart={onStart} />
       </div>
 
       <div className="text-[10px] text-muted">
@@ -99,10 +108,11 @@ export function MinuteSyncConfig({ caps, isRunning, onStart }: { caps: { label: 
   )
 }
 
-function MinuteExtendControls({ hasMinuteCap, tierLabel, isRunning, onStart }: { hasMinuteCap: boolean; tierLabel: string; isRunning: boolean; onStart: () => void }) {
+function MinuteExtendControls({ hasMinuteCap, minuteFree, tierLabel, isRunning, onStart }: { hasMinuteCap: boolean; minuteFree: boolean; tierLabel: string; isRunning: boolean; onStart: () => void }) {
   const qc = useQueryClient()
-  // 月单位(按月扩展更长的分钟K历史)仅 Expert+ 开放;Pro 仅可用"天"(1~15 天)
-  const canUseMonth = isExpertOrAbove(tierLabel)
+  // 月单位(按月扩展更长的分钟K历史)仅 Expert+ 开放;Pro 仅可用"天"(1~15 天)。
+  // 免费源(stock-sdk)不受 TickFlow 档位限制, 同样放开月单位。
+  const canUseMonth = isExpertOrAbove(tierLabel) || minuteFree
   const [unit, setUnit] = useState<'day' | 'month'>('day')
   const [value, setValue] = useState(5)
   const [confirmOpen, setConfirmOpen] = useState(false)

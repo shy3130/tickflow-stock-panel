@@ -77,7 +77,8 @@ export function Financials() {
                 关于数据源
               </div>
               <p className="mt-1.5 text-[11px] leading-relaxed text-secondary">
-                当前财务数据源需付费,后续会接入免费数据源。如你常用某个免费财务数据源,欢迎在 Issues 中多多推荐哈 ~
+                财务数据仅 TickFlow 提供(免费的 stock-sdk 不含财务报表),故此数据集始终回退 TickFlow,需 Expert 档。
+                后续会接入免费财务源 —— 如你常用某个,欢迎在 Issues 中多多推荐哈 ~
               </p>
               <a
                 href="https://github.com/shy3130/tickflow-stock-panel/issues"

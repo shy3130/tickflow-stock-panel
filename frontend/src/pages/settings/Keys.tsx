@@ -399,7 +399,7 @@ function TierHelpPopover({ currentLabel }: { currentLabel: string }) {
               <div className="text-secondary space-y-1.5">
                 <div className="font-medium text-foreground">档位检测说明</div>
                 <p>保存 Key 后系统会在付费端点逐一试探数据能力:连单只日K都拿不到则判为「None」(不存 Key);有日K但无复权因子则判为「Free」;有复权因子再按代表能力判定 Starter/Pro/Expert。</p>
-                <p className="text-muted">None 档与 Free 档运行时都走免费数据通道(仅历史日K),区别仅在于是否保存了 Key。付费档走付费端点,享有实时行情等完整能力。</p>
+                <p className="text-muted">None 档与 Free 档运行时都走 TickFlow 免费数据通道(仅历史日K),区别仅在于是否保存了 Key。付费档走付费端点,享有实时行情等完整能力。不想用 Key 的话,也可在「设置 → 数据源」切换到免费的 stock-sdk(除权因子 / 分钟K / 全市场实时均免费)。</p>
               </div>
             </motion.div>
           </>

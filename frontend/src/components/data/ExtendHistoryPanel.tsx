@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { useDatasetProviders } from '@/lib/dataProviders'
 
 export function ExtendHistoryPanel({ caps, isRunning, earliestDate, onStart }: {
   caps: { label: string; capabilities: Record<string, { rpm: number | null; batch: number | null; subscribe: number | null }> } | undefined
@@ -13,7 +14,11 @@ export function ExtendHistoryPanel({ caps, isRunning, earliestDate, onStart }: {
   const qc = useQueryClient()
   const [value, setValue] = useState(6)
   const [unit, setUnit] = useState<'month' | 'year'>('month')
-  const hasBatchCap = !!caps?.capabilities?.['kline.daily.batch']
+  const { usesFreeProvider, resolve, displayName } = useDatasetProviders()
+  // 日K由免费源(如 stock-sdk, 原生支持按区间取日K)提供时, 无需 TickFlow Pro+ 批量权限。
+  const dailyFree = usesFreeProvider('daily')
+  const hasBatchCap = !!caps?.capabilities?.['kline.daily.batch'] || dailyFree
+  const dailySourceName = displayName(resolve('daily'))
 
   const extend = useMutation({
     mutationFn: () => api.extendHistory(value, unit),
@@ -88,11 +93,15 @@ export function ExtendHistoryPanel({ caps, isRunning, earliestDate, onStart }: {
         )}
       </button>
 
-      {!hasBatchCap && (
+      {!hasBatchCap ? (
         <span className="text-[10px] text-warning/80 bg-warning/8 rounded px-1.5 py-px font-medium">
           需 Pro+ 权限
         </span>
-      )}
+      ) : dailyFree ? (
+        <span className="text-[10px] text-accent/80 bg-accent/10 rounded px-1.5 py-px font-medium" title={`日K由 ${dailySourceName} 提供`}>
+          {dailySourceName}
+        </span>
+      ) : null}
     </div>
   )
 }

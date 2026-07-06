@@ -344,23 +344,34 @@ export function Layout() {
   const isTrading = quoteStatus?.is_trading_hours ?? false
   const tier = tierRank(caps?.label ?? '')
   const isNoneTier = tier < 0
-  const isWatchlistMode = tier === 0
-  const realtimeModeLabel = isWatchlistMode ? '自选股' : '全市场'
-  // 当前实时行情数据源名称 (custom 时显示源名, tickflow 时不显示)
+  // 合并内置(tickflow/stocksdk)+ 自定义 查找 —— stocksdk 属 builtin, 只查 custom 会漏。
+  const allDataSources = [
+    ...(dataSources?.builtin ?? []),
+    ...(dataSources?.custom ?? []),
+  ]
+  const builtinNameSet = new Set((dataSources?.builtin ?? []).map(s => s.name))
+
+  // 当前实时行情数据源名称 (非 tickflow 时显示源名, tickflow 时不显示)
   const realtimeProvider = prefs?.realtime_data_provider
   const realtimeProviderName = realtimeProvider && realtimeProvider !== 'tickflow'
-    ? (dataSources?.custom?.find(s => s.name === realtimeProvider)?.display_name || realtimeProvider)
+    ? (allDataSources.find(s => s.name === realtimeProvider)?.display_name || realtimeProvider)
     : null
+  // Free 档实时仅自选; 但切到免费全市场源(如 stock-sdk)后即全市场, 与后端 realtime_mode() 一致。
+  const isWatchlistMode = tier === 0 && !realtimeProviderName
+  const realtimeModeLabel = isWatchlistMode ? '自选股' : '全市场'
 
   // 当前主数据源 (用于菜单底部状态条)
   const activeProvider = prefs?.daily_data_provider || 'tickflow'
   const activeProviderName = activeProvider === 'tickflow'
     ? 'TickFlow'
-    : (dataSources?.custom?.find(s => s.name === activeProvider)?.display_name || activeProvider)
+    : (allDataSources.find(s => s.name === activeProvider)?.display_name || activeProvider)
   const activeProviderDatasets = activeProvider === 'tickflow'
     ? ['daily', 'adj_factor', 'realtime', 'minute']
-    : (dataSources?.custom?.find(s => s.name === activeProvider)?.datasets || [])
-  const isCustomActive = activeProvider !== 'tickflow'
+    : (allDataSources.find(s => s.name === activeProvider)?.datasets || [])
+  // 非默认源(用于高亮 + 数据集点); 内置源(stocksdk)不标"自定义"。
+  const isNonDefaultActive = activeProvider !== 'tickflow'
+  const isCustomActive = isNonDefaultActive && !builtinNameSet.has(activeProvider)
+  const activeSourceBadge = isCustomActive ? '自定义' : isNonDefaultActive ? '内置' : null
 
   // 轮询触发记录总数 → 更新监控中心徽标 (每 15 秒)
   const alertsTotalQuery = useQuery({
@@ -504,18 +515,18 @@ export function Layout() {
           title="数据源设置"
         >
           <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${
-            isCustomActive ? 'bg-accent/15' : 'bg-elevated'
+            isNonDefaultActive ? 'bg-accent/15' : 'bg-elevated'
           }`}>
-            <Database className={`h-3 w-3 ${isCustomActive ? 'text-accent' : 'text-muted'}`} />
+            <Database className={`h-3 w-3 ${isNonDefaultActive ? 'text-accent' : 'text-muted'}`} />
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
               <span className="text-[11px] font-medium text-secondary truncate group-hover:text-foreground transition-colors">
                 {activeProviderName}
               </span>
-              {isCustomActive && (
+              {activeSourceBadge && (
                 <span className="shrink-0 rounded bg-accent/15 px-1 py-px text-[8px] font-semibold uppercase tracking-wider text-accent">
-                  自定义
+                  {activeSourceBadge}
                 </span>
               )}
             </div>
@@ -523,7 +534,7 @@ export function Layout() {
               {(['daily', 'adj_factor', 'realtime', 'minute'] as const).map(ds => {
                 const supported = ds === 'daily' || ds === 'adj_factor' || ds === 'realtime' || ds === 'minute'
                 const active = supported && (
-                  isCustomActive ? activeProviderDatasets.includes(ds) : true
+                  isNonDefaultActive ? activeProviderDatasets.includes(ds) : true
                 )
                 return (
                   <span

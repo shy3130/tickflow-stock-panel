@@ -22,6 +22,7 @@ import { QK } from '@/lib/queryKeys'
 import { tierRank } from '@/lib/capability-labels'
 import { toast } from '@/components/Toast'
 import { DepthConfigContent } from '@/components/data/DepthConfigCard'
+import { DataSourceQuickPicker } from '@/components/DataSourceQuickPicker'
 
 // 页面 → 显示名
 const PAGE_LABELS: Record<string, string> = {
@@ -50,6 +51,12 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const tier = tierRank(caps?.label ?? '')
   const isNoneTier = tier < 0
   const isFreeTier = tier === 0
+  // 实时行情由非 TickFlow 的免费源(如 stock-sdk)提供时, 走全市场实时, 不受 TickFlow 档位限制。
+  // 与后端 quote_service.realtime_mode() 一致: provider != tickflow → full_market。
+  const realtimeProvider = prefs?.realtime_data_provider ?? 'tickflow'
+  const freeRealtime = realtimeProvider !== 'tickflow'
+  const effectiveNoneTier = isNoneTier && !freeRealtime
+  const effectiveFreeTier = isFreeTier && !freeRealtime
   const realtimeEnabled = prefs?.realtime_quotes_enabled ?? false
   const refreshPages = prefs?.sse_refresh_pages ?? {}
   const limitLadderMonitor = prefs?.limit_ladder_monitor_enabled ?? false
@@ -79,7 +86,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const watchlist = useQuery({
     queryKey: QK.watchlist,
     queryFn: () => api.watchlistList(),
-    enabled: isFreeTier && watchlistSymbols.length > 0,
+    enabled: effectiveFreeTier && watchlistSymbols.length > 0,
   })
   const watchlistNameBySymbol = new Map(
     (watchlist.data?.symbols ?? []).map(row => [row.symbol, row.name] as const),
@@ -181,24 +188,35 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     }
   }, [highlight])
 
-  if (isNoneTier) {
+  if (effectiveNoneTier) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 text-center">
+      <div className="flex flex-col items-center justify-center py-16 text-center">
         <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl
                         bg-gradient-to-br from-purple-500/20 to-blue-500/20 mb-5">
           <Activity className="h-7 w-7 text-purple-400" />
         </div>
         <h2 className="text-lg font-medium text-foreground mb-2">实时监控</h2>
         <p className="text-sm text-secondary max-w-md mb-6">
-          实时行情需要 Free 及以上档位。None 档可使用 free-api 获取历史日K（当日数据需盘后1-2小时），但不能调用付费服务器实时接口。
+          当前 TickFlow 为 None 档,无法调用其付费实时接口。你有两种方式开启实时监控:
+          配置 TickFlow Key 升级,或直接切换到免费的 stock-sdk 数据源(全市场实时,无需 Key)。
         </p>
+
+        {/* 免费路径: 切到 stock-sdk 即可解锁全市场实时 */}
+        <div className="w-full max-w-md text-left rounded-card border border-accent/25 bg-accent/[0.05] p-4 mb-4">
+          <div className="text-xs font-medium text-accent mb-2">免费开启(推荐)</div>
+          <DataSourceQuickPicker compact />
+          <p className="mt-2 text-[11px] text-muted/80 leading-relaxed">
+            选「stock-sdk(免费行情)」→ 实时行情由其全市场快照提供,切换后本页即可开启监控。
+          </p>
+        </div>
+
         <a
           href="/settings?tab=account"
           className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn
-                     bg-accent text-white text-sm font-medium
-                     hover:bg-accent/90 transition-colors"
+                     bg-elevated text-foreground text-sm font-medium
+                     hover:bg-elevated/70 transition-colors"
         >
-          配置 API Key 升级
+          或配置 TickFlow API Key 升级
         </a>
       </div>
     )
@@ -208,6 +226,14 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-6 max-w-5xl">
       {/* ========== 左列 ========== */}
       <div className="space-y-6">
+        {/* 免费实时提示 —— 实时行情由非 TickFlow 免费源提供时告知来源 */}
+        {freeRealtime && (
+          <div className="rounded-btn border border-accent/25 bg-accent/[0.06] px-3 py-2 text-[11px] leading-relaxed text-accent">
+            实时行情由免费数据源「{realtimeProvider === 'stocksdk' ? 'stock-sdk' : realtimeProvider}」提供全市场快照,
+            无需 TickFlow 档位。数据源可在「设置 → 数据源」调整。
+          </div>
+        )}
+
         {/* 行情状态 — 开关 + 间隔 */}
         <Card icon={Activity} title="行情轮询">
           <ToggleRow
@@ -222,7 +248,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
               <div className="min-w-0">
                 <div className="text-sm text-foreground">轮询间隔</div>
                 <div className="text-[11px] text-muted">
-                  {isFreeTier ? '每轮拉取自选股实时行情的时间间隔' : '每轮拉取全市场行情的时间间隔'}
+                  {effectiveFreeTier ? '每轮拉取自选股实时行情的时间间隔' : '每轮拉取全市场行情的时间间隔'}
                 </div>
               </div>
               <span className="text-[11px] font-mono text-foreground shrink-0 tabular-nums">
@@ -246,7 +272,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
           </div>
         </Card>
 
-        {isFreeTier && (
+        {effectiveFreeTier && (
         <Card icon={Activity} title="自选股实时">
           <div className="mb-3 rounded-btn border border-accent/25 bg-accent/10 px-3 py-2 text-xs font-medium leading-snug text-accent">
             Free 档开启实时行情时自动监控「自选」页面前 5 个标的，最低 6 秒刷新。
@@ -282,7 +308,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
           </div>
         </Card>
         )}
-        {!isFreeTier && (
+        {!effectiveFreeTier && (
         <Card icon={Wifi} title="页面实时刷新">
           <p className="text-xs text-secondary mb-4">
             选择哪些页面跟随 SSE 实时刷新数据。关闭的页面不会被推送，
@@ -302,7 +328,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         </Card>
         )}
 
-        {!isFreeTier && (
+        {!effectiveFreeTier && (
         <Card icon={BarChart3} title="左侧菜单指数">
           <p className="text-xs text-secondary mb-4">
             选择实时行情开启时，左侧菜单底部显示哪些指数点位和涨跌幅。
