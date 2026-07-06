@@ -191,8 +191,8 @@ function StockSearchBox({
   const [activeIdx, setActiveIdx] = useState(-1)
 
   const search = useQuery({
-    queryKey: QK.instrumentSearch(query),
-    queryFn: () => api.instrumentSearch(query),
+    queryKey: QK.instrumentSearch(query, 'stock,etf'),
+    queryFn: () => api.instrumentSearch(query, 20, 'stock,etf'),
     enabled: query.trim().length > 0,
     staleTime: 30_000,
   })
@@ -273,6 +273,9 @@ function StockSearchBox({
                   >
                     <span className="font-mono shrink-0 w-[80px]">{r.symbol}</span>
                     <span className="truncate text-secondary flex-1">{r.name}</span>
+                    {r.asset_type === 'etf' && (
+                      <span className="shrink-0 px-1 py-0.5 rounded text-[10px] leading-none bg-accent/10 text-accent">ETF</span>
+                    )}
                   </button>
                   <button
                     type="button"

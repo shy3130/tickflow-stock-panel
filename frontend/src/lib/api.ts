@@ -1070,9 +1070,9 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ symbols, date }),
     }),
-  instrumentSearch: (q: string, limit = 20) =>
-    request<{ results: { symbol: string; name: string; code: string }[] }>(
-      `/api/kline/instruments/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+  instrumentSearch: (q: string, limit = 20, assetTypes?: string) =>
+    request<{ results: { symbol: string; name: string; code: string; asset_type?: string }[] }>(
+      `/api/kline/instruments/search?q=${encodeURIComponent(q)}&limit=${limit}${assetTypes ? `&asset_types=${encodeURIComponent(assetTypes)}` : ''}`,
     ),
 
   /** 批量查股票名称 (传入 symbol 列表, 返回 {symbol: name}) */

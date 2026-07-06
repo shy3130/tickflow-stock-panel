@@ -31,10 +31,16 @@ def _with_names(rows: list[dict], request: Request) -> list[dict]:
     if not rows:
         return rows
     try:
-        df_i = request.app.state.repo.get_instruments()
-        if df_i.is_empty() or "symbol" not in df_i.columns or "name" not in df_i.columns:
+        repo = request.app.state.repo
+        name_by_symbol: dict[str, str] = {}
+        # 股票 + ETF 两份 instruments 缓存, 自选列表可混合持有
+        for df_i in (repo.get_instruments(), repo.get_etf_instruments()):
+            if df_i.is_empty() or "symbol" not in df_i.columns or "name" not in df_i.columns:
+                continue
+            for symbol, name in df_i.select(["symbol", "name"]).iter_rows():
+                name_by_symbol.setdefault(symbol, name)
+        if not name_by_symbol:
             return rows
-        name_by_symbol = dict(df_i.select(["symbol", "name"]).iter_rows())
         return [{**row, "name": name_by_symbol.get(row.get("symbol"))} for row in rows]
     except Exception as e:  # noqa: BLE001
         logger.debug("attach watchlist names failed: %s", e)
@@ -120,19 +126,32 @@ def watchlist_enriched(
         return {"rows": [], "as_of": None, "elapsed_ms": 0}
 
     df_e, cache_date = repo.get_enriched_latest()
-    if df_e.is_empty():
-        return {"rows": [], "as_of": None, "elapsed_ms": 0}
-
     # 按 symbol 过滤
-    df = df_e.filter(pl.col("symbol").is_in(symbols))
-    if df.is_empty():
-        return {"rows": [], "as_of": str(cache_date) if cache_date else None, "elapsed_ms": 0}
+    df = df_e.filter(pl.col("symbol").is_in(symbols)) if not df_e.is_empty() else df_e
 
-    # JOIN instruments 取 name + float_shares
+    # ETF enriched 独立缓存, 自选可混合持有; 缺失列 (换手率/涨跌停信号等) 为 null
+    df_etf_all, etf_date = repo.get_enriched_latest_asset("etf")
+    if not df_etf_all.is_empty():
+        df_etf = df_etf_all.filter(pl.col("symbol").is_in(symbols))
+        if not df_etf.is_empty():
+            df = df_etf if df.is_empty() else pl.concat([df, df_etf], how="diagonal_relaxed")
+
+    as_of = cache_date or etf_date
+    if df.is_empty():
+        return {"rows": [], "as_of": str(as_of) if as_of else None, "elapsed_ms": 0}
+
+    # JOIN instruments 取 name + float_shares (名称合并股票 + ETF, 股本仅股票有)
+    inst = None
     df_i = repo.get_instruments()
     if not df_i.is_empty() and "name" in df_i.columns:
         inst_cols = [c for c in ["symbol", "name", "float_shares"] if c in df_i.columns]
-        df = df.join(df_i.select(inst_cols), on="symbol", how="left")
+        inst = df_i.select(inst_cols)
+    df_etf_i = repo.get_etf_instruments()
+    if not df_etf_i.is_empty() and "name" in df_etf_i.columns:
+        etf_names = df_etf_i.select(["symbol", "name"])
+        inst = etf_names if inst is None else pl.concat([inst, etf_names], how="diagonal_relaxed")
+    if inst is not None:
+        df = df.join(inst.unique(subset=["symbol"], keep="first"), on="symbol", how="left")
 
     # 选择内置需要的列
     keep = [c for c in _WATCHLIST_COLS + ["name", "float_shares"] if c in df.columns]
@@ -204,7 +223,7 @@ def watchlist_enriched(
 
     rows = df.to_dicts()
     elapsed = (time.perf_counter() - t0) * 1000
-    return {"rows": rows, "as_of": str(cache_date) if cache_date else None, "elapsed_ms": elapsed}
+    return {"rows": rows, "as_of": str(as_of) if as_of else None, "elapsed_ms": elapsed}
 
 
 def _parse_ext_columns(ext_columns: str) -> list[tuple[str, str]]:

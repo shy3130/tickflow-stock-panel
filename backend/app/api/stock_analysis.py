@@ -121,7 +121,8 @@ def get_levels(
     repo = request.app.state.repo
     end = date.today()
     start = end - timedelta(days=days * 2)
-    df = repo.get_daily(symbol, start, end)
+    # 按资产类型分流: ETF/指数走独立 enriched 存储, 股票保持原路径
+    df = repo.get_daily_asset(repo.resolve_asset_type(symbol), symbol, start, end)
     if df.is_empty():
         return {"levels": {"sr": [], "pivot": [], "extreme": [],
                            "boll": [], "keltner_s": [], "keltner_m": [], "keltner_l": [],

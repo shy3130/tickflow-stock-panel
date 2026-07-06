@@ -1041,6 +1041,25 @@ class KlineRepository:
             return set()
         return set(df["symbol"].cast(pl.Utf8).to_list())
 
+    def get_etf_symbol_set(self) -> set[str]:
+        """返回已缓存 ETF symbol 集合。"""
+        df = self.get_etf_instruments()
+        if df.is_empty() or "symbol" not in df.columns:
+            return set()
+        return set(df["symbol"].cast(pl.Utf8).to_list())
+
+    def resolve_asset_type(self, symbol: str) -> str:
+        """按 symbol 判定资产类型: etf / index / stock(默认)。
+
+        供 API 层对单标的查询做资产分流 (get_daily_asset 等)。
+        ETF/指数集合均为内存缓存, 查询成本可忽略。
+        """
+        if symbol in self.get_etf_symbol_set():
+            return "etf"
+        if symbol in self.get_index_symbol_set():
+            return "index"
+        return "stock"
+
     def enriched_latest_date(self) -> date | None:
         """返回缓存中的 enriched 最新日期。"""
         return self._enriched_cache_date
@@ -1162,14 +1181,19 @@ class KlineRepository:
             return self.get_etf_daily(symbol, start, end, columns)
         return pl.DataFrame()
 
+    def _minute_glob_for(self, asset_type: str) -> str:
+        """按资产类型选择分钟K parquet glob。ETF 分钟数据独立存储于 kline_etf_minute。"""
+        return self._etf_minute_glob if asset_type == "etf" else self._minute_glob
+
     def get_minute(
         self,
         symbol: str,
         trade_date: date,
+        asset_type: str = "stock",
     ) -> pl.DataFrame:
         """分钟K查询 — Polars scan_parquet + predicate pushdown。"""
         try:
-            return pl.scan_parquet(self._minute_glob).filter(
+            return pl.scan_parquet(self._minute_glob_for(asset_type)).filter(
                 (pl.col("symbol") == symbol)
                 & (pl.col("datetime").dt.date() == trade_date)
             ).sort("datetime").collect()
@@ -1181,6 +1205,7 @@ class KlineRepository:
         self,
         symbols: list[str],
         trade_date: date,
+        asset_type: str = "stock",
     ) -> pl.DataFrame:
         """批量分钟K查询 — 多 symbol 一次 scan_parquet。
 
@@ -1190,7 +1215,7 @@ class KlineRepository:
         if not symbols:
             return pl.DataFrame()
         try:
-            return pl.scan_parquet(self._minute_glob).filter(
+            return pl.scan_parquet(self._minute_glob_for(asset_type)).filter(
                 pl.col("symbol").is_in(symbols)
                 & (pl.col("datetime").dt.date() == trade_date)
             ).sort(["symbol", "datetime"]).collect()
@@ -1353,11 +1378,12 @@ class KlineRepository:
     # DuckDB 查询 (冷路径: 统计/元数据/自定义SQL)
     # ================================================================
 
-    def latest_minute_date(self, symbol: str) -> date | None:
+    def latest_minute_date(self, symbol: str, asset_type: str = "stock") -> date | None:
+        table = "kline_etf_minute" if asset_type == "etf" else "kline_minute"
         try:
             with self._lock:
                 row = self.db.execute(
-                    "SELECT max(CAST(datetime AS DATE)) FROM kline_minute WHERE symbol = ?",
+                    f"SELECT max(CAST(datetime AS DATE)) FROM {table} WHERE symbol = ?",
                     [symbol],
                 ).fetchone()
             if row and row[0]:
