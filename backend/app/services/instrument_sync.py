@@ -43,22 +43,52 @@ def _flatten_instruments(items: list[dict]) -> list[dict]:
     return rows
 
 
+def _fetch_instruments_via_provider() -> list[dict] | None:
+    """若当前日K数据源不是 tickflow 且该 provider 提供 get_instruments, 用它拉标的维表。
+
+    返回 flatten 行列表; 未命中(仍应走 tickflow)时返回 None。
+    标的维表跟随日K数据源(二者天然耦合, 无独立偏好项)。
+    """
+    from app.services import preferences
+
+    provider_name = preferences.get_daily_data_provider()
+    if provider_name == "tickflow":
+        return None
+    from app.data_providers import custom as custom_sources
+
+    if not custom_sources.is_custom_provider(provider_name):
+        return None
+    provider = custom_sources.get_provider(provider_name)
+    if not hasattr(provider, "get_instruments"):
+        return None
+    try:
+        items = provider.get_instruments("stock") or []
+    except Exception as e:  # noqa: BLE001
+        logger.warning("provider %s get_instruments 失败: %s", provider_name, e)
+        return None
+    rows = _flatten_instruments(items)
+    logger.info("instruments via %s: %d stocks", provider_name, len(rows))
+    return rows
+
+
 def sync_instruments(data_dir: Path) -> int:
     """全量同步标的维表 → data/instruments/instruments.parquet。
 
     返回写入的行数。
     """
-    tf = get_client()
-    all_rows: list[dict] = []
-
-    for ex in _EXCHANGES:
-        try:
-            items = tf.exchanges.get_instruments(ex, instrument_type="stock")
-            if items:
-                all_rows.extend(_flatten_instruments(items))
-                logger.info("instruments %s: %d stocks", ex, len(items))
-        except Exception as e:
-            logger.warning("get_instruments(%s) failed: %s", ex, e)
+    all_rows = _fetch_instruments_via_provider()
+    if all_rows is None:
+        # 未命中非 tickflow provider → 走 tickflow 直连
+        tf = get_client()
+        all_rows = []
+        for ex in _EXCHANGES:
+            try:
+                items = tf.exchanges.get_instruments(ex, instrument_type="stock")
+                if items:
+                    all_rows.extend(_flatten_instruments(items))
+                    logger.info("instruments %s: %d stocks", ex, len(items))
+            except Exception as e:
+                logger.warning("get_instruments(%s) failed: %s", ex, e)
 
     if not all_rows:
         return 0

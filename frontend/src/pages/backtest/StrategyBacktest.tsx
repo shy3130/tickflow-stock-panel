@@ -149,6 +149,10 @@ const strategyDefaultParams = (detail: StrategyDetail) => {
   })
   return values
 }
+const mergeStrategyParams = (detail: StrategyDetail, values?: Record<string, any> | null) => ({
+  ...strategyDefaultParams(detail),
+  ...(values ?? {}),
+})
 const buildDefaultOverrides = (detail: StrategyDetail) => ({
   basic_filter: { ...detail.basic_filter },
   entry_signals: detail.entry_signals.map(toSignalId),
@@ -745,7 +749,7 @@ export function StrategyBacktest() {
     if (!detail || loadedStrategyRef.current === detail.id) return
     loadedStrategyRef.current = detail.id
     if (saved?.selectedStrategy === detail.id && (saved.params || saved.overrides)) {
-      setStrategyParams(saved.params ?? strategyDefaultParams(detail))
+      setStrategyParams(mergeStrategyParams(detail, saved.params))
       setOverrides(saved.overrides ?? buildDefaultOverrides(detail))
       return
     }

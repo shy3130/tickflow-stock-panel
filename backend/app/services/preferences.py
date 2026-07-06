@@ -90,6 +90,11 @@ def get_minute_sync_enabled() -> bool:
     return load().get("minute_sync_enabled", False)
 
 
+def get_minute_intraday_refresh() -> bool:
+    """自选列表分时图是否跟随实时行情刷新 (默认关闭, 开启后盘中按 SSE 频率刷新)。"""
+    return load().get("minute_intraday_refresh", False)
+
+
 def get_minute_sync_days() -> int:
     return max(1, min(30, load().get("minute_sync_days", 5)))
 
@@ -510,6 +515,8 @@ def set_realtime_monitor_config(cfg: dict) -> dict:
         updates["sidebar_index_symbols"] = [s for s in cfg["sidebar_index_symbols"] if s in allowed]
     if "screener_auto_run" in cfg:
         updates["screener_auto_run"] = bool(cfg["screener_auto_run"])
+    if "minute_intraday_refresh" in cfg:
+        updates["minute_intraday_refresh"] = bool(cfg["minute_intraday_refresh"])
     if updates:
         save(updates)
     return get_realtime_monitor_config()
@@ -523,6 +530,7 @@ def get_realtime_monitor_config() -> dict:
         "strategy_monitor_ids": get_strategy_monitor_ids(),
         "sidebar_index_symbols": get_sidebar_index_symbols(),
         "screener_auto_run": get_screener_auto_run(),
+        "minute_intraday_refresh": get_minute_intraday_refresh(),
     }
 
 

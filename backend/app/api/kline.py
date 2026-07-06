@@ -33,15 +33,37 @@ def search_instruments(
     request: Request,
     q: str = Query("", min_length=0, max_length=50, description="搜索关键词"),
     limit: int = Query(20, ge=1, le=50),
+    asset_types: str = Query("stock", description="逗号分隔的资产类型: stock,etf"),
 ):
-    """模糊搜索标的 (代码 / 名称)。从内存 instruments 缓存中查。"""
-    repo = request.app.state.repo
-    df = repo.get_instruments()
-    if df.is_empty() or not q.strip():
+    """模糊搜索标的 (代码 / 名称)。从内存 instruments 缓存中查。
+
+    默认只搜股票, 保持既有调用方行为不变; 自选等场景传 asset_types=stock,etf
+    可一并搜出 ETF, 结果附带 asset_type 字段供前端区分。
+    """
+    if not q.strip():
         return {"results": []}
 
-    keyword = q.strip().upper()
+    repo = request.app.state.repo
     import polars as pl
+
+    types = [t.strip() for t in asset_types.split(",") if t.strip()]
+    parts: list[pl.DataFrame] = []
+    for t in types:
+        df_t = repo.get_instruments_asset(t)
+        if df_t.is_empty() or "symbol" not in df_t.columns:
+            continue
+        # dtype 全部归一到 Utf8: 股票/ETF 两份缓存来源不同 (ETF 含 legacy 合并), 防 concat SchemaError
+        parts.append(df_t.with_columns([
+            pl.col("symbol").cast(pl.Utf8).alias("symbol"),
+            (pl.col("name").cast(pl.Utf8) if "name" in df_t.columns else pl.lit("")).alias("name"),
+            (pl.col("code").cast(pl.Utf8) if "code" in df_t.columns else pl.lit("")).alias("code"),
+            pl.lit(t).alias("asset_type"),
+        ]).select(["symbol", "name", "code", "asset_type"]))
+    if not parts:
+        return {"results": []}
+    df = pl.concat(parts, how="vertical")
+
+    keyword = q.strip().upper()
 
     # code/symbol 前缀优先，再 name 包含匹配
     prefix_mask = (
@@ -64,23 +86,17 @@ def search_instruments(
         prefix_symbols = set(prefix_hits["symbol"].to_list()) if not prefix_hits.is_empty() else set()
         contain_hits = df.filter(contains_mask & ~pl.col("symbol").is_in(prefix_symbols)).head(remaining)
         matched = pl.concat([prefix_hits, contain_hits]) if not prefix_hits.is_empty() else contain_hits
-    rows = matched.select(["symbol", "name", "code"]).to_dicts()
+    rows = matched.select(["symbol", "name", "code", "asset_type"]).to_dicts()
     return {"results": rows}
 
 
 @router.post("/instruments/names")
 def instruments_names(request: Request, symbols: list[str]):
-    """批量查股票名称。传入 symbol 列表, 返回 {symbol: name}。"""
+    """批量查标的名称 (股票 + ETF)。传入 symbol 列表, 返回 {symbol: name}。"""
     if not symbols:
         return {"names": {}}
     repo = request.app.state.repo
-    df = repo.get_instruments()
-    if df.is_empty():
-        return {"names": {}}
-    import polars as pl
-    matched = df.filter(pl.col("symbol").is_in(symbols)).select(["symbol", "name"])
-    names = {row["symbol"]: row["name"] for row in matched.iter_rows(named=True)}
-    return {"names": names}
+    return {"names": repo.get_name_map(symbols)}
 
 
 def _get_stock_info(repo, symbol: str) -> dict:
@@ -99,6 +115,21 @@ def _get_stock_info(repo, symbol: str) -> dict:
         "total_shares": row[1],
         "float_shares": row[2],
     }
+
+
+def _get_asset_info(repo, symbol: str, asset_type: str) -> dict:
+    """非股票标的 (ETF / 指数) 的名称信息 — 从对应 instruments 缓存查, 无股本概念。"""
+    import polars as pl
+    try:
+        df = repo.get_instruments_asset(asset_type)
+        if df.is_empty() or "symbol" not in df.columns or "name" not in df.columns:
+            return {}
+        hit = df.filter(pl.col("symbol") == symbol).head(1)
+        if hit.is_empty():
+            return {}
+        return {"name": hit["name"][0]}
+    except Exception:
+        return {}
 
 
 @router.get("/daily")
@@ -126,11 +157,12 @@ def get_daily(
     else:
         start = end - timedelta(days=days)
 
-    stock_info = _get_stock_info(repo, symbol)
+    asset_type = repo.resolve_asset_type(symbol)
+    stock_info = _get_stock_info(repo, symbol) if asset_type == "stock" else _get_asset_info(repo, symbol, asset_type)
     stock_name = stock_info.get("name")
 
-    # 从 enriched 表读取 (已含前复权 OHLCV + 技术指标 + 信号)
-    df = repo.get_daily(symbol, start, end)
+    # 从 enriched 表读取 (已含前复权 OHLCV + 技术指标 + 信号); ETF/指数走独立存储
+    df = repo.get_daily_asset(asset_type, symbol, start, end)
 
     if df.is_empty():
         try:
@@ -151,14 +183,14 @@ def get_daily(
         enriched = compute_enriched(raw, factors=factors)
         rows = enriched.tail(days).to_dicts()
         # 即使 live 模式也尝试追加实时蜡烛
-        rows = _maybe_inject_live_candle(request, symbol, rows)
+        rows = _maybe_inject_live_candle(request, symbol, rows, asset_type)
         resp = {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": rows, "source": "live"}
         return _attach_ext(resp, repo, symbol, ext_columns)
 
     rows = df.to_dicts()
 
     # 追加/覆盖今日实时蜡烛
-    rows = _maybe_inject_live_candle(request, symbol, rows)
+    rows = _maybe_inject_live_candle(request, symbol, rows, asset_type)
 
     resp = {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": rows, "source": "enriched"}
     return _attach_ext(resp, repo, symbol, ext_columns)
@@ -229,13 +261,21 @@ def _attach_ext(resp: dict, repo, symbol: str, ext_columns: Optional[str]) -> di
     return resp
 
 
-def _maybe_inject_live_candle(request: Request, symbol: str, rows: list[dict]) -> list[dict]:
-    """如果 QuoteService 有实时 enriched 数据, 用实时数据生成今日蜡烛并追加/覆盖。"""
-    qs = getattr(request.app.state, "quote_service", None)
-    if not qs:
-        return rows
+def _maybe_inject_live_candle(request: Request, symbol: str, rows: list[dict], asset_type: str = "stock") -> list[dict]:
+    """如果有当日实时 enriched 数据, 用实时数据生成今日蜡烛并追加/覆盖。
 
-    df_today, enriched_date = qs.get_enriched_today()
+    stock 走 QuoteService 的股票实时缓存; etf 走 ETF enriched 缓存 (开启实时 ETF
+    拉取时为盘中数据, 否则为磁盘最新日, 由下方"非今日不注入"守卫自然跳过)。
+    """
+    if asset_type == "stock":
+        qs = getattr(request.app.state, "quote_service", None)
+        if not qs:
+            return rows
+        df_today, enriched_date = qs.get_enriched_today()
+    elif asset_type == "etf":
+        df_today, enriched_date = request.app.state.repo.get_enriched_latest_asset("etf")
+    else:
+        return rows
     if df_today.is_empty():
         return rows
 
@@ -341,6 +381,104 @@ def get_daily_batch(request: Request, body: dict):
     return {"data": result}
 
 
+@router.post("/minute-batch")
+def get_minute_batch(request: Request, body: dict):
+    """批量获取多只股票某天的分钟K (分时图用)。
+
+    - 本地优先: 先从 kline_minute parquet 读, 完整的直接用
+    - 缺失补拉: 本地不完整的 symbol 用 sync_minute_batch 批量实时拉 (不落库)
+    - 需 Pro+ 权限 (kline.minute.batch)
+    """
+    from datetime import datetime
+    import polars as pl
+    from app.tickflow.capabilities import Cap
+
+    symbols: list[str] = body.get("symbols", [])
+    trade_date_str: str | None = body.get("date")
+    if not symbols:
+        return {"data": {}}
+
+    repo = request.app.state.repo
+    capset = request.app.state.capabilities
+
+    # 权限守卫: 分钟K批量是 Pro+ 能力
+    if not capset.has(Cap.KLINE_MINUTE_BATCH):
+        raise HTTPException(status_code=403, detail="需要 Pro+ 权限 (kline.minute.batch)")
+
+    trade_date = date.fromisoformat(trade_date_str) if trade_date_str else date.today()
+
+    # 非交易日(周末/节假日)回退到最近有数据的交易日, 否则前端显示空白。
+    # 优先用本地分钟K最近日期; 本地从未同步过分钟K时, 回退到日K最近交易日
+    # (enriched 最新日一定有, 作为兜底), 确保 TickFlow 能拉到有效数据。
+    if trade_date == date.today():
+        recent_date = repo.latest_minute_date_global()
+        if recent_date is None:
+            recent_date = repo.latest_daily_date()
+        if recent_date is not None:
+            trade_date = recent_date
+
+    # Step 1: 本地优先 — 一次 scan 读全部 symbol 当日分钟K (股票 / ETF 分钟数据分开存储)
+    etf_set = repo.get_etf_symbol_set()
+    stock_syms = [s for s in symbols if s not in etf_set]
+    etf_syms = [s for s in symbols if s in etf_set]
+    df_local = repo.get_minute_batch(stock_syms, trade_date)
+    if etf_syms:
+        df_etf = repo.get_minute_batch(etf_syms, trade_date, asset_type="etf")
+        if df_local.is_empty():
+            df_local = df_etf
+        elif not df_etf.is_empty():
+            df_local = pl.concat([df_local, df_etf], how="diagonal_relaxed")
+
+    # 期望条数 (盘中按当前时刻估算, 盘后 240)
+    now = datetime.now()
+    h, m = now.hour, now.minute
+    if trade_date != date.today():
+        expected = 240
+    elif h < 9 or (h == 9 and m < 30):
+        expected = 0
+    elif h < 12 or (h == 12 and m == 0):
+        expected = (h - 9) * 60 + m - 30
+    elif h < 13:
+        expected = 120
+    elif h < 15:
+        expected = 120 + (h - 13) * 60 + m
+    else:
+        expected = 240
+
+    # 按 symbol 分组, 判定哪些不完整需要补拉
+    result: dict[str, list[dict]] = {}
+    incomplete: list[str] = []
+    for sym in symbols:
+        if df_local.is_empty():
+            sub = pl.DataFrame()
+        else:
+            sub = df_local.filter(pl.col("symbol") == sym).sort("datetime")
+        if expected > 0 and (sub.is_empty() or len(sub) < expected * 0.9):
+            incomplete.append(sym)
+        elif not sub.is_empty():
+            result[sym] = sub.to_dicts()
+
+    # Step 2: 缺失的 symbol 批量实时拉取 (不落库)
+    if incomplete:
+        start_time = datetime(trade_date.year, trade_date.month, trade_date.day, 9, 25, 0)
+        end_time = datetime(trade_date.year, trade_date.month, trade_date.day, 15, 5, 0)
+        lim = capset.limits(Cap.KLINE_MINUTE_BATCH)
+        live_df = kline_sync.sync_minute_batch(
+            incomplete,
+            start_time=start_time,
+            end_time=end_time,
+            batch_size=lim.batch if lim else None,
+            rpm=lim.rpm if lim else None,
+        )
+        if not live_df.is_empty():
+            for sym in incomplete:
+                sub = live_df.filter(pl.col("symbol") == sym).sort("datetime")
+                if not sub.is_empty():
+                    result[sym] = sub.to_dicts()
+
+    return {"data": result}
+
+
 @router.get("/minute")
 def get_minute(
     request: Request,
@@ -353,11 +491,12 @@ def get_minute(
     - 本地无数据或不完整 → 从 TickFlow 实时拉取返回（不写入）
     """
     repo = request.app.state.repo
-    stock_info = _get_stock_info(repo, symbol)
+    asset_type = repo.resolve_asset_type(symbol)
+    stock_info = _get_stock_info(repo, symbol) if asset_type == "stock" else _get_asset_info(repo, symbol, asset_type)
     stock_name = stock_info.get("name")
 
     if trade_date is None:
-        trade_date = repo.latest_minute_date(symbol)
+        trade_date = repo.latest_minute_date(symbol, asset_type=asset_type)
     if trade_date is None:
         # 本地无任何分钟K，尝试从 TickFlow 拉取当天
         trade_date = date.today()
@@ -367,7 +506,7 @@ def get_minute(
             "date": str(trade_date), "rows": df.to_dicts(), "source": "live",
         }
 
-    df = repo.get_minute(symbol, trade_date)
+    df = repo.get_minute(symbol, trade_date, asset_type=asset_type)
 
     # 完整交易日应有 240 条分钟K；如果是今天(盘中)，期望条数按已交易分钟估算
     expected = 240

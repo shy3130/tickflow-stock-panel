@@ -5,12 +5,16 @@ from app.data_providers.custom.loader import (
     errors,
     get_config_dict,
     get_provider,
+    install_plugin,
+    is_builtin,
     is_custom_provider,
+    list_plugins,
     list_sources,
     load_all,
     names,
     provider_has_dataset,
     save_config,
+    uninstall_plugin,
 )
 
 __all__ = [
@@ -19,10 +23,14 @@ __all__ = [
     "errors",
     "get_config_dict",
     "get_provider",
+    "install_plugin",
+    "is_builtin",
     "is_custom_provider",
+    "list_plugins",
     "list_sources",
     "load_all",
     "names",
     "provider_has_dataset",
     "save_config",
+    "uninstall_plugin",
 ]

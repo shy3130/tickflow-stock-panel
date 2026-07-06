@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { ScanSearch, Clock, TrendingUp, Star, Filter, Layers, Network, Sparkles, RefreshCw, Settings2, Store } from 'lucide-react'
+import { ScanSearch, Clock, TrendingUp, Star, Filter, Layers, Network, Sparkles, RefreshCw, Settings2, Store, RotateCcw } from 'lucide-react'
 import { api, genRuleId, type ScreenerStrategy, type ScreenerResult } from '@/lib/api'
 import { toast } from '@/components/Toast'
 import { useDataStatus, usePreferences } from '@/lib/useSharedQueries'
@@ -669,37 +669,43 @@ export function Screener() {
                   )}
                 </h2>
                 <div className="flex items-center gap-3">
-                  {displayRows.length > 0 && (
-                    <>
+                  {(showAll ? allRows.length > 0 : !!result?.rows.length) && (
+                    <div className="inline-flex items-stretch h-7 rounded-btn border border-border bg-surface overflow-hidden">
                       <button
                         onClick={() => setShowFilter(v => !v)}
-                        className={`inline-flex items-center gap-1.5 h-7 px-2.5 rounded-btn
-                          border text-xs font-medium transition-colors duration-150 cursor-pointer
+                        className={`inline-flex items-center gap-1.5 px-2.5 text-xs font-medium transition-colors duration-150 cursor-pointer
                           ${filterActive(filter)
-                            ? 'border-accent/50 bg-accent/10 text-accent'
-                            : 'border-border bg-surface text-secondary hover:border-accent/50'
+                            ? 'bg-accent/15 text-accent'
+                            : showFilter
+                              ? 'bg-accent/8 text-accent'
+                              : 'text-secondary hover:bg-elevated hover:text-foreground'
                           }`}
                       >
                         <Filter className="h-3 w-3" />
                         筛选
                         {filterActive(filter) && (
-                          <span className="bg-accent text-base rounded-full w-4 h-4 flex items-center justify-center text-[10px] font-bold">
+                          <span className="bg-accent text-base rounded-full min-w-4 h-4 px-1 flex items-center justify-center text-[10px] font-bold leading-none">
                             {countActiveFilters(filter)}
                           </span>
                         )}
                       </button>
                       {filterActive(filter) && (
-                        <button
-                          onClick={() => {
-                            setFilter(defaultFilter)
-                            if (activeStrategy) filterMap.current.delete(activeStrategy)
-                          }}
-                          className="text-xs text-muted hover:text-danger transition-colors"
-                        >
-                          重置
-                        </button>
+                        <>
+                          <span className="w-px self-stretch my-1 bg-border" />
+                          <button
+                            onClick={() => {
+                              setFilter(defaultFilter)
+                              if (activeStrategy) filterMap.current.delete(activeStrategy)
+                            }}
+                            title="清空筛选条件"
+                            className="inline-flex items-center gap-1 px-2 text-muted
+                              hover:bg-danger/10 hover:text-danger transition-colors duration-150 cursor-pointer"
+                          >
+                            <RotateCcw className="h-3 w-3" />
+                          </button>
+                        </>
                       )}
-                    </>
+                    </div>
                   )}
                   {displayRows.length > 0 && (
                     <button
@@ -736,26 +742,29 @@ export function Screener() {
                 </div>
               </div>
 
+              {/* 筛选面板: 只要原始结果有数据就显示 (哪怕筛完后为空, 用户才能改条件) */}
+              {showFilter && (showAll ? allRows.length > 0 : !!result?.rows.length) && (
+                <FilterPanel
+                  value={filter}
+                  onChange={setFilter}
+                  onClose={() => setShowFilter(false)}
+                  onReset={() => {
+                    setFilter(defaultFilter)
+                    if (activeStrategy) filterMap.current.delete(activeStrategy)
+                  }}
+                />
+              )}
+
               {displayRows.length === 0 ? (
                 <EmptyState
                   icon={ScanSearch}
-                  title="今日无命中"
-                  hint="可能数据未跑盘后管道,或策略条件过于严苛。试试 POST /api/pipeline/run。"
+                  title={filterActive(filter) ? '筛选后无命中' : '今日无命中'}
+                  hint={filterActive(filter)
+                    ? '当前筛选条件过严, 试试放宽或重置筛选。'
+                    : '可能数据未跑盘后管道,或策略条件过于严苛。试试 POST /api/pipeline/run。'}
                 />
               ) : (
                 <>
-                  {showFilter && (
-                    <FilterPanel
-                      value={filter}
-                      onChange={setFilter}
-                      onClose={() => setShowFilter(false)}
-                      onReset={() => {
-                        setFilter(defaultFilter)
-                        if (activeStrategy) filterMap.current.delete(activeStrategy)
-                      }}
-                    />
-                  )}
-
                   <ScreenerTable
                     rows={displayRows}
                     columns={columns}

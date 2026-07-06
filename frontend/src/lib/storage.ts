@@ -42,6 +42,9 @@ export const storage = {
   /** 自选列表日K蜡烛图显示状态 */
   watchlistCandle:      kv<boolean>('watchlist_showCandle'),
 
+  /** 自选列表分时图显示状态 */
+  watchlistIntraday:    kv<boolean>('watchlist_showIntraday'),
+
   /** 策略结果列表日K蜡烛图显示状态 */
   screenerCandle:       kv<boolean>('screener_showCandle'),
 

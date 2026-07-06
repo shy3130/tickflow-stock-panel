@@ -15,6 +15,12 @@ META = {
         "exclude_new_days": 60,
     },
     "params": [
+        {"id": "require_above_ma60", "label": "要求收盘价在MA60上方", "type": "bool",
+         "default": True},
+        {"id": "require_n_day_high", "label": "要求60日新高", "type": "bool",
+         "default": True},
+        {"id": "use_volume_filter", "label": "启用量比过滤", "type": "bool",
+         "default": True},
         {"id": "vol_ratio_min", "label": "最低量比", "type": "float",
          "default": 2.0, "min": 0.5, "max": 10.0, "step": 0.1},
     ],
@@ -35,8 +41,11 @@ ALERTS = [
 
 def filter(df: pl.DataFrame, params: dict) -> pl.Expr:
     vol_min = params.get("vol_ratio_min", 2.0)
-    return (
-        (pl.col("close") > pl.col("ma60"))
-        & pl.col("signal_n_day_high").fill_null(False)
-        & (pl.col("vol_ratio_5d") >= vol_min)
-    )
+    expr = pl.col("symbol").is_not_null() | pl.col("symbol").is_null()
+    if params.get("require_above_ma60", True):
+        expr = expr & (pl.col("close") > pl.col("ma60"))
+    if params.get("require_n_day_high", True):
+        expr = expr & pl.col("signal_n_day_high").fill_null(False)
+    if params.get("use_volume_filter", True):
+        expr = expr & (pl.col("vol_ratio_5d") >= vol_min)
+    return expr

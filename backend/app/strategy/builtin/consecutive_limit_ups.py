@@ -7,6 +7,10 @@ META = {
     "description": "当日涨停且连续涨停≥2天, 强势追涨",
     "tags": ["涨停", "连板"],
     "params": [
+        {"id": "require_limit_up", "label": "要求当日涨停", "type": "bool",
+         "default": True},
+        {"id": "use_boards_filter", "label": "启用连板数过滤", "type": "bool",
+         "default": True},
         {"id": "min_boards", "label": "最少连板数", "type": "int",
          "default": 2, "min": 1, "max": 20, "step": 1},
     ],
@@ -25,7 +29,9 @@ ALERTS = []
 
 def filter(df: pl.DataFrame, params: dict) -> pl.Expr:
     min_boards = params.get("min_boards", 2)
-    return (
-        pl.col("signal_limit_up").fill_null(False)
-        & (pl.col("consecutive_limit_ups") >= min_boards)
-    )
+    expr = pl.col("symbol").is_not_null() | pl.col("symbol").is_null()
+    if params.get("require_limit_up", True):
+        expr = expr & pl.col("signal_limit_up").fill_null(False)
+    if params.get("use_boards_filter", True):
+        expr = expr & (pl.col("consecutive_limit_ups") >= min_boards)
+    return expr

@@ -1,0 +1,12 @@
+# stock-sdk 内置可选数据源插件
+# 基于 stock-sdk (Node.js) 的免费 A 股行情, 无需 API Key。
+# 用户需手动安装依赖后才可用: cd backend/app/plugins/stocksdk && npm install
+
+name: stocksdk
+display_name: "stock-sdk（免费行情）"
+runtime: node
+entry: app.plugins.stocksdk.provider:StockSDKProvider
+check: app.plugins.stocksdk.bridge:availability
+datasets: [daily, adj_factor, minute, realtime]
+description: "基于 stock-sdk 的免费 A 股行情, 无需 API Key。日K/除权/分钟/实时全市场。需运行环境含 Node.js 18+。"
+install_hint: "cd backend/app/plugins/stocksdk && npm install"

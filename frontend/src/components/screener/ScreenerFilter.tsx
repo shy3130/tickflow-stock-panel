@@ -1,4 +1,5 @@
-import { X } from 'lucide-react'
+import { X, RotateCcw, Filter } from 'lucide-react'
+import { BOARDS, getBoardType } from '@/lib/board'
 
 // ===== 筛选类型 =====
 
@@ -17,6 +18,8 @@ export interface ScreenerFilter {
   volRatioMin: string    // 量比最小
   rsiMin: string
   rsiMax: string
+  boards: string[]       // 板块筛选: 空数组=不筛选, 否则只保留选中的板块
+  excludeST: boolean     // 是否排除 ST/*ST/退市股
 }
 
 export const defaultFilter: ScreenerFilter = {
@@ -28,10 +31,16 @@ export const defaultFilter: ScreenerFilter = {
   floatCapMin: '', floatCapMax: '',
   volRatioMin: '',
   rsiMin: '', rsiMax: '',
+  boards: [],
+  excludeST: false,
 }
 
 export function filterActive(f: ScreenerFilter): boolean {
-  return Object.values(f).some(v => v !== '')
+  if (f.boards.length > 0) return true
+  if (f.excludeST) return true
+  return Object.entries(f).some(([k, v]) =>
+    k !== 'boards' && k !== 'excludeST' && v !== '' && v !== false,
+  )
 }
 
 export function countActiveFilters(f: ScreenerFilter): number {
@@ -44,6 +53,8 @@ export function countActiveFilters(f: ScreenerFilter): number {
   if (f.floatCapMin || f.floatCapMax) n++
   if (f.volRatioMin) n++
   if (f.rsiMin || f.rsiMax) n++
+  if (f.boards.length > 0) n++
+  if (f.excludeST) n++
   return n
 }
 
@@ -51,6 +62,14 @@ export function applyFilter(rows: any[], f: ScreenerFilter): any[] {
   if (!filterActive(f)) return rows
   const num = (v: string) => v === '' ? null : Number(v)
   return rows.filter((r) => {
+    // 板块: 用 symbol 判定板块, 必须在选中列表里
+    // 全选 5 个板块 = 不过滤 (等价于 boards:[]), 避免 getBoardType 返回 null 的边缘品种被误删
+    if (f.boards.length > 0 && f.boards.length < BOARDS.length) {
+      const board = getBoardType(r.symbol)
+      if (!board || !f.boards.includes(board)) return false
+    }
+    // ST: name 含 ST/*ST/退 的排除 (对齐后端口径 (?i)ST|退)
+    if (f.excludeST && /ST|退/i.test(String(r.name ?? ''))) return false
     const close = Number(r.close ?? 0)
     const v = (field: string) => num(field)
     // 现价
@@ -95,7 +114,20 @@ export function FilterPanel({ value, onChange, onClose, onReset }: {
 }) {
   const set = (key: keyof ScreenerFilter, v: string) => onChange({ ...value, [key]: v })
 
-  const fields: { label: string; min: keyof ScreenerFilter; max: keyof ScreenerFilter; unit: string; step?: string }[] = [
+  const toggleBoard = (board: string) => {
+    const next = value.boards.includes(board)
+      ? value.boards.filter(b => b !== board)
+      : [...value.boards, board]
+    onChange({ ...value, boards: next })
+  }
+
+  // 数值字段只引用 string 类型的 key (排除 boards/excludeST), 避免类型混乱
+  type NumKey = keyof Pick<ScreenerFilter,
+    'priceMin' | 'priceMax' | 'changePctMin' | 'changePctMax' |
+    'momentum5dMin' | 'momentum5dMax' | 'amountMin' |
+    'marketCapMin' | 'marketCapMax' | 'floatCapMin' | 'floatCapMax' |
+    'volRatioMin' | 'rsiMin' | 'rsiMax'>
+  const fields: { label: string; min: NumKey; max: NumKey; unit: string; step?: string }[] = [
     { label: '现价',      min: 'priceMin',      max: 'priceMax',      unit: '元', step: '0.1' },
     { label: '涨跌幅',    min: 'changePctMin',   max: 'changePctMax',  unit: '%' },
     { label: '5日涨幅',   min: 'momentum5dMin',  max: 'momentum5dMax', unit: '%' },
@@ -108,12 +140,71 @@ export function FilterPanel({ value, onChange, onClose, onReset }: {
 
   return (
     <div className="rounded-card border border-accent/30 bg-accent/[0.03] p-4 space-y-3">
+      {/* 标题栏: 左侧标题 + 激活计数, 右侧重置 + 关闭 */}
       <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-accent">筛选条件</span>
-        <button onClick={onClose} className="p-0.5 rounded text-secondary hover:text-foreground transition-colors">
-          <X className="h-3.5 w-3.5" />
+        <div className="flex items-center gap-2">
+          <Filter className="h-3.5 w-3.5 text-accent" />
+          <span className="text-xs font-medium text-accent">筛选条件</span>
+          {filterActive(value) && (
+            <span className="bg-accent/15 text-accent rounded-full px-1.5 h-4 inline-flex items-center text-[10px] font-bold leading-none">
+              {countActiveFilters(value)}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1">
+          {filterActive(value) && (
+            <button
+              onClick={onReset}
+              title="清空全部筛选"
+              className="inline-flex items-center gap-1 px-1.5 h-6 rounded text-[11px]
+                text-muted hover:text-danger hover:bg-danger/10 transition-colors"
+            >
+              <RotateCcw className="h-3 w-3" />
+              清空
+            </button>
+          )}
+          <button
+            onClick={onClose}
+            title="收起筛选"
+            className="p-1 rounded text-secondary hover:text-foreground hover:bg-elevated transition-colors"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {/* 板块 + ST 快速筛选 (按钮组) */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-[11px] text-secondary shrink-0 w-10">市场</span>
+        {BOARDS.map(board => {
+          const active = value.boards.includes(board)
+          return (
+            <button
+              key={board}
+              onClick={() => toggleBoard(board)}
+              className={`px-2 py-0.5 rounded text-[11px] transition-colors ${
+                active
+                  ? 'bg-accent/15 text-accent'
+                  : 'bg-elevated text-secondary hover:text-foreground hover:bg-elevated/80'
+              }`}
+            >
+              {board}
+            </button>
+          )
+        })}
+        <span className="w-px h-4 bg-border mx-1" />
+        <button
+          onClick={() => onChange({ ...value, excludeST: !value.excludeST })}
+          className={`px-2 py-0.5 rounded text-[11px] transition-colors ${
+            value.excludeST
+              ? 'bg-accent/15 text-accent'
+              : 'bg-elevated text-secondary hover:text-foreground hover:bg-elevated/80'
+          }`}
+        >
+          排除ST
         </button>
       </div>
+
       <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-2.5">
         {fields.map((f) => {
           const isRange = f.min !== f.max
@@ -146,17 +237,7 @@ export function FilterPanel({ value, onChange, onClose, onReset }: {
           )
         })}
       </div>
-      {filterActive(value) && (
-        <div className="flex items-center gap-2 pt-1">
-          <button
-            onClick={onReset}
-            className="text-[11px] text-muted hover:text-danger transition-colors"
-          >
-            清空全部
-          </button>
-          <span className="text-[10px] text-muted">输入即生效 · 支持范围筛选</span>
-        </div>
-      )}
+      <div className="text-[10px] text-muted/70 pl-1">输入即生效 · 点击市场/ST 按钮切换</div>
     </div>
   )
 }

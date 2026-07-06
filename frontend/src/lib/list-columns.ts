@@ -49,6 +49,34 @@ export const DEFAULT_CANDLE_CONFIG: Required<CandleColumnConfig> = {
   days: 12,
 }
 
+/** 分时列渲染配置（builtin: intraday 列专用） */
+export interface IntradayColumnConfig {
+  /** 单元格宽度 px */
+  width?: number
+  /** 单元格高度 px */
+  height?: number
+}
+
+/** 分时列配置默认值 */
+export const DEFAULT_INTRADAY_CONFIG: Required<IntradayColumnConfig> = {
+  width: 150,
+  height: 80,
+}
+
+/** 分时列数值边界 */
+const INTRADAY_BOUNDS = {
+  width:  { min: 60, max: 300 },
+  height: { min: 32, max: 200 },
+} as const
+
+export function resolveIntradayConfig(cfg: IntradayColumnConfig | undefined): Required<IntradayColumnConfig> {
+  const c = cfg ?? {}
+  return {
+    width:  clampNum(c.width,  INTRADAY_BOUNDS.width,  DEFAULT_INTRADAY_CONFIG.width),
+    height: clampNum(c.height, INTRADAY_BOUNDS.height, DEFAULT_INTRADAY_CONFIG.height),
+  }
+}
+
 /** 数值边界（设置过大取上限，过小取最小值） */
 const CANDLE_BOUNDS = {
   enabledWidth:  { min: 40,  max: 300 },
@@ -89,6 +117,8 @@ export interface ColumnConfig {
   extDisplay?: ExtColumnDisplayConfig
   /** 日k列渲染配置（仅 builtin: candle 列生效） */
   candleConfig?: CandleColumnConfig
+  /** 分时列渲染配置（仅 builtin: intraday 列生效） */
+  intradayConfig?: IntradayColumnConfig
   /** 信息条场景：是否单独占一行显示（仅 StockInfoBar 生效，表格场景忽略） */
   standalone?: boolean
 }
@@ -135,11 +165,12 @@ export function mergeColumns(
     const def = defaultMap.get(col.id)
     if (def) {
       // 内置列: label/source/align/pinned 以默认定义为准；visible 使用用户配置；
-      // 用户自定义的渲染配置（如日k的 candleConfig、策略列的 extDisplay、信息条 standalone）需保留，否则刷新后丢失
+      // 用户自定义的渲染配置（如日k的 candleConfig、分时的 intradayConfig、策略列的 extDisplay、信息条 standalone）需保留，否则刷新后丢失
       result.push({
         ...def,
         visible: col.visible,
         ...(col.candleConfig ? { candleConfig: col.candleConfig } : {}),
+        ...(col.intradayConfig ? { intradayConfig: col.intradayConfig } : {}),
         ...(col.extDisplay ? { extDisplay: col.extDisplay } : {}),
         ...(col.standalone ? { standalone: col.standalone } : {}),
       })

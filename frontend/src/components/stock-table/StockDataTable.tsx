@@ -5,7 +5,7 @@
  * 不内置任何业务逻辑：单元格内容（含 symbol 列交互、操作列、ext 列）由调用方通过
  * renderCell / renderExtraCol 注入。这样两个页面的特有交互得以保留，同时表头能力一致。
  */
-import type { ReactNode } from 'react'
+import { cloneElement, isValidElement, type ReactElement, type ReactNode } from 'react'
 import type { ColumnConfig } from '@/lib/list-columns'
 import { UNSORTABLE_KEYS } from '@/lib/stock-table'
 import type { SortState } from './useTableSort'
@@ -108,7 +108,13 @@ export function StockDataTable({
                 key={rowKey(r)}
                 className={`transition-colors duration-150 ease-smooth group ${rowClassName(r)}`}
               >
-                {visibleColumns.map(col => renderCell(r, col))}
+                {visibleColumns.map(col => {
+                  // renderCell 返回的 <td> 无 key, 这里补上避免 React key 警告
+                  const cell = renderCell(r, col)
+                  return isValidElement(cell)
+                    ? cloneElement(cell as ReactElement, { key: col.id })
+                    : cell
+                })}
                 {renderExtraCol && renderExtraCol(r)}
               </tr>
             )

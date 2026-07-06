@@ -21,8 +21,8 @@ import { X, GripVertical, Plus, ChevronDown, ChevronRight, Database, Settings2, 
 import { api } from '@/lib/api'
 import { useQuery } from '@tanstack/react-query'
 import { QK } from '@/lib/queryKeys'
-import type { ColumnConfig, ColumnGroup, ExtColumnDisplayConfig, CandleColumnConfig } from '@/lib/list-columns'
-import { resolveCandleConfig } from '@/lib/list-columns'
+import type { ColumnConfig, ColumnGroup, ExtColumnDisplayConfig, CandleColumnConfig, IntradayColumnConfig } from '@/lib/list-columns'
+import { resolveCandleConfig, resolveIntradayConfig } from '@/lib/list-columns'
 
 interface ListColumnCustomizerProps {
   columns: ColumnConfig[]
@@ -40,7 +40,7 @@ interface ListColumnCustomizerProps {
   showStandaloneToggle?: boolean
 }
 
-function SortableActiveCol({ col, onRemove, onConfig, configOpen, extTableLabel, extConfig, candleConfig: candlePanel, strategiesConfig, showStandaloneToggle, onToggleStandalone }: {
+function SortableActiveCol({ col, onRemove, onConfig, configOpen, extTableLabel, extConfig, candleConfig: candlePanel, intradayConfig: intradayPanel, strategiesConfig, showStandaloneToggle, onToggleStandalone }: {
   col: ColumnConfig
   onRemove: (id: string) => void
   onConfig: (id: string | null) => void
@@ -48,6 +48,7 @@ function SortableActiveCol({ col, onRemove, onConfig, configOpen, extTableLabel,
   extTableLabel: string
   extConfig: React.ReactNode
   candleConfig: React.ReactNode
+  intradayConfig: React.ReactNode
   strategiesConfig: React.ReactNode
   showStandaloneToggle?: boolean
   onToggleStandalone?: (id: string) => void
@@ -57,8 +58,9 @@ function SortableActiveCol({ col, onRemove, onConfig, configOpen, extTableLabel,
   } = useSortable({ id: col.id })
   const isExt = col.source.type === 'ext'
   const isCandle = col.source.type === 'builtin' && col.source.key === 'candle'
+  const isIntraday = col.source.type === 'builtin' && col.source.key === 'intraday'
   const isStrategies = col.source.type === 'builtin' && col.source.key === 'strategies'
-  const hasConfig = isExt || isCandle || isStrategies
+  const hasConfig = isExt || isCandle || isIntraday || isStrategies
 
   return (
     <>
@@ -116,7 +118,7 @@ function SortableActiveCol({ col, onRemove, onConfig, configOpen, extTableLabel,
           <EyeOff className="h-3 w-3" />
         </button>
       </div>
-      {hasConfig && configOpen && (isExt ? extConfig : isCandle ? candlePanel : strategiesConfig)}
+      {hasConfig && configOpen && (isExt ? extConfig : isCandle ? candlePanel : isIntraday ? intradayPanel : strategiesConfig)}
     </>
   )
 }
@@ -240,6 +242,21 @@ export function ListColumnCustomizer({
     onChange(columns.map(c => {
       if (c.id !== colId) return c
       const { candleConfig, ...rest } = c
+      return rest
+    }))
+  }, [columns, onChange])
+
+  const updateIntradayConfig = useCallback((colId: string, patch: Partial<IntradayColumnConfig>) => {
+    onChange(columns.map(c => {
+      if (c.id !== colId) return c
+      return { ...c, intradayConfig: { ...c.intradayConfig, ...patch } }
+    }))
+  }, [columns, onChange])
+
+  const resetIntradayConfig = useCallback((colId: string) => {
+    onChange(columns.map(c => {
+      if (c.id !== colId) return c
+      const { intradayConfig, ...rest } = c
       return rest
     }))
   }, [columns, onChange])
@@ -480,7 +497,7 @@ export function ListColumnCustomizer({
 
   const renderCandleConfig = (col: ColumnConfig) => {
     const cfg = resolveCandleConfig(col.candleConfig)
-    // 数值输入：空字符串回退到默认值，便于清空重输
+    // 数值输入: onChange 存原始值(不钳制, 允许自由输入), onBlur 钳制边界
     const numInput = (
       field: keyof CandleColumnConfig,
       label: string,
@@ -489,12 +506,17 @@ export function ListColumnCustomizer({
         <span className="text-secondary w-16 shrink-0">{label}</span>
         <input
           type="number"
-          value={cfg[field]}
+          value={col.candleConfig?.[field] ?? cfg[field]}
           onChange={e => {
             const raw = e.target.value
-            // 调用 resolveCandleConfig 钳制：过大取上限、过小取最小值
+            // 空字符串 → 存 undefined (回退到默认值显示); 否则存原始数字 (不钳制)
+            updateCandleConfig(col.id, { [field]: raw === '' ? undefined : Number(raw) } as Partial<CandleColumnConfig>)
+          }}
+          onBlur={e => {
+            const raw = e.target.value
+            // 失焦时钳制: 过大取上限、过小取最小值
             const merged = resolveCandleConfig({ ...col.candleConfig, [field]: raw === '' ? undefined : Number(raw) })
-            updateCandleConfig(col.id, { [field]: merged[field] })
+            updateCandleConfig(col.id, { [field]: merged[field] } as Partial<CandleColumnConfig>)
           }}
           className="flex-1 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 focus:outline-none focus:border-accent/50 tabular-nums"
         />
@@ -520,6 +542,56 @@ export function ListColumnCustomizer({
           {col.candleConfig && (
             <div className="flex justify-end pt-1">
               <button onClick={() => resetCandleConfig(col.id)} className="text-[10px] text-muted hover:text-foreground transition-colors">
+                恢复默认
+              </button>
+            </div>
+          )}
+        </div>
+      </motion.div>
+    )
+  }
+
+  const renderIntradayConfig = (col: ColumnConfig) => {
+    const cfg = resolveIntradayConfig(col.intradayConfig)
+    const numInput = (
+      field: keyof IntradayColumnConfig,
+      label: string,
+    ) => (
+      <label key={field} className="flex items-center gap-2 text-xs">
+        <span className="text-secondary w-16 shrink-0">{label}</span>
+        <input
+          type="number"
+          value={col.intradayConfig?.[field] ?? cfg[field]}
+          onChange={e => {
+            const raw = e.target.value
+            updateIntradayConfig(col.id, { [field]: raw === '' ? undefined : Number(raw) } as Partial<IntradayColumnConfig>)
+          }}
+          onBlur={e => {
+            const raw = e.target.value
+            const merged = resolveIntradayConfig({ ...col.intradayConfig, [field]: raw === '' ? undefined : Number(raw) })
+            updateIntradayConfig(col.id, { [field]: merged[field] } as Partial<IntradayColumnConfig>)
+          }}
+          className="flex-1 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 focus:outline-none focus:border-accent/50 tabular-nums"
+        />
+      </label>
+    )
+    return (
+      <motion.div
+        initial={{ height: 0, opacity: 0 }}
+        animate={{ height: 'auto', opacity: 1 }}
+        exit={{ height: 0, opacity: 0 }}
+        transition={{ duration: 0.15 }}
+        className="overflow-hidden"
+      >
+        <div className="pl-10 pr-3 py-2 space-y-2 border-l-2 border-accent/20 ml-[18px]">
+          {numInput('width', '宽度')}
+          {numInput('height', '高度')}
+          <div className="text-[10px] text-muted leading-relaxed pt-0.5">
+            宽度 60–300 / 高度 32–200，越界自动钳制到边界
+          </div>
+          {col.intradayConfig && (
+            <div className="flex justify-end pt-1">
+              <button onClick={() => resetIntradayConfig(col.id)} className="text-[10px] text-muted hover:text-foreground transition-colors">
                 恢复默认
               </button>
             </div>
@@ -636,6 +708,7 @@ export function ListColumnCustomizer({
                           extTableLabel={col.source.type === 'ext' ? (extTableLabelMap.get(col.source.configId) || col.source.configId) : ''}
                           extConfig={renderExtConfig(col)}
                           candleConfig={renderCandleConfig(col)}
+                          intradayConfig={renderIntradayConfig(col)}
                           strategiesConfig={renderStrategiesConfig(col)}
                           showStandaloneToggle={showStandaloneToggle}
                           onToggleStandalone={toggleStandalone}

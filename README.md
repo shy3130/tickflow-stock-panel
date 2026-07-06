@@ -222,7 +222,7 @@ PORT=3018                      # 服务端口
 | [docs/strategy.md](./docs/strategy.md)                                                             | 策略体系(18 内置策略 + 三种扩展方式 + 文件结构)                      |
 | [backend/app/strategy/prompts/strategy-guide.md](./backend/app/strategy/prompts/strategy-guide.md) | 策略开发完整规范(AI 生成与手写)                                      |
 
-欢迎 Issue 和 PR。
+fork同时请点个star哦,欢迎 Issue 和 PR。
 
 ---
 

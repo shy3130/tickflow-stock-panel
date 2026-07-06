@@ -90,11 +90,10 @@ function ThemeToggle() {
   return (
     <button
       onClick={() => toggleTheme()}
-      className="flex w-full items-center gap-3 rounded-btn px-3 py-2 text-sm text-foreground/80 transition-colors duration-150 ease-smooth hover:bg-elevated hover:text-foreground cursor-pointer"
+      className="flex items-center justify-center rounded-btn p-2 text-foreground/80 transition-colors duration-150 ease-smooth hover:bg-elevated hover:text-foreground cursor-pointer"
       title={dark ? '切换到亮色模式' : '切换到暗色模式'}
     >
       {dark ? <Sun className="h-4 w-4 shrink-0" /> : <Moon className="h-4 w-4 shrink-0" />}
-      <span>{dark ? '亮色模式' : '暗色模式'}</span>
     </button>
   )
 }
@@ -628,27 +627,29 @@ export function Layout() {
           )}
         </div>
 
-        <div className="border-t border-border px-2 py-3 space-y-0.5 shrink-0">
-          <ThemeToggle />
-          <NavLink
-            to="/settings"
-            className={({ isActive }) =>
-              cn(
-                'flex items-center justify-between gap-3 px-3 py-2 rounded-btn text-sm transition-colors duration-150 ease-smooth',
-                isActive
-                  ? 'bg-elevated text-foreground font-medium'
-                  : 'text-foreground/80 hover:bg-elevated hover:text-foreground',
-              )
-            }
-          >
-            <span className="flex items-center gap-3">
-              <Settings className="h-4 w-4 shrink-0" />
-              <span>设置</span>
-            </span>
-            <span className="font-mono text-[10px] text-muted/50 select-none">
-              {version ?? ''}
-            </span>
-          </NavLink>
+        <div className="border-t border-border px-2 py-3 shrink-0">
+          <div className="flex items-center gap-1">
+            <ThemeToggle />
+            <NavLink
+              to="/settings"
+              className={({ isActive }) =>
+                cn(
+                  'flex flex-1 items-center justify-between gap-3 px-3 py-2 rounded-btn text-sm transition-colors duration-150 ease-smooth',
+                  isActive
+                    ? 'bg-elevated text-foreground font-medium'
+                    : 'text-foreground/80 hover:bg-elevated hover:text-foreground',
+                )
+              }
+            >
+              <span className="flex items-center gap-3">
+                <Settings className="h-4 w-4 shrink-0" />
+                <span>设置</span>
+              </span>
+              <span className="font-mono text-[10px] text-muted/50 select-none">
+                {version ?? ''}
+              </span>
+            </NavLink>
+          </div>
         </div>
       </aside>
 

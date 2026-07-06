@@ -27,8 +27,12 @@ META = {
     "description": "涨幅 > 7% 且距涨停 < 3%, 追涨信号",
     "tags": ["涨停", "追涨"],
     "params": [
+        {"id": "use_change_filter", "label": "启用涨幅过滤", "type": "bool",
+         "default": True},
         {"id": "min_change", "label": "最低涨幅%", "type": "float",
          "default": 7.0, "min": 3.0, "max": 15.0, "step": 1.0},
+        {"id": "use_limit_gap_filter", "label": "启用距涨停空间过滤", "type": "bool",
+         "default": True},
         {"id": "limit_gap", "label": "距涨停空间%", "type": "float",
          "default": 3.0, "min": 1.0, "max": 10.0, "step": 0.5},
     ],
@@ -49,7 +53,9 @@ def filter(df: pl.DataFrame, params: dict) -> pl.Expr:
     min_chg = params.get("min_change", 7.0) / 100.0
     gap = params.get("limit_gap", 3.0) / 100.0
     lp = _limit_pct()
-    return (
-        (pl.col("change_pct") > min_chg)
-        & (pl.col("change_pct") < lp - gap)
-    )
+    expr = pl.col("symbol").is_not_null() | pl.col("symbol").is_null()
+    if params.get("use_change_filter", True):
+        expr = expr & (pl.col("change_pct") > min_chg)
+    if params.get("use_limit_gap_filter", True):
+        expr = expr & (pl.col("change_pct") < lp - gap)
+    return expr

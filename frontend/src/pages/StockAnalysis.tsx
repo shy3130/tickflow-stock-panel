@@ -90,7 +90,7 @@ export function StockAnalysis() {
         }
       />
 
-      <div className="px-8 py-6 space-y-6 max-w-7xl">
+      <div className="w-full px-8 py-6 space-y-6">
         {/* 搜索栏 */}
         <div className="flex items-center gap-3">
           <div className="w-72">

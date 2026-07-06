@@ -77,7 +77,7 @@ class Settings(BaseSettings):
 
     # AI
     ai_provider: str = "openai_compat"
-    ai_base_url: str = "https://api.alysc.top"
+    ai_base_url: str = "https://api.zhaji.dev/v1"
     ai_api_key: str = ""
     ai_model: str = "gpt-5.5"
     ai_codex_command: str = "codex"

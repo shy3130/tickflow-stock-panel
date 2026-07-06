@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Check, Database, Plus, RefreshCw, Zap, FileWarning } from 'lucide-react'
-import { api, type DataSourceItem } from '@/lib/api'
+import { api, type DataSourceItem, type PluginDataSourceItem } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { usePreferences } from '@/lib/useSharedQueries'
 import { toast } from '@/components/Toast'
@@ -70,14 +70,50 @@ export function SettingsDataSourcesPanel() {
     onSuccess: (_data, name) => setSelected(name),
   })
 
+  const installMut = useMutation({
+    mutationFn: (name: string) => api.installPlugin(name),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: QK.dataSources })
+      if (data.install_ok) {
+        toast('插件依赖安装成功', 'success')
+      } else {
+        toast(data.install_message || '安装失败', 'error')
+      }
+    },
+    onError: (e: Error) => toast(`安装失败: ${e.message}`, 'error'),
+  })
+
+  const uninstallMut = useMutation({
+    mutationFn: (name: string) => api.uninstallPlugin(name),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: QK.dataSources })
+      qc.invalidateQueries({ queryKey: QK.preferences })
+      if (data.uninstall_ok) {
+        toast(data.uninstall_message || '已卸载', 'success')
+      } else {
+        toast(data.uninstall_message || '卸载失败', 'error')
+      }
+    },
+    onError: (e: Error) => toast(`卸载失败: ${e.message}`, 'error'),
+  })
+
   const builtin: DataSourceItem[] = sources.data?.builtin ?? []
+  const pluginList: PluginDataSourceItem[] = sources.data?.plugins ?? []
   const customList: DataSourceItem[] = sources.data?.custom ?? []
   const errors = sources.data?.errors ?? []
   const activeName = prefs.data?.daily_data_provider || 'tickflow'
 
-  // 顶部数据源选择列表 (内置 + 自定义 + 新增)
+  // 插件 name → 状态 (供卡片渲染时判断 available/installing 等)
+  const pluginMap = new Map(pluginList.map(p => [p.name, p]))
+  const pluginNames = new Set(pluginList.map(p => p.name))
+
+  // 顶部数据源选择列表 (内置 + 所有插件 + 自定义 + 新增)
+  const pluginItems: DataSourceItem[] = pluginList.map(p => ({
+    name: p.name, display_name: p.display_name, datasets: p.datasets,
+  }))
   const allItems = [
     ...builtin,
+    ...pluginItems,
     ...customList,
   ]
 
@@ -91,7 +127,10 @@ export function SettingsDataSourcesPanel() {
           <div className="flex items-center gap-2.5">
             <Database className="h-4 w-4 text-secondary" />
             <h2 className="text-sm font-medium text-foreground">数据源</h2>
-            <span className="text-[10px] text-muted/40 font-mono truncate max-w-[280px]" title={sources.data?.config_dir}>
+            <span
+              className="text-[10px] text-muted/40 font-mono truncate hidden lg:inline max-w-[480px]"
+              title={sources.data?.config_dir}
+            >
               {sources.data?.config_dir}
             </span>
           </div>
@@ -119,33 +158,84 @@ export function SettingsDataSourcesPanel() {
           {allItems.map(item => {
             const isActive = activeName === item.name
             const isSelected = selected === item.name
+            const plugin = pluginMap.get(item.name)
+            const pluginUnavailable = plugin && !plugin.available
+            const installing = installMut.isPending && installMut.variables === item.name
+            const uninstalling = uninstallMut.isPending && uninstallMut.variables === item.name
             return (
               <div
                 key={item.name}
                 onClick={() => {
+                  if (pluginUnavailable) return  // 未安装的插件不可选中
                   setSelected(item.name)
-                  if (item.name !== 'tickflow') {
+                  // 只有用户自定义源 (YAML) 才进编辑器; tickflow 和插件不可编辑
+                  if (customList.some(c => c.name === item.name)) {
                     editExisting.mutate(item.name)
                   }
                 }}
-                className={`relative cursor-pointer text-left rounded-lg border px-3.5 py-3 transition-all ${
-                  isSelected
-                    ? 'border-accent/50 bg-accent/5 ring-1 ring-accent/20'
-                    : 'border-border/60 bg-elevated/20 hover:bg-elevated/40'
+                className={`relative text-left rounded-lg border px-3.5 py-3 transition-all ${
+                  pluginUnavailable
+                    ? 'border-border/40 bg-elevated/10 opacity-70'
+                    : isSelected
+                      ? 'border-accent/50 bg-accent/5 ring-1 ring-accent/20 cursor-pointer'
+                      : 'border-border/60 bg-elevated/20 hover:bg-elevated/40 cursor-pointer'
                 }`}
               >
                 <div className="flex items-center gap-2 mb-1">
-                  <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${isActive ? 'bg-accent' : 'bg-transparent border border-muted/40'}`} />
+                  <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${
+                    pluginUnavailable ? 'bg-muted/30' : isActive ? 'bg-accent' : 'bg-transparent border border-muted/40'
+                  }`} />
                   <span className={`text-sm truncate flex-1 ${isActive ? 'font-medium text-foreground' : 'text-secondary'}`}>
                     {item.display_name}
                   </span>
                   {item.name === 'tickflow' && (
                     <span className="text-[9px] text-muted/50 uppercase tracking-wider shrink-0">内置</span>
                   )}
-                  {isActive ? (
+                  {pluginNames.has(item.name) && (
+                    <span className="text-[9px] text-muted/50 uppercase tracking-wider shrink-0">插件</span>
+                  )}
+                  {/* 右侧操作区: 插件未安装→安装按钮; 已激活→使用中; 否则→使用/卸载 */}
+                  {pluginUnavailable ? (
+                    installing ? (
+                      <span className="inline-flex items-center gap-1 text-[9px] text-accent shrink-0">
+                        <RefreshCw className="h-2.5 w-2.5 animate-spin" /> 安装中...
+                      </span>
+                    ) : (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); installMut.mutate(item.name) }}
+                        disabled={installMut.isPending}
+                        className="shrink-0 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium bg-accent/10 text-accent hover:bg-accent/20 transition-colors disabled:opacity-50"
+                      >
+                        <Zap className="h-2.5 w-2.5" /> 安装
+                      </button>
+                    )
+                  ) : isActive ? (
                     <span className="inline-flex items-center gap-0.5 text-[9px] text-accent shrink-0">
                       <Check className="h-2.5 w-2.5" /> 使用中
                     </span>
+                  ) : plugin ? (
+                    /* 已安装插件: 使用 + 卸载 */
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); switchProvider.mutate(item.name) }}
+                        disabled={switchProvider.isPending}
+                        className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-accent/10 text-accent hover:bg-accent/20 transition-colors disabled:opacity-50"
+                      >
+                        使用
+                      </button>
+                      {uninstalling ? (
+                        <RefreshCw className="h-2.5 w-2.5 animate-spin text-muted" />
+                      ) : (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); uninstallMut.mutate(item.name) }}
+                          disabled={uninstallMut.isPending}
+                          className="text-[10px] text-muted/50 hover:text-danger transition-colors disabled:opacity-40"
+                          title="卸载依赖"
+                        >
+                          卸载
+                        </button>
+                      )}
+                    </div>
                   ) : (
                     <button
                       onClick={(e) => { e.stopPropagation(); switchProvider.mutate(item.name) }}
@@ -167,6 +257,10 @@ export function SettingsDataSourcesPanel() {
                 )}
                 {item.name === 'tickflow' && (
                   <div className="text-[10px] text-muted/60 ml-3.5">日K · 除权 · 实时 · 分钟K</div>
+                )}
+                {/* 未安装插件显示安装命令提示 */}
+                {pluginUnavailable && plugin?.install_hint && (
+                  <div className="ml-3.5 mt-1 text-[10px] text-muted/40 font-mono truncate">{plugin.install_hint}</div>
                 )}
               </div>
             )
@@ -223,7 +317,7 @@ export function SettingsDataSourcesPanel() {
               onSwitch={() => switchProvider.mutate('tickflow')}
               switching={switchProvider.isPending}
             />
-          ) : (
+          ) : selected === '__new__' || customList.some(c => c.name === selected) ? (
             <DataSourceEditor
               key={selected}
               initial={null}
@@ -241,7 +335,15 @@ export function SettingsDataSourcesPanel() {
               onActivate={(name) => switchProvider.mutate(name)}
               onDelete={selected !== '__new__' && selectedCustom ? () => setConfirmDelete(selected) : undefined}
             />
-          )}
+          ) : pluginList.find(x => x.name === selected) ? (
+            /* 选中插件: 显示只读详情, 不进编辑器 */
+            <PluginDetail
+              plugin={pluginList.find(x => x.name === selected)!}
+              isActive={activeName === selected}
+              onSwitch={() => switchProvider.mutate(selected)}
+              switching={switchProvider.isPending}
+            />
+          ) : null}
         </motion.div>
       </AnimatePresence>
 
@@ -276,6 +378,45 @@ export function SettingsDataSourcesPanel() {
         </div>
       )}
     </div>
+  )
+}
+
+function PluginDetail({ plugin, isActive, onSwitch, switching }: {
+  plugin: PluginDataSourceItem
+  isActive: boolean
+  onSwitch: () => void
+  switching: boolean
+}) {
+  return (
+    <section className="rounded-card border border-border bg-surface p-6">
+      <div className="flex items-start gap-4 mb-5">
+        <div className="h-11 w-11 rounded-xl bg-accent/10 flex items-center justify-center shrink-0">
+          <Zap className="h-5 w-5 text-accent" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <h3 className="text-base font-semibold text-foreground">{plugin.display_name}</h3>
+            <span className="text-[10px] text-muted/50 uppercase tracking-wider">插件 · {plugin.runtime}</span>
+          </div>
+          {plugin.description && <p className="text-xs text-secondary leading-relaxed">{plugin.description}</p>}
+        </div>
+      </div>
+      <div className="flex items-center gap-3">
+        {isActive ? (
+          <span className="inline-flex items-center gap-1.5 text-xs text-accent">
+            <Check className="h-3.5 w-3.5" /> 当前使用中
+          </span>
+        ) : (
+          <button
+            onClick={onSwitch}
+            disabled={switching}
+            className="px-3 py-1.5 rounded-btn bg-accent/10 text-accent hover:bg-accent/20 text-xs font-medium transition-colors disabled:opacity-50"
+          >
+            切换为当前数据源
+          </button>
+        )}
+      </div>
+    </section>
   )
 }
 
