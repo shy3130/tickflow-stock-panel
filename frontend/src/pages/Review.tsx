@@ -104,8 +104,9 @@ export function Review() {
   const prefs = usePreferences()
   const reviewSched = prefs.data?.review_schedule ?? { enabled: false, hour: 15, minute: 10 }
   const feishuConfigured = !!(prefs.data?.feishu_webhook_url)
+  const wecomConfigured = !!(prefs.data?.wecom_webhook_url)
   // 推送渠道是独立的顶层偏好(多选), 与定时 / 实时行情无关, 常驻可单独设置
-  // []=不推送, ['feishu']=飞书(微信开发中, 仅占位)
+  // []=不推送, ['feishu']=飞书, ['wecom']=企业微信
   const reviewPushChannels = prefs.data?.review_push_channels ?? []
   // 弹窗内的本地草稿: 开关和时间都在本地改, 点「保存」才真正提交(避免开关一拨就关弹窗)
   const [draft, setDraft] = useState(reviewSched)
@@ -443,17 +444,31 @@ export function Review() {
                       {feishuConfigured ? '已配置' : '未配置'}
                     </span>
                   </button>
-                  {/* 微信(开发中, 占位不可选) */}
-                  <div className="flex items-center gap-2 rounded-btn border border-border/40 bg-base/20 px-2.5 py-1.5 opacity-60">
-                    <span className="flex h-3 w-3 shrink-0 items-center justify-center rounded border border-border" />
-                    <span className="text-[11px] text-secondary">微信</span>
-                    <span className="text-[9px] text-muted">公众号/企业微信</span>
-                    <span className="ml-auto rounded bg-muted/10 px-1 py-px text-[9px] text-muted">开发中</span>
-                  </div>
+                  {/* 企业微信(可用, 多选) */}
+                  <button
+                    type="button"
+                    disabled={pushMut.isPending}
+                    onClick={() => togglePushChannel('wecom')}
+                    className={cn(
+                      'flex w-full items-center gap-2 rounded-btn border px-2.5 py-1.5 text-left transition-colors disabled:opacity-50',
+                      reviewPushChannels.includes('wecom')
+                        ? 'border-accent/40 bg-accent/10'
+                        : 'border-border/60 bg-base/40 hover:bg-base/60',
+                    )}
+                  >
+                    <span className={cn('flex h-3 w-3 shrink-0 items-center justify-center rounded border', reviewPushChannels.includes('wecom') ? 'border-accent bg-accent text-white' : 'border-border')}>
+                      {reviewPushChannels.includes('wecom') && <Check className="h-2.5 w-2.5" />}
+                    </span>
+                    <span className="text-[11px] text-foreground">企业微信</span>
+                    <span className="text-[9px] text-muted">群机器人</span>
+                    <span className={cn('ml-auto text-[9px]', wecomConfigured ? 'text-emerald-500' : 'text-warning')}>
+                      {wecomConfigured ? '已配置' : '未配置'}
+                    </span>
+                  </button>
                 </div>
                 <p className="mt-1.5 text-[10px] leading-relaxed text-muted/70">
-                  手动或定时生成的复盘都会以卡片消息推送完整报告。复用「设置 → 实时监控」的飞书 Webhook。
-                  {reviewPushChannels.includes('feishu') && !feishuConfigured && (
+                  手动或定时生成的复盘都会推送完整报告。复用「设置 → 实时监控」的 Webhook 配置。
+                  {((reviewPushChannels.includes('feishu') && !feishuConfigured) || (reviewPushChannels.includes('wecom') && !wecomConfigured)) && (
                     <Link to="/settings?tab=monitoring" className="ml-1 text-accent hover:underline" onClick={() => setShowSchedule(false)}>
                       前往配置 →
                     </Link>

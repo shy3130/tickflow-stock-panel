@@ -755,6 +755,17 @@ def _maybe_push_review(content: str, meta: dict) -> None:
                     url, "TickFlow · 每日复盘", subtitle, content, secret
                 )
                 logger.info("review push(feishu) %s", "sent" if ok else "failed")
+            elif ch == "wecom":
+                url = preferences.get_wecom_webhook_url()
+                if not url:
+                    logger.info("review push(wecom) skipped: webhook not configured")
+                    continue
+                # 企业微信 markdown 标题已含一级标题, subtitle 拼到正文首行
+                full_body = (f"**{subtitle}**\n\n{content}" if subtitle else content)
+                ok = webhook_adapter.send_wecom_markdown(
+                    url, "TickFlow · 每日复盘", full_body
+                )
+                logger.info("review push(wecom) %s", "sent" if ok else "failed")
             # 未来更多渠道在此追加分支
     except Exception as e:  # noqa: BLE001
         logger.warning("review push error: %s", e)

@@ -125,11 +125,15 @@ export function AnalysisKChart({
 }: Props) {
   const chartRef = useRef<HTMLDivElement>(null)
   const chartInstRef = useRef<ECharts | null>(null)
+  /** seriesIndex → levelKey 映射, buildOption 填充, ECharts hover 事件反查 */
+  const seriesKeyMapRef = useRef<Map<number, string>>(new Map())
   // 主题: buildOption 内部用 CT() 动态取色, 这里只负责切换时触发重建
   const theme = useTheme()
   const [activeTypes, setActiveTypes] = useState<Set<LevelType>>(new Set(defaultLevelTypes))
   /** 枢轴点显示到第几档:1=只P+R1/S1, 2=到R2/S2, 3=全档(R3/S3) */
   const [pivotRank, setPivotRank] = useState<1 | 2 | 3>(1)
+  /** 双向联动高亮: hover 价位标签 ↔ hover 下方文字行。值为 levelKey, null=无高亮 */
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null)
 
   // 数据预处理 + 带状曲线序列对齐(后端 series 的日期范围可能与 rows 不同,需映射)
   const { dates, candle, vols, dateIndex, zoomStart, alignedSeries } = useMemo(() => {
@@ -221,6 +225,8 @@ export function AnalysisKChart({
     const series: any[] = [
       {
         name: 'K', type: 'candlestick', data: candle, animation: false,
+        // z=2 让蜡烛始终在价位线(z=1)之上, hover 高亮价位线时不会被遮挡/变淡
+        z: 2,
         itemStyle: {
           color: THEME.bull, color0: THEME.bear,
           borderColor: THEME.bull, borderColor0: THEME.bear,
@@ -236,18 +242,31 @@ export function AnalysisKChart({
 
     // 价位水平线 —— 用 line series(恒定值)画水平线,endLabel 显示标签文字;
     // 与通道曲线一致,标签落在右侧 grid.right 预留带(外侧),不压蜡烛。
+    // hoveredKey 非空时:命中线加粗高亮,其它线淡化(opacity 0.15),形成聚焦效果。
+    const dimming = hoveredKey != null
     for (const p of priceLines) {
+      const k = levelKey(p.type, p.value)
+      const hit = hoveredKey === k
+      const opacity = dimming ? (hit ? 1 : 0.12) : 0.7
+      const width = hit ? 2 : 1
       series.push({
-        name: p.label, type: 'line', silent: true, animation: false,
+        name: p.label, type: 'line', silent: false, animation: false,
         symbol: 'none',
         data: dates.map(() => p.value),
-        lineStyle: { width: 1, color: p.color, type: 'dashed', opacity: 0.7 },
+        // 默认 z=1 在蜡烛(z=2)之下; 命中时 zlevel=10 提到独立顶层, 标签不再被遮挡
+        z: 1,
+        zlevel: hit ? 10 : 0,
+        lineStyle: { width, color: p.color, type: 'dashed', opacity },
         itemStyle: { color: p.color },
         endLabel: {
           show: true,
           formatter: () => `${p.label} ${p.value.toFixed(2)}`,
-          color: p.color, fontSize: 9, fontFamily: 'JetBrains Mono, monospace',
-          backgroundColor: 'rgba(15,23,42,0.85)', padding: [1, 4], borderRadius: 2,
+          color: p.color, fontSize: hit ? 10 : 9, fontFamily: 'JetBrains Mono, monospace',
+          fontWeight: hit ? 'bold' : 'normal',
+          backgroundColor: hit ? CT().tooltipBg : CT().infoBarBg,
+          borderColor: hit ? p.color : 'transparent',
+          borderWidth: hit ? 1 : 0,
+          padding: [2, 5], borderRadius: 2,
           distance: 6,
         },
       })
@@ -264,21 +283,46 @@ export function AnalysisKChart({
       for (let i = data.length - 1; i >= 0; i--) {
         if (data[i] != null) { lastVal = data[i]; break }
       }
+      // 曲线 key 用 group(同组上下轨联动),hover 命中时高亮
+      const hit = hoveredKey === def.group
+      const opacity = dimming ? (hit ? 1 : 0.12) : 0.8
+      const width = hit ? 1.8 : 1
       series.push({
         name: def.endLabel, type: 'line', data: data.map(v => v ?? '-'),
-        smooth: true, symbol: 'none', silent: true, animation: false,
-        lineStyle: { width: 1, color: def.color, type: def.dashed === false ? 'solid' : 'dashed', opacity: 0.8 },
+        smooth: true, symbol: 'none', silent: false, animation: false,
+        z: 1,
+        zlevel: hit ? 10 : 0,
+        lineStyle: { width, color: def.color, type: def.dashed === false ? 'solid' : 'dashed', opacity },
         itemStyle: { color: def.color },
         // 右侧端点标签:显示该通道的最新数值,距绘图区右缘留 6px 间距
         endLabel: lastVal != null ? {
           show: true,
           formatter: () => `${lastVal!.toFixed(2)}`,
-          color: def.color, fontSize: 9, fontFamily: 'JetBrains Mono, monospace',
-          backgroundColor: 'rgba(15,23,42,0.85)', padding: [1, 4], borderRadius: 2,
+          color: def.color, fontSize: hit ? 10 : 9, fontFamily: 'JetBrains Mono, monospace',
+          fontWeight: hit ? 'bold' : 'normal',
+          backgroundColor: hit ? CT().tooltipBg : CT().infoBarBg,
+          borderColor: hit ? def.color : 'transparent',
+          borderWidth: hit ? 1 : 0,
+          padding: [2, 5], borderRadius: 2,
           distance: 6,
         } : undefined,
       })
     }
+
+    // 填充 seriesIndex → levelKey 映射(K/成交量索引 0/1 不参与联动)
+    const keyMap = new Map<number, string>()
+    // series[0]=K线, series[1]=成交量, 之后是按 priceLines + CURVE_DEFS 顺序 push 的
+    let si = 2
+    for (const p of priceLines) {
+      keyMap.set(si++, levelKey(p.type, p.value))
+    }
+    for (const def of CURVE_DEFS) {
+      if (!activeTypes.has(def.group)) continue
+      const data = alignedSeries[def.alignedKey]
+      if (!data || !data.some(v => v != null)) continue
+      keyMap.set(si++, def.group)
+    }
+    seriesKeyMapRef.current = keyMap
 
     return {
       animation: false,
@@ -336,10 +380,18 @@ export function AnalysisKChart({
           onDateClick(dates[params.dataIndex])
         }
       })
+      // hover 价位线/曲线 endLabel → 联动高亮(与下方文字行双向联动)
+      chartInstRef.current.on('mouseover', (params: any) => {
+        if (params.componentType === 'series') {
+          const k = seriesKeyMapRef.current.get(params.seriesIndex as number)
+          if (k) setHoveredKey(k)
+        }
+      })
+      chartInstRef.current.on('globalout', () => setHoveredKey(null))
     }
     chartInstRef.current.setOption(buildOption(), true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, levels, series, seriesDates, activeTypes, pivotRank, markers, ranges, height, theme])
+  }, [rows, levels, series, seriesDates, activeTypes, pivotRank, markers, ranges, height, theme, hoveredKey])
 
   // resize
   useEffect(() => {
@@ -424,6 +476,8 @@ export function AnalysisKChart({
           activeTypes={activeTypes}
           pivotRank={pivotRank}
           close={rows.length ? rows[rows.length - 1].close : undefined}
+          hoveredKey={hoveredKey}
+          onHover={setHoveredKey}
         />
       )}
     </div>
@@ -432,12 +486,14 @@ export function AnalysisKChart({
 
 // ===== 价位统计面板(图表下方,结构化文本展示) =====
 function LevelOverview({
-  levels, activeTypes, pivotRank, close,
+  levels, activeTypes, pivotRank, close, hoveredKey, onHover,
 }: {
   levels: Record<LevelType, PriceLevel[]>
   activeTypes: Set<LevelType>
   pivotRank: 1 | 2 | 3
   close?: number
+  hoveredKey: string | null
+  onHover: (k: string | null) => void
 }) {
   // 收集当前显示的点位(同 collectPriceLines 的过滤逻辑)
   const visible: PriceLevel[] = []
@@ -469,11 +525,21 @@ function LevelOverview({
 
   const Row = ({ p }: { p: PriceLevel }) => {
     const color = LEVEL_GROUPS.find(g => g.key === p.type)?.color ?? CT().text
+    const k = levelKey(p.type, p.value)
+    const hit = hoveredKey === k
+    const dim = hoveredKey != null && !hit
     return (
-      <div className="flex items-center gap-2 py-0.5">
-        <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
-        <span className="text-[11px] text-secondary w-24 shrink-0 truncate">{p.label}</span>
-        <span className="text-[11px] font-mono text-foreground">{p.value.toFixed(2)}</span>
+      <div
+        onMouseEnter={() => onHover(k)}
+        onMouseLeave={() => onHover(null)}
+        className={`flex items-center gap-2 py-0.5 px-1.5 -mx-1.5 rounded transition-colors cursor-default ${
+          hit ? 'bg-elevated/60' : ''
+        }`}
+        style={dim ? { opacity: 0.35 } : undefined}
+      >
+        <span className="h-1.5 w-1.5 rounded-full shrink-0 transition-transform" style={{ backgroundColor: color, transform: hit ? 'scale(1.5)' : 'scale(1)' }} />
+        <span className={`text-[11px] w-24 shrink-0 truncate ${hit ? 'text-foreground font-medium' : 'text-secondary'}`}>{p.label}</span>
+        <span className={`text-[11px] font-mono ${hit ? 'text-foreground font-bold' : 'text-foreground'}`}>{p.value.toFixed(2)}</span>
         <span className="text-[9px] font-mono text-muted">{fmtPct(p.value)}</span>
       </div>
     )
@@ -518,9 +584,9 @@ function collectPriceLines(
   levels: Record<LevelType, PriceLevel[]> | undefined,
   active: Set<LevelType>,
   pivotRank: 1 | 2 | 3,
-): { value: number; label: string; color: string }[] {
+): { value: number; label: string; color: string; type: string }[] {
   if (!levels) return []
-  const out: { value: number; label: string; color: string }[] = []
+  const out: { value: number; label: string; color: string; type: string }[] = []
   for (const g of LEVEL_GROUPS) {
     if (!active.has(g.key)) continue
     for (const p of levels[g.key] ?? []) {
@@ -530,7 +596,7 @@ function collectPriceLines(
       // sr 组现为成交密集区水平点,直接画线即可,无需特判。
       if (p.type === 'boll' || p.type === 'keltner_s' || p.type === 'keltner_m'
           || p.type === 'keltner_l' || p.type === 'atr_stop') continue
-      out.push({ value: p.value, label: p.label, color: strengthColor(p.strength, g.color) })
+      out.push({ value: p.value, label: p.label, color: strengthColor(p.strength, g.color), type: p.type })
     }
   }
   return out
@@ -541,6 +607,11 @@ function strengthColor(strength: string | undefined, base: string): string {
   if (strength === 'weak') return base + '8C'
   if (strength === 'medium') return base + 'D9'
   return base
+}
+
+/** 价位唯一标识: 同类型同价格视为同一点位(用于联动高亮)。 */
+function levelKey(type: string, value: number): string {
+  return `${type}-${value.toFixed(2)}`
 }
 
 function fmtVol(v: number): string {

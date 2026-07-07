@@ -5,8 +5,10 @@
 - 价格折线：涨（收盘 ≥ 昨收）红色，跌绿色 — 以昨收价(prevClose)为基准, 不是当日开盘价
 - 昨收基准线：浅灰实线（从开到右），比虚线更明显
 - 分时均线：黄色细线（成交均价，这里用 close 的累计均值近似）
+- 价格线下方渐变填充: 顶部半透明实色 → 底部全透明(与个股对话框 EChartsIntraday 一致)
 空数据返回等尺寸占位 SVG，保证加载前后尺寸一致（同 MiniCandlestick 模式）。
 */
+import { useId } from 'react'
 import type { MinuteKlineRow } from '@/lib/api'
 
 export function MiniIntraday({ rows, prevClose, changePct, width = 100, height = 56 }: {
@@ -80,16 +82,31 @@ export function MiniIntraday({ rows, prevClose, changePct, width = 100, height =
   // 均线 points
   const avgPoints = avgLine.map((v, i) => `${xScale(i).toFixed(1)},${yScale(v).toFixed(1)}`).join(' ')
 
+  // 渐变填充多边形 points: 价格折线 + 底部右下角 + 左下角, 闭合到画布底边
+  const bottomY = H - padY
+  const areaPoints = `${pricePoints} ${xScale(n - 1).toFixed(1)},${bottomY.toFixed(1)} ${xScale(0).toFixed(1)},${bottomY.toFixed(1)}`
+
   // 昨收参考线 y 坐标
   const prevCloseY = yScale(baseline)
 
+  // 渐变 id 唯一化(自选列表同屏多张图, 避免互相覆盖)
+  const gradId = useId().replace(/:/g, '')
+
   return (
     <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block">
+      <defs>
+        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor={color} stopOpacity={0.4} />
+          <stop offset="1" stopColor={color} stopOpacity={0} />
+        </linearGradient>
+      </defs>
       {/* 昨收基准线 (深灰实线, 比虚线更明显) */}
       <line
         x1={0} y1={prevCloseY} x2={W} y2={prevCloseY}
         stroke={LINE_PREV_CLOSE} strokeWidth={0.6} opacity={0.7}
       />
+      {/* 价格折线下方渐变填充 */}
+      <polygon points={areaPoints} fill={`url(#${gradId})`} stroke="none" />
       {/* 分时均线 (暖黄细线) */}
       <polyline
         points={avgPoints}

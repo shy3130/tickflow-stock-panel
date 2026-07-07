@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { motion } from 'framer-motion'
-import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, Gauge, Zap, ListPlus } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, Gauge, Zap, ListPlus, HelpCircle } from 'lucide-react'
 import {
   api,
   type StrategyBacktestResult,
@@ -88,6 +88,57 @@ const quickRangeTitle = (range: QuickRangeConfig) => range.unit === 'all'
 
 const INPUT_CLS = `w-full px-2.5 py-1.5 rounded-input bg-surface border border-border text-xs
   focus:outline-none focus:border-accent transition-colors duration-150 ease-smooth`
+
+/** 建仓/清仓口径说明 — 黄色问号图标, 点击弹出气泡。
+ * 用 fixed 定位脱离父容器 overflow 裁剪(左侧表单是 overflow-y-auto, absolute 气泡会被裁)。 */
+function FillRuleHint() {
+  const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+  const iconRef = useRef<HTMLDivElement>(null)
+
+  const handleOpen = () => {
+    if (!open && iconRef.current) {
+      const r = iconRef.current.getBoundingClientRect()
+      setPos({ top: r.bottom + 4, left: r.left })
+    }
+    setOpen(v => !v)
+  }
+
+  // 气泡宽度 256px(w-64), 若右侧超出视口则向左对齐
+  const bubbleLeft = pos ? Math.min(pos.left, window.innerWidth - 256 - 8) : 0
+
+  return (
+    <div ref={iconRef} className="relative inline-flex items-center">
+      <HelpCircle
+        className="h-3.5 w-3.5 text-yellow-500/80 hover:text-yellow-500 cursor-help transition-colors"
+        onClick={handleOpen}
+      />
+      <AnimatePresence>
+        {open && pos && (
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+            <motion.div
+              initial={{ opacity: 0, y: -4, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -4, scale: 0.95 }}
+              transition={{ duration: 0.15 }}
+              style={{ top: pos.top, left: bubbleLeft }}
+              className="fixed z-50 w-64 bg-surface border border-border rounded-md shadow-xl p-3 text-[11px] text-secondary leading-relaxed"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="font-medium text-foreground mb-1.5">成交口径说明</div>
+              <div className="space-y-1">
+                <div><b className="text-foreground">建仓</b>默认<b className="text-foreground">次日开盘</b>(避免未来函数)</div>
+                <div><b className="text-foreground">清仓</b>默认<b className="text-foreground">当日收盘</b>(持仓中可盘中/收盘卖)</div>
+                <div>买卖点由<b className="text-foreground">策略触发器</b>决定,这里只决定成交价。</div>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
 
 const SRC_MAP: Record<string, string> = { builtin: '内置', custom: '自定义', ai: 'AI' }
 const TRADE_PAGE_SIZE_OPTIONS = [10, 20, 30, 50, 100]
@@ -1267,7 +1318,10 @@ export function StrategyBacktest() {
 
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <label className="text-xs font-medium text-secondary block mb-1.5">建仓口径</label>
+            <div className="flex items-center gap-1 mb-1.5">
+              <label className="text-xs font-medium text-secondary">建仓口径</label>
+              <FillRuleHint />
+            </div>
             <select value={entryFill} onChange={e => setEntryFill(e.target.value as any)} className={INPUT_CLS}>
               <option value="open_t+1">次日开盘成交（推荐）</option>
               <option value="close_t">信号日收盘成交</option>
@@ -1281,7 +1335,6 @@ export function StrategyBacktest() {
             </select>
           </div>
         </div>
-        <div className="mt-1 text-[10px] leading-4 text-muted">建仓默认次日开盘（避免未来函数），清仓默认当日收盘（持仓中可盘中/收盘卖）；买卖点由策略触发器决定，这里只决定成交价。</div>
 
         {simMode === 'position' && (
         <div className="grid grid-cols-2 gap-2">
@@ -1307,16 +1360,20 @@ export function StrategyBacktest() {
             <input type="number" min={0} max={100} value={maxExposure} onChange={e => setMaxExposure(e.target.value)}
               className={INPUT_CLS} />
           </div>
+        </div>
+        )}
+        {simMode === 'position' && (
+        <div className="grid grid-cols-3 gap-2">
           <div>
-            <label className="text-xs font-medium text-secondary block mb-1.5">佣金(万分之)</label>
+            <label className="text-[10px] font-medium text-secondary block mb-1">佣金 ‱</label>
             <input type="number" min={0} value={fees} onChange={e => setFees(e.target.value)} className={INPUT_CLS} />
           </div>
           <div>
-            <label className="text-xs font-medium text-secondary block mb-1.5">印花税(千分之)</label>
+            <label className="text-[10px] font-medium text-secondary block mb-1">印花税 ‰</label>
             <input type="number" min={0} value={stampTax} onChange={e => setStampTax(e.target.value)} className={INPUT_CLS} />
           </div>
           <div>
-            <label className="text-xs font-medium text-secondary block mb-1.5">滑点(万分之)</label>
+            <label className="text-[10px] font-medium text-secondary block mb-1">滑点 ‱</label>
             <input type="number" min={0} value={slippage} onChange={e => setSlippage(e.target.value)} className={INPUT_CLS} />
           </div>
         </div>

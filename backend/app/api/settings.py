@@ -398,6 +398,7 @@ def get_preferences() -> dict:
         "system_notify_enabled": preferences.get_system_notify_enabled(),
         "feishu_webhook_url": preferences.get_feishu_webhook_url(),
         "feishu_webhook_secret": preferences.get_feishu_webhook_secret(),
+        "wecom_webhook_url": preferences.get_wecom_webhook_url(),
         "webhook_enabled_default": preferences.get_webhook_enabled_default(),
         "sidebar_index_symbols": preferences.get_sidebar_index_symbols(),
         "nav_order": preferences.get_nav_order(),
@@ -819,6 +820,31 @@ def update_feishu_webhook(req: FeishuWebhookPrefsIn) -> dict:
     saved_url = preferences.set_feishu_webhook_url(url)
     saved_secret = preferences.set_feishu_webhook_secret((req.secret or "").strip())
     return {"feishu_webhook_url": saved_url, "feishu_webhook_secret": saved_secret}
+
+
+class WecomWebhookPrefsIn(BaseModel):
+    url: str
+
+
+@router.put("/preferences/wecom-webhook")
+def update_wecom_webhook(req: WecomWebhookPrefsIn) -> dict:
+    """企业微信群机器人 Webhook 地址 — 与飞书并列的第二推送通道。
+
+    - url: 传入空串表示清空配置; 非空需为合法企业微信群机器人地址, 或纯 key。
+    - 用户可只填 key (webhook/send?key=xxx 的 xxx 部分), 后端自动补全为完整 URL。
+    """
+    from app.services import preferences
+    from app.services import webhook_adapter
+
+    url = (req.url or "").strip()
+    if url and not webhook_adapter.is_valid_wecom_url(url):
+        raise HTTPException(
+            status_code=400,
+            detail="Webhook 地址非法, 需为企业微信群机器人地址 "
+                   "(https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=... 或纯 key)",
+        )
+    saved_url = preferences.set_wecom_webhook_url(url)
+    return {"wecom_webhook_url": saved_url}
 
 
 class WebhookEnabledDefaultIn(BaseModel):

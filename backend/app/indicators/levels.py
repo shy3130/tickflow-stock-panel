@@ -60,15 +60,31 @@ LEVEL_TYPES = {
 # ================================================================
 
 def _support_resistance(df: pl.DataFrame, bins: int = 40) -> list[dict]:
-    """成交量分布 (Volume Profile) —— 真正基于价+量的支撑/压力位。
+    """筹码分布(换手率衰减模型) —— 国内主流 A 股支撑/压力位算法。
 
-    把每个价位层按价格分桶,统计落在该桶的累计成交量,取高成交密集区作为关键
-    价位带。与 BOLL/Keltner 等"波动通道"不同,成交密集区反映的是真实换手堆积,
-    是经典意义的支撑/压力。
+    算法依据:大智慧/同花顺/通达信"筹码分布"专利模型(CN109711994A),物理含义是
+    "当前各价位还剩多少筹码(持仓成本分布)",而非海外 Volume Profile 的"历史成交
+    堆积"。两者关键区别在于衰减方式:
+      - 海外 VP: 无衰减, 历史成交永远累加(反映"曾经在哪换过手")
+      - 国内筹码分布: 按换手率衰减, 反映"现在谁还拿着"(物理正确的持仓成本)
 
-    密集区 = 成交量高于均值的桶,按成交量降序取前 3 个作为关键价位带:
-      - POC(控制点):成交量最大的桶,标记为 strong
-      - 其他高成交区:高于均值,标记为 medium
+    核心迭代公式(逐日, 从老到新):
+        当日收盘后各价位筹码 = 前一日各价位筹码 × (1 - 当日换手率)
+                            + 当日新增成交(按 high~low 区间分摊到对应价位桶)
+
+    物理解释: 今天市场换了 turnover_rate 比例的手, 意味着昨天所有价位的筹码中有
+    这么比例被换走了(被卖掉), 同时今天新成交的筹码按当天价格区间分布在各价位。
+    这样:
+      - 低换手股票的老筹码衰减慢(长期横盘低换手 → 历史套牢盘长期保留, 符合真实)
+      - 高换手股票的老筹码快速消失(近期高换手 → 老筹码被消化, 近期成本占主导)
+    比固定时间衰减更聪明: 停牌期间换手率为 0, 筹码不动; 固定时间衰减会错误地衰减。
+
+    成交量按 high~low 价格区间分摊到桶(而非全归 (high+low)/2 中点), 振幅大的 K 线
+    不再污染中点价, 更接近真实成交分布。
+
+    密集区输出:
+      - POC(控制点):当前筹码量最大的桶(=最多人持仓的成本区), strong
+      - 其他高筹码区:高于均值, medium, 最多 2 个
     """
     if df.is_empty() or "volume" not in df.columns or df.height < 20:
         return []
@@ -78,33 +94,54 @@ def _support_resistance(df: pl.DataFrame, bins: int = 40) -> list[dict]:
     if not (hi > lo > 0):
         return []
 
-    # 每根 K 的价格区间中点 × 成交量 ≈ 该价位层贡献的成交量(简化模型)
-    df2 = df.select([
-        ((pl.col("high") + pl.col("low")) / 2).alias("mid"),
-        pl.col("volume").alias("vol"),
-    ]).drop_nulls()
+    n = df.height
 
-    # 桶边界:bins 个桶需要 bins-1 个内部 break,cut 据此切成 bins 段
+    # 桶边界:bins 个桶需要 bins-1 个内部 break
     step = (hi - lo) / bins
-    edges = [lo + i * step for i in range(bins + 1)]   # 含首尾,共 bins+1 个边界值
-    breaks = edges[1:-1]                                 # 内部 break,bins-1 个
-    bin_labels = [f"{i}" for i in range(bins)]          # 桶序号 0..bins-1
-    # 至少要有 1 个不同的内部 break
-    if len(set(f"{b:.6f}" for b in breaks)) < 1:
-        return []
+    edges = [lo + i * step for i in range(bins + 1)]
 
-    df2 = df2.with_columns(
-        pl.col("mid").cut(breaks, labels=bin_labels).alias("bin")
-    )
-    prof = df2.group_by("bin").agg(pl.col("vol").sum())
-    if prof.is_empty():
-        return []
+    # 取换手率序列(百分数, 如 1.23 表示 1.23%)。无该字段则退化为纯累加(无衰减)。
+    has_turnover = "turnover_rate" in df.columns
+    turnovers = df["turnover_rate"].to_list() if has_turnover else [0.0] * n
 
-    # 把桶序号字符串还原为 int,以便回查 edges;并按序号排序保证可索引
-    prof = prof.with_columns(pl.col("bin").cast(pl.Int64).alias("bi")).sort("bi")
-    bin_ids = prof["bi"].to_list()
-    vols = prof["vol"].to_list()
-    mean_vol = sum(vols) / len(vols) if vols else 0
+    highs = df["high"].to_list()
+    lows = df["low"].to_list()
+    vols = df["volume"].to_list()
+
+    # 逐日迭代: 保留各桶的"当前筹码量"。
+    # 顺序: 从老(i=0)到新(i=n-1)。每日先把存量按 (1 - turnover) 衰减, 再叠加当日新增。
+    chips = [0.0] * bins
+    for i in range(n):
+        t = float(turnovers[i] or 0)
+        # 换手率正常 0~100, 异常值(负/超大)钳制到 [0, 1] 区间比例
+        decay_ratio = 1.0 - max(0.0, min(t, 100.0)) / 100.0
+
+        # 1) 存量筹码按今日换手率衰减(被卖掉的部分移除)
+        if decay_ratio < 1.0:
+            for k in range(bins):
+                chips[k] *= decay_ratio
+
+        # 2) 当日新增成交按 high~low 区间分摊到对应价位桶
+        v = vols[i] or 0
+        if v > 0:
+            k_low = min(int((lows[i] - lo) / step), bins - 1)
+            k_high = min(int((highs[i] - lo) / step), bins - 1)
+            if k_low > k_high:
+                k_low, k_high = k_high, k_low
+            if k_high < 0 or k_low >= bins:
+                continue
+            k_low = max(k_low, 0)
+            k_high = min(k_high, bins - 1)
+            share = v / (k_high - k_low + 1)
+            for k in range(k_low, k_high + 1):
+                chips[k] += share
+
+    # 只保留有筹码的桶
+    bin_ids = [k for k in range(bins) if chips[k] > 0]
+    if not bin_ids:
+        return []
+    vals = [chips[k] for k in bin_ids]
+    mean_val = sum(vals) / len(vals) if vals else 0
 
     def bin_mid(bin_id: int) -> float:
         return (edges[bin_id] + edges[bin_id + 1]) / 2
@@ -112,14 +149,14 @@ def _support_resistance(df: pl.DataFrame, bins: int = 40) -> list[dict]:
     close = float(df.tail(1)["close"][0])
 
     out: list[dict] = []
-    # POC:成交量最大的桶
-    poc_pos = max(range(len(vols)), key=lambda i: vols[i])
+    # POC: 当前筹码量最大的桶(最多人持仓的成本区)
+    poc_pos = max(range(len(vals)), key=lambda i: vals[i])
     poc_mid = bin_mid(bin_ids[poc_pos])
     out.append({"value": round(poc_mid, 2), "label": "成交密集区(POC)",
                 "type": "sr", "side": _side(poc_mid, close), "strength": "strong"})
 
-    # 其他高成交区(高于均值,排除 POC),按成交量降序取 2 个
-    candidates = [(i, v) for i, v in enumerate(vols) if v > mean_vol and i != poc_pos]
+    # 其他高筹码区(高于均值, 排除 POC), 按筹码量降序取 2 个
+    candidates = [(i, v) for i, v in enumerate(vals) if v > mean_val and i != poc_pos]
     candidates.sort(key=lambda x: x[1], reverse=True)
     for i, _v in candidates[:2]:
         mid = bin_mid(bin_ids[i])
@@ -373,8 +410,10 @@ def _gap_levels(df: pl.DataFrame, lookback: int = 120) -> list[dict]:
     向上缺口:当日 low > 前日 high(开盘跳空高开,全天未回补)
     向下缺口:当日 high < 前日 low(开盘跳空低开,全天未回补)
 
-    缺口是天然的支撑/阻力位。只保留"未回补"的(后续价格未回到缺口区间内),
-    并按价格聚合相近缺口(±0.5%),每方向只取距当前价最近的 2~3 个。
+    缺口是天然的支撑/阻力位。只保留"未回补"的:缺口形成后,后续任何一根 K 线的
+    价格(low/high)只要回到缺口区间内,就算已回补(支撑/阻力已被测试消化),过滤掉。
+    这与"当前价是否在缺口内"无关 —— 即使价格后来远离,只要曾经回补过就不算有效缺口。
+    最后按价格聚合相近缺口(±0.5%),每方向只取距当前价最近的 2~3 个。
     """
     if df.is_empty() or df.height < 5:
         return []
@@ -383,34 +422,44 @@ def _gap_levels(df: pl.DataFrame, lookback: int = 120) -> list[dict]:
     highs = sub["high"].to_list()
     lows = sub["low"].to_list()
 
-    up_gaps: list[tuple[float, float]] = []   # (缺口低点, 缺口高点)
-    dn_gaps: list[tuple[float, float]] = []
+    # 收集缺口: (形成位置 i, 缺口下沿, 缺口上沿)
+    # 向上缺口: 第 i 日 low > 第 i-1 日 high, 缺口区间 = (highs[i-1], lows[i])
+    # 向下缺口: 第 i 日 high < 第 i-1 日 low, 缺口区间 = (highs[i], lows[i-1])
+    up_gaps: list[tuple[int, float, float]] = []
+    dn_gaps: list[tuple[int, float, float]] = []
     for i in range(1, len(highs)):
         if _ok(highs[i]) and _ok(lows[i]) and _ok(highs[i - 1]) and _ok(lows[i - 1]):
-            if lows[i] > highs[i - 1]:          # 向上缺口
-                up_gaps.append((highs[i - 1], lows[i]))
-            elif highs[i] < lows[i - 1]:        # 向下缺口
-                dn_gaps.append((highs[i], lows[i - 1]))
+            if lows[i] > highs[i - 1]:
+                up_gaps.append((i, float(highs[i - 1]), float(lows[i])))
+            elif highs[i] < lows[i - 1]:
+                dn_gaps.append((i, float(highs[i]), float(lows[i - 1])))
 
-    def _filter_unfilled(gaps: list[tuple[float, float]], is_up: bool) -> list[float]:
-        """过滤掉已被后续价格回补的缺口,取缺口价位中点。"""
+    def _filter_unfilled(gaps: list[tuple[int, float, float]]) -> list[float]:
+        """过滤掉已被回补的缺口。
+
+        回补判定: 缺口在位置 i 形成, 向后扫描 i+1..end, 只要任意一根 K 线的价格区间
+        完全覆盖缺口真空带(low <= g_hi 且 high >= g_lo), 即价格真正穿越了缺口 → 已回补。
+        仅"触及缺口边缘"(如 low 跌到上沿)不算回补, 因为缺口是价格真空带, 必须整个
+        被某根 K 线的高低区间覆盖才算填补了真空。
+        """
         mids: list[float] = []
-        for g_lo, g_hi in gaps:
-            # 未回补判定:当前价不在缺口区间内
-            if is_up and close >= g_hi:       # 向上缺口:价格已超过缺口上沿 = 未回补(站在缺口上方)
+        for i, g_lo, g_hi in gaps:
+            filled = False
+            for j in range(i + 1, len(highs)):
+                if lows[j] <= g_hi and highs[j] >= g_lo:
+                    filled = True
+                    break
+            if not filled:
                 mids.append((g_lo + g_hi) / 2)
-            elif not is_up and close <= g_lo:  # 向下缺口:价格已低于缺口下沿 = 未回补
-                mids.append((g_lo + g_hi) / 2)
-        # 聚合相近缺口 + 按距当前价排序取最近 3 个
         agg = _aggregate_levels(mids, 0.005)
         agg.sort(key=lambda v: abs(v - close))
         return agg[:3]
 
     out: list[dict] = []
-    for mid in _filter_unfilled(up_gaps, True):
+    for mid in _filter_unfilled(up_gaps):
         out.append({"value": round(mid, 2), "label": "向上缺口",
                     "type": "gap", "side": _side(mid, close), "strength": "medium"})
-    for mid in _filter_unfilled(dn_gaps, False):
+    for mid in _filter_unfilled(dn_gaps):
         out.append({"value": round(mid, 2), "label": "向下缺口",
                     "type": "gap", "side": _side(mid, close), "strength": "medium"})
     return out

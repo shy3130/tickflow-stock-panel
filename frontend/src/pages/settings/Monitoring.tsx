@@ -69,12 +69,21 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const [feishuDraft, setFeishuDraft] = useState(feishuWebhookUrl)
   const [feishuSecretDraft, setFeishuSecretDraft] = useState(feishuWebhookSecret)
   const [feishuError, setFeishuError] = useState('')
+  // 企业微信 webhook
+  const wecomWebhookUrl = prefs?.wecom_webhook_url ?? ''
+  const [wecomDraft, setWecomDraft] = useState(wecomWebhookUrl)
+  const [wecomError, setWecomError] = useState('')
   // 飞书渠道配置区展开态 (推送通知卡片内)
   const [channelOpen, setChannelOpen] = useState(false)
+  // 企业微信渠道配置区展开态
+  const [wecomOpen, setWecomOpen] = useState(false)
   useEffect(() => {
     setFeishuDraft(feishuWebhookUrl)
     setFeishuSecretDraft(feishuWebhookSecret)
   }, [feishuWebhookUrl, feishuWebhookSecret])
+  useEffect(() => {
+    setWecomDraft(wecomWebhookUrl)
+  }, [wecomWebhookUrl])
   const watchlistSymbols = prefs?.realtime_watchlist_symbols ?? []
   const watchlist = useQuery({
     queryKey: QK.watchlist,
@@ -143,6 +152,26 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     }
     saveFeishuWebhook.mutate({ url, secret })
   }, [feishuDraft, feishuSecretDraft, saveFeishuWebhook])
+
+  const saveWecomWebhook = useMutation({
+    mutationFn: (url: string) => api.updateWecomWebhook(url),
+    onSuccess: () => {
+      setWecomError('')
+      toast('企业微信 Webhook 已保存', 'success')
+      qc.invalidateQueries({ queryKey: QK.preferences })
+    },
+    onError: (err: any) => setWecomError(String(err?.message ?? '保存失败')),
+  })
+  const WECOM_PREFIX = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send'
+  const submitWecom = useCallback(() => {
+    const url = wecomDraft.trim()
+    // 允许完整 URL 或纯 key (36位UUID样式)
+    if (url && !url.startsWith(WECOM_PREFIX) && url.length < 20) {
+      setWecomError('请输入完整 Webhook 地址或纯 key (至少 20 位)')
+      return
+    }
+    saveWecomWebhook.mutate(url)
+  }, [wecomDraft, saveWecomWebhook])
 
   const runFix = useMutation({
     mutationFn: () => api.runLimitLadderFix(),
@@ -390,7 +419,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         </div>
 
         {/* 推送通知 — 监控告警的外部推送渠道 (全局配置)。
-            飞书已实现; 微信开发中, QMT/ptrade 待定。
+            飞书 / 企业微信已实现; QMT/ptrade 待定。
             每个渠道合并成一行: 勾选=新建规则默认推送, 点行展开地址配置。 */}
         <Card icon={Webhook} title="推送通知">
           <p className="text-xs text-secondary mb-3">
@@ -486,9 +515,82 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
               )}
             </div>
 
+            {/* 企业微信群机器人 (可用): 与飞书并列, 勾选默认 + 展开地址配置 */}
+            <div className="rounded-btn border border-border/60 bg-base/40 overflow-hidden">
+              <div
+                onClick={() => setWecomOpen(o => !o)}
+                className="flex items-center gap-2 px-2.5 py-2 cursor-pointer transition-colors hover:bg-base/60"
+              >
+                <input
+                  type="checkbox"
+                  checked={webhookDefault}
+                  onChange={e => { e.stopPropagation(); toggleWebhookDefault(e.target.checked) }}
+                  onClick={e => e.stopPropagation()}
+                  title="作为新建规则的默认推送渠道"
+                  className="h-3 w-3 accent-accent cursor-pointer"
+                />
+                <span className="text-[11px] font-medium text-foreground">企业微信</span>
+                <span className="text-[9px] text-muted">群机器人</span>
+                {webhookDefault && (
+                  <span className="rounded bg-accent/15 px-1 py-px text-[9px] text-accent">默认</span>
+                )}
+                <span className={`ml-auto text-[9px] ${wecomWebhookUrl ? 'text-emerald-500' : 'text-warning'}`}>
+                  {wecomWebhookUrl ? '已配置' : '未配置'}
+                </span>
+                <ChevronDown className={`h-3 w-3 text-muted transition-transform ${wecomOpen ? 'rotate-180' : ''}`} />
+              </div>
+
+              {wecomOpen && (
+                <div className="border-t border-border/60 bg-base/30 p-3">
+                  <label className="block space-y-1.5">
+                    <span className="text-[11px] text-muted">Webhook 地址 或 Key</span>
+                    <input
+                      value={wecomDraft}
+                      onChange={e => setWecomDraft(e.target.value)}
+                      placeholder={WECOM_PREFIX + '?key=xxxxxxxx' + ' 或直接填 key'}
+                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                    />
+                  </label>
+
+                  {wecomError && (
+                    <div className="mt-2 text-[11px] text-danger">{wecomError}</div>
+                  )}
+
+                  <div className="mt-2 flex items-center gap-2">
+                    <button
+                      onClick={submitWecom}
+                      disabled={saveWecomWebhook.isPending || wecomDraft.trim() === wecomWebhookUrl}
+                      className="px-3 py-1.5 rounded-btn bg-accent text-base text-xs font-medium disabled:opacity-50 cursor-pointer hover:bg-accent/90 transition-colors"
+                    >
+                      {saveWecomWebhook.isPending ? '保存中…' : '保存'}
+                    </button>
+                    {wecomWebhookUrl && (
+                      <span className="text-[10px] text-emerald-500">● 已配置</span>
+                    )}
+                  </div>
+
+                  <details className="mt-3 text-[10px] text-muted">
+                    <summary className="cursor-pointer hover:text-secondary">如何获取企业微信 Webhook 地址?</summary>
+                    <ol className="mt-1.5 space-y-1 pl-4 list-decimal leading-relaxed">
+                      <li>打开企业微信,进入目标群聊 → 右上角「...」→ <b>群机器人</b></li>
+                      <li>点击「添加」→ 选择「<b>自定义机器人</b>」→ 填写名字</li>
+                      <li>复制生成的 <b>Webhook 地址</b>(含 key 参数),粘贴到上方输入框</li>
+                      <li>也可只复制 key 参数部分(= 后面的内容)填入</li>
+                      <li>企业微信群的消息可同步到绑定的个人微信,实现"微信推送"</li>
+                    </ol>
+                    <p className="mt-1.5 pl-4 text-muted/70">
+                      📖 官方文档:
+                      <a href="https://developer.work.weixin.qq.com/document/path/91770" target="_blank" rel="noreferrer" className="text-accent hover:text-accent/80">
+                        群机器人使用指南 ↗
+                      </a>
+                    </p>
+                  </details>
+                </div>
+              )}
+            </div>
+
             {/* 占位渠道 — 不可点 */}
             {[
-              { name: '微信', hint: '公众号/企业微信', status: '开发中' },
               { name: 'QMT', hint: '量化交易终端', status: '待定' },
               { name: 'ptrade', hint: '量化交易终端', status: '待定' },
             ].map(ch => (

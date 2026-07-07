@@ -790,6 +790,7 @@ export interface Preferences {
   system_notify_enabled: boolean
   feishu_webhook_url?: string
   feishu_webhook_secret?: string
+  wecom_webhook_url?: string
   webhook_enabled_default?: boolean
   sidebar_index_symbols: string[]
   nav_order: string[]
@@ -986,6 +987,11 @@ export const api = {
     request<{ feishu_webhook_url: string; feishu_webhook_secret: string }>('/api/settings/preferences/feishu-webhook', {
       method: 'PUT',
       body: JSON.stringify({ url, secret }),
+    }),
+  updateWecomWebhook: (url: string) =>
+    request<{ wecom_webhook_url: string }>('/api/settings/preferences/wecom-webhook', {
+      method: 'PUT',
+      body: JSON.stringify({ url }),
     }),
   updateWebhookDefault: (enabled: boolean) =>
     request<{ webhook_enabled_default: boolean }>('/api/settings/preferences/webhook-enabled-default', {
@@ -1460,6 +1466,12 @@ export const api = {
       { method: 'POST', body: fd },
     )
   },
+
+  extDataDetectUrl: (body: ExtDataDetectUrlRequest) =>
+    request<ExtDataDetectUrlResult>('/api/ext-data/detect-url', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 
   extDataFixSymbol: (id: string) =>
     request<{ status: string; fixed_files: number }>(
@@ -2010,6 +2022,26 @@ export interface PullConfig {
   last_message?: string | null
   last_rows?: number | null
   next_run?: string | null
+}
+
+export interface ExtDataDetectUrlRequest {
+  url: string
+  method?: string
+  headers?: Record<string, string>
+  body?: string
+  response_path?: string
+  field_map?: Record<string, string>
+}
+
+export interface ExtDataDetectUrlResult {
+  status: string
+  total_rows: number
+  response_path: string
+  response_path_candidates: string[]
+  fields: ExtDataField[]
+  symbol_candidates: string[]
+  code_candidates: string[]
+  preview: Record<string, unknown>[]
 }
 
 export interface ExtDataConfig {

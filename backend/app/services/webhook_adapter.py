@@ -185,3 +185,128 @@ def send_feishu_card(webhook_url: str, title: str, subtitle: str, body_md: str, 
         },
     }
     return _post_feishu(webhook_url, payload, secret)
+
+
+# ================================================================
+# 企业微信群机器人
+# ================================================================
+#
+# 与飞书自定义机器人几乎同构: 同样是"群机器人 Webhook + POST JSON"。
+# 关键差异:
+#   1. Webhook 形态: https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx
+#   2. 无需签名校验 (key 本身即凭证; 企业微信群机器人可选"签名校验"但极少用)
+#   3. Markdown 原生支持 (msg_type=markdown), 不必像飞书那样包进 interactive 卡片
+#   4. 成功响应: {"errcode":0,"errmsg":"ok"}
+#
+# 限制: 每个机器人每分钟最多 20 条消息 (超出会被限流 460min 内不可用),
+#      依赖 MonitorRuleEngine 的 cooldown 去重即可应对告警场景。
+# 企业微信群的消息可在绑定的个人微信接收, 实现"微信推送"体验。
+
+WECOM_HOOK_PREFIX = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send"
+
+
+def is_valid_wecom_url(url: str) -> bool:
+    """校验是否为合法的企业微信群机器人 Webhook 地址。
+
+    允许两种写法:
+      - 完整: https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx
+      - 仅 key: xxx (企业微信群机器人 key 为 36 位 UUID 样式, 保存时自动补全)
+    """
+    if not url:
+        return False
+    if url.startswith(WECOM_HOOK_PREFIX):
+        return True
+    # 纯 key: 企业微信 key 形如 12345678-1234-1234-1234-1234567890ab (36 位),
+    # 但用户可能截断, 放宽到 >= 20 位的无空格无斜杠字符串。
+    url = url.strip()
+    if " " in url or "/" in url or "?" in url:
+        return False
+    return len(url) >= 20
+
+
+def normalize_wecom_url(url: str) -> str:
+    """把纯 key 补全为完整 Webhook URL。已是完整 URL 则原样返回。"""
+    url = (url or "").strip()
+    if not url:
+        return ""
+    if url.startswith(WECOM_HOOK_PREFIX):
+        return url
+    return f"{WECOM_HOOK_PREFIX}?key={url}"
+
+
+def _post_wecom(webhook_url: str, payload: dict) -> bool:
+    """发送一次企业微信 webhook 请求并判定成败。
+
+    成功响应: HTTP 200 且 errcode=0。失败静默返回 False。
+    """
+    try:
+        import httpx
+
+        resp = httpx.post(webhook_url, json=payload, timeout=5.0)
+        if resp.status_code == 200:
+            try:
+                data = resp.json()
+                if isinstance(data, dict):
+                    # errcode=0 表示成功; 45009=频率限制, 其它非零=业务失败
+                    if data.get("errcode") == 0:
+                        return True
+                    logger.debug("企业微信推送业务失败: %s", data)
+                    return False
+            except ValueError:
+                return True
+        logger.debug("企业微信推送 HTTP %s: %s", resp.status_code, resp.text[:200])
+        return False
+    except Exception as e:  # noqa: BLE001
+        logger.debug("企业微信 Webhook 推送失败: %s", e)
+        return False
+
+
+def send_wecom(webhook_url: str, title: str, body: str) -> bool:
+    """推送一条文本消息到企业微信群机器人。
+
+    Args:
+        webhook_url: 企业微信群机器人 Webhook 地址 (或纯 key, 会自动补全)
+        title:       消息标题 (与正文拼接为一条文本)
+        body:        消息正文
+
+    Returns:
+        True=成功送达, False=失败或 URL 非法。
+        失败静默, 不抛异常 (与 send_feishu 一致)。
+    """
+    webhook_url = normalize_wecom_url(webhook_url)
+    if not is_valid_wecom_url(webhook_url):
+        return False
+
+    text = _truncate(f"{title}\n{body}".strip())
+    if not text:
+        return False
+
+    payload: dict = {"msg_type": "text", "text": {"content": text}}
+    return _post_wecom(webhook_url, payload)
+
+
+def send_wecom_markdown(webhook_url: str, title: str, body_md: str) -> bool:
+    """推送一条 Markdown 消息到企业微信群机器人 —— 承载完整复盘报告。
+
+    企业微信群机器人原生支持 markdown 类型 (比飞书 interactive 卡片简单),
+    支持 # ## **粗体** >引用 - 列表 等基础语法, 单条上限 4096 字节。
+
+    Args:
+        webhook_url: 企业微信群机器人 Webhook 地址 (或纯 key)
+        title:       标题 (作为一级标题 ## 拼到正文前)
+        body_md:     markdown 正文
+
+    Returns:
+        True=成功送达, False=失败或 URL 非法。
+    """
+    webhook_url = normalize_wecom_url(webhook_url)
+    if not is_valid_wecom_url(webhook_url):
+        return False
+
+    content = f"## {title}\n\n{_truncate_card(body_md)}"
+    if not content.strip():
+        return False
+
+    payload: dict = {"msg_type": "markdown", "markdown": {"content": content}}
+    return _post_wecom(webhook_url, payload)
+

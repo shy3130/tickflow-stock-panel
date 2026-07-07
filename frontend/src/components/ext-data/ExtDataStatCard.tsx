@@ -21,7 +21,7 @@ export function ExtDataStatCard({ config, onDelete, deleting, onEdit }: {
   const [showDelete, setShowDelete] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [dragOver, setDragOver] = useState(false)
-  const [ingestTab, setIngestTab] = useState<'file' | 'api' | 'pull'>('file')
+  const [ingestTab, setIngestTab] = useState<'file' | 'api' | 'pull'>('pull')
   const [copied, setCopied] = useState(false)
   const [fieldsExpanded, setFieldsExpanded] = useState(false)
   const fieldsRef = useRef<HTMLDivElement>(null)
@@ -172,12 +172,12 @@ export function ExtDataStatCard({ config, onDelete, deleting, onEdit }: {
 
               <div className="flex gap-1 rounded-lg bg-elevated/60 p-0.5">
                 <button
-                  onClick={() => setIngestTab('file')}
+                  onClick={() => setIngestTab('pull')}
                   className={`flex-1 inline-flex items-center justify-center gap-1 py-1.5 rounded-md text-[10px] font-medium transition-colors ${
-                    ingestTab === 'file' ? 'bg-surface text-foreground shadow-sm' : 'text-muted hover:text-secondary'
+                    ingestTab === 'pull' ? 'bg-surface text-foreground shadow-sm' : 'text-muted hover:text-secondary'
                   }`}
                 >
-                  <Upload className="h-3 w-3" />文件
+                  <RefreshCw className="h-3 w-3" />拉取
                 </button>
                 <button
                   onClick={() => setIngestTab('api')}
@@ -188,16 +188,20 @@ export function ExtDataStatCard({ config, onDelete, deleting, onEdit }: {
                   <Code className="h-3 w-3" />推送
                 </button>
                 <button
-                  onClick={() => setIngestTab('pull')}
+                  onClick={() => setIngestTab('file')}
                   className={`flex-1 inline-flex items-center justify-center gap-1 py-1.5 rounded-md text-[10px] font-medium transition-colors ${
-                    ingestTab === 'pull' ? 'bg-surface text-foreground shadow-sm' : 'text-muted hover:text-secondary'
+                    ingestTab === 'file' ? 'bg-surface text-foreground shadow-sm' : 'text-muted hover:text-secondary'
                   }`}
                 >
-                  <RefreshCw className="h-3 w-3" />拉取
+                  <Upload className="h-3 w-3" />上传
                 </button>
               </div>
 
-              {ingestTab === 'file' ? (
+              {ingestTab === 'pull' ? (
+                <ExtDataPullPanel config={config} onSaved={() => qc.invalidateQueries({ queryKey: QK.extData })} />
+              ) : ingestTab === 'api' ? (
+                <ExtDataApiPanel config={config} copied={copied} setCopied={setCopied} />
+              ) : (
                 <>
                   <input
                     ref={fileRef}
@@ -235,10 +239,6 @@ export function ExtDataStatCard({ config, onDelete, deleting, onEdit }: {
                     )}
                   </div>
                 </>
-              ) : ingestTab === 'api' ? (
-                <ExtDataApiPanel config={config} copied={copied} setCopied={setCopied} />
-              ) : (
-                <ExtDataPullPanel config={config} onSaved={() => qc.invalidateQueries({ queryKey: QK.extData })} />
               )}
 
               {uploadResult && (

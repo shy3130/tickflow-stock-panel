@@ -283,9 +283,9 @@ def set_depth_finalize_time(hour: int, minute: int) -> dict:
     return {"hour": h, "minute": m}
 
 
-# 复盘推送可选渠道白名单 (微信等暂未实现, 不在白名单内, 前端仅作占位)
+# 复盘推送可选渠道白名单 (企业微信已实现, 与飞书并列)
 # 多选: 不推送 = 空数组, 而非 'none'
-REVIEW_PUSH_CHANNELS = {"feishu"}
+REVIEW_PUSH_CHANNELS = {"feishu", "wecom"}
 
 
 def get_review_schedule() -> dict:
@@ -474,6 +474,25 @@ def set_feishu_webhook_secret(secret: str) -> str:
     """保存飞书签名密钥。传入空串表示不验签。"""
     save({"feishu_webhook_secret": str(secret or "").strip()})
     return get_feishu_webhook_secret()
+
+
+def get_wecom_webhook_url() -> str:
+    """企业微信群机器人 Webhook 地址 — 与飞书并列的第二推送通道。
+
+    存储完整 URL (https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx);
+    用户也可只填 key, 由 webhook_adapter.normalize_wecom_url 自动补全。
+    """
+    return load().get("wecom_webhook_url", "")
+
+
+def set_wecom_webhook_url(url: str) -> str:
+    """保存企业微信 Webhook 地址。传入空串表示清空配置。
+
+    存储时统一补全为完整 URL, 避免后续每次推送都要再判一次。
+    """
+    from app.services.webhook_adapter import normalize_wecom_url
+    save({"wecom_webhook_url": normalize_wecom_url(url)})
+    return get_wecom_webhook_url()
 
 
 def get_webhook_enabled_default() -> bool:
