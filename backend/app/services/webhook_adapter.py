@@ -63,40 +63,57 @@ def _truncate_card(text: str) -> str:
     return text[:_CARD_MAX_LEN] + ("…" if len(text) > _CARD_MAX_LEN else "")
 
 
+_FEISHU_MAX_ATTEMPTS = 3
+
+
 def _post_feishu(webhook_url: str, payload: dict, secret: str) -> bool:
-    """发送一次飞书 webhook 请求并判定成败 (供 text / card 共用)。
+    """发送飞书 webhook 请求并判定成败 (供 text / card 共用)。
 
-    成功响应: HTTP 200 且业务 code=0 (或非 JSON 的 200)。失败静默返回 False。
+    成功响应: HTTP 200 且业务 code=0 (或非 JSON/非 dict 的 200)。
+
+    瞬时失败 (网络/超时/HTTP 5xx) 会**带退避重试** —— 告警冷却在事件生成时即打戳,
+    一次瞬时 5xx/timeout 若不重试, 该告警会被冷却窗口(默认 1h)压掉, 离屏用户彻底
+    收不到推送。永久失败 (4xx / 业务 code≠0, 如签名错、URL 失效) 不重试。最终失败
+    记 WARNING (而非之前的 debug), 保证「推送丢了」在日志里可见。
     """
-    try:
-        import httpx
+    import httpx
 
-        # 启用签名校验时, 请求体须带 timestamp + sign (秒级时间戳)
-        if secret:
-            timestamp = str(int(time.time()))
-            payload["timestamp"] = timestamp
-            payload["sign"] = _gen_sign(timestamp, secret)
+    last_err = ""
+    for attempt in range(1, _FEISHU_MAX_ATTEMPTS + 1):
+        try:
+            # 启用签名校验时, 请求体须带 timestamp + sign (每次重试都重算, 防时间戳过期)
+            if secret:
+                timestamp = str(int(time.time()))
+                payload["timestamp"] = timestamp
+                payload["sign"] = _gen_sign(timestamp, secret)
 
-        resp = httpx.post(webhook_url, json=payload, timeout=5.0)
-        # 飞书成功响应: {"code":0,"msg":"success"} (或 StatusCode 200 + Extra)
-        if resp.status_code == 200:
-            try:
-                data = resp.json()
-                # code=0 表示飞书业务侧成功; 部分版本无 code 字段则按 msg 判断
+            resp = httpx.post(webhook_url, json=payload, timeout=5.0)
+            if resp.status_code == 200:
+                try:
+                    data = resp.json()
+                except ValueError:
+                    return True  # 非 JSON 的 200, 视为成功
                 if isinstance(data, dict):
                     code = data.get("code", data.get("StatusCode", 0))
                     if code == 0:
                         return True
-                    logger.debug("飞书推送业务失败: %s", data)
+                    # 业务失败(签名错/格式错等): 重试无益, 直接失败
+                    logger.warning("飞书推送业务失败(不重试): %s", data)
                     return False
-            except ValueError:
-                # 非 JSON 响应但 HTTP 200, 视为成功
-                return True
-        logger.debug("飞书推送 HTTP %s: %s", resp.status_code, resp.text[:200])
-        return False
-    except Exception as e:  # noqa: BLE001
-        logger.debug("飞书 Webhook 推送失败: %s", e)
-        return False
+                return True  # 200 且 JSON 非 dict, 视为成功
+            # 4xx 客户端错误(URL 失效等): 不重试; 5xx: 落入重试
+            last_err = f"HTTP {resp.status_code}: {resp.text[:200]}"
+            if resp.status_code < 500:
+                logger.warning("飞书推送失败(不重试, 客户端错误): %s", last_err)
+                return False
+        except Exception as e:  # noqa: BLE001 — 网络/超时, 可重试
+            last_err = str(e)
+
+        if attempt < _FEISHU_MAX_ATTEMPTS:
+            time.sleep(min(2 ** (attempt - 1), 3))  # 退避: 1s, 2s
+
+    logger.warning("飞书 Webhook 推送最终失败(已重试 %d 次): %s", _FEISHU_MAX_ATTEMPTS, last_err)
+    return False
 
 
 def send_feishu(webhook_url: str, title: str, body: str, secret: str = "") -> bool:

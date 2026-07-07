@@ -154,6 +154,11 @@ def validate(rule: dict) -> None:
         syms = rule.get("symbols")
         if not isinstance(syms, list) or len(syms) == 0:
             raise ValueError("scope=symbols 时 symbols 不能为空")
+    # sector 作用域的板块 JOIN 尚未实现: _apply_scope 目前会退化为「全市场」,
+    # 一条本意针对某板块的规则会对全市场每只命中都触发(告警风暴)。在板块 JOIN
+    # 落地前, 拒绝创建 sector 规则(fail-closed), 避免用户建出会刷屏的规则。
+    if rule.get("scope") == "sector":
+        raise ValueError("scope=sector 暂未支持(板块 JOIN 未实现),请改用 scope=symbols 指定标的或 scope=all")
 
     # 其余枚举
     if rule.get("severity", "info") not in SEVERITIES:

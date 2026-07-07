@@ -560,9 +560,13 @@ class MonitorRuleEngine:
                 return df.head(0)
             return df.filter(pl.col("symbol").is_in(syms))
         if scope == "sector":
-            # sector 过滤: 需 df 含板块列 (后续接入 ext_data JOIN)
-            # 当前先返回全量, sector 精确过滤第二步完善
-            return df
+            # sector 过滤需 df 含板块列 (后续接入 ext_data JOIN)。在 JOIN 落地前
+            # fail-closed 返回空 —— 绝不退化为「全市场」误触发 (旧行为 return df 会让
+            # 一条板块规则对全市场每只命中都告警)。新建 sector 规则已在 validate 拦截,
+            # 此处兜底任何历史遗留的 sector 规则。
+            logger.warning("scope=sector 规则 %s 暂不支持(板块 JOIN 未实现), 本轮跳过",
+                           rule.get("id"))
+            return df.head(0)
         return df
 
     def _match_strategy(

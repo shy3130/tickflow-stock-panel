@@ -582,7 +582,7 @@ async def sync_minute(request: Request):
     """手动触发分钟 K 同步(全市场)。返回 pipeline job_id 可轮询进度。"""
     import asyncio
 
-    from app.services.pipeline_jobs import job_store
+    from app.services.pipeline_jobs import job_store, release_run_slot, try_acquire_run_slot
     from app.api.data import invalidate_storage_cache
     from app.services.preferences import get_minute_sync_days
     from app.tickflow.capabilities import Cap
@@ -594,19 +594,21 @@ async def sync_minute(request: Request):
     if not _minute_allowed(capset):
         raise HTTPException(status_code=403, detail="需要 Pro+ 权限")
 
-    job_id = job_store.create()
-    existing = job_store.get(job_id)
-    if existing and existing["status"] == "running":
+    job_id, is_new = job_store.create()
+    if not is_new:
         return {"status": "reused", "job_id": job_id}
 
     async def task() -> None:
-        job_store.start(job_id)
+        if not try_acquire_run_slot():
+            job_store.fail(job_id, "已有数据任务在运行(或上一次任务卡死未结束),请稍后再试")
+            return
         loop = asyncio.get_event_loop()
 
         def progress(stage: str, pct: int, msg: str) -> None:
             job_store.progress(job_id, stage, pct, msg)
 
         try:
+            job_store.start(job_id)
             progress("sync_minute", 5, "解析标的池…")
             universe = sorted(set(get_pool("watchlist")) | set(get_pool("CN_Equity_A")))
             # 补充 instruments 全量标的，覆盖北交所、新股等
@@ -637,6 +639,8 @@ async def sync_minute(request: Request):
         except Exception as e:  # noqa: BLE001
             job_store.fail(job_id, str(e))
             invalidate_storage_cache()
+        finally:
+            release_run_slot()
 
     asyncio.create_task(task())
     return {"status": "started", "job_id": job_id}
@@ -668,16 +672,17 @@ async def extend_history(request: Request):
             raise HTTPException(status_code=403, detail="需要 Pro+ 权限 (batch K-line)")
 
         from app.services.extend_history import run_extend_history
-        from app.services.pipeline_jobs import job_store
+        from app.services.pipeline_jobs import job_store, release_run_slot, try_acquire_run_slot
         from app.api.data import invalidate_storage_cache
 
-        job_id = job_store.create()
-        existing = job_store.get(job_id)
-        if existing and existing["status"] == "running":
+        job_id, is_new = job_store.create()
+        if not is_new:
             return {"status": "reused", "job_id": job_id}
 
         async def task() -> None:
-            job_store.start(job_id)
+            if not try_acquire_run_slot():
+                job_store.fail(job_id, "已有数据任务在运行(或上一次任务卡死未结束),请稍后再试")
+                return
             loop = asyncio.get_event_loop()
 
             def progress(stage: str, pct: int, msg: str,
@@ -686,6 +691,7 @@ async def extend_history(request: Request):
                                    stage_pct=stage_pct, skip_log=skip_log)
 
             try:
+                job_store.start(job_id)
                 result = await loop.run_in_executor(
                     _long_task_executor,
                     lambda: run_extend_history(repo, capset, value, unit, on_progress=progress),
@@ -699,6 +705,8 @@ async def extend_history(request: Request):
                 logger.exception("extend_history failed: job_id=%s", job_id)
                 job_store.fail(job_id, str(e))
                 invalidate_storage_cache()
+            finally:
+                release_run_slot()
 
         asyncio.create_task(task())
         return {"status": "started", "job_id": job_id}
@@ -719,16 +727,17 @@ async def rebuild_enriched(request: Request):
     try:
         repo = request.app.state.repo
 
-        from app.services.pipeline_jobs import job_store
+        from app.services.pipeline_jobs import job_store, release_run_slot, try_acquire_run_slot
         from app.api.data import invalidate_storage_cache
 
-        job_id = job_store.create()
-        existing = job_store.get(job_id)
-        if existing and existing["status"] == "running":
+        job_id, is_new = job_store.create()
+        if not is_new:
             return {"status": "reused", "job_id": job_id}
 
         async def task() -> None:
-            job_store.start(job_id)
+            if not try_acquire_run_slot():
+                job_store.fail(job_id, "已有数据任务在运行(或上一次任务卡死未结束),请稍后再试")
+                return
             loop = asyncio.get_event_loop()
 
             def progress(stage: str, pct: int, msg: str,
@@ -737,6 +746,7 @@ async def rebuild_enriched(request: Request):
                                    stage_pct=stage_pct, skip_log=skip_log)
 
             try:
+                job_store.start(job_id)
                 progress("rebuild_enriched", 10, "全量计算 enriched…")
                 from app.indicators.pipeline import run_pipeline
 
@@ -777,6 +787,8 @@ async def rebuild_enriched(request: Request):
                 logger.exception("rebuild_enriched failed: job_id=%s", job_id)
                 job_store.fail(job_id, str(e))
                 invalidate_storage_cache()
+            finally:
+                release_run_slot()
 
         asyncio.create_task(task())
         return {"status": "started", "job_id": job_id}
@@ -838,16 +850,17 @@ async def extend_minute_history(request: Request):
         if total_days <= 0:
             raise HTTPException(status_code=400, detail="扩展范围无效")
 
-        from app.services.pipeline_jobs import job_store
+        from app.services.pipeline_jobs import job_store, release_run_slot, try_acquire_run_slot
         from app.api.data import invalidate_storage_cache
 
-        job_id = job_store.create()
-        existing = job_store.get(job_id)
-        if existing and existing["status"] == "running":
+        job_id, is_new = job_store.create()
+        if not is_new:
             return {"status": "reused", "job_id": job_id}
 
         async def task() -> None:
-            job_store.start(job_id)
+            if not try_acquire_run_slot():
+                job_store.fail(job_id, "已有数据任务在运行(或上一次任务卡死未结束),请稍后再试")
+                return
             loop = asyncio.get_event_loop()
 
             def progress(stage: str, pct: int, msg: str,
@@ -856,6 +869,7 @@ async def extend_minute_history(request: Request):
                                    stage_pct=stage_pct, skip_log=skip_log)
 
             try:
+                job_store.start(job_id)
                 # 获取当前最早日期
                 earliest = repo.earliest_minute_date()
                 if not earliest:
@@ -925,7 +939,8 @@ async def extend_minute_history(request: Request):
                             else:
                                 day_df = day_df.drop("_trade_date")
                             day_df = day_df.sort("symbol", "datetime")
-                            day_df.write_parquet(out)
+                            from app.services.kline_sync import _atomic_write_parquet
+                            _atomic_write_parquet(day_df, out)
                             written += day_df.height
                             day_count += 1
 
@@ -955,6 +970,8 @@ async def extend_minute_history(request: Request):
                 logger.exception("extend_minute_history failed: job_id=%s", job_id)
                 job_store.fail(job_id, str(e))
                 invalidate_storage_cache()
+            finally:
+                release_run_slot()
 
         asyncio.create_task(task())
         return {"status": "started", "job_id": job_id}

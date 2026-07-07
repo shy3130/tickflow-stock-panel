@@ -106,7 +106,7 @@ def _call_with_retry(fn, attempts: int = 3, backoff: float = 0.6) -> None:
     raise last_exc
 
 
-def _probe_real(tiers: dict) -> tuple[CapabilitySet, list[str]]:
+def _probe_real(tiers: dict) -> tuple[CapabilitySet, list[str], set[Cap]]:
     """逐 capability 试探。需要 API key。
 
     **关键**:探测始终在付费端点(api.tickflow.org)上进行,用 key 鉴权验证有效性。
@@ -126,6 +126,9 @@ def _probe_real(tiers: dict) -> tuple[CapabilitySet, list[str]]:
     tf = TickFlow(api_key=key, base_url=probe_base)
     available: dict[Cap, CapabilityLimits] = {}
     log: list[str] = []
+    # 重试耗尽仍失败的瞬时错误(非明确无权限)对应的 cap。供上层判定: 若「分水岭」
+    # cap(单只日K/复权因子)是瞬时失败, 不要据此把付费用户降级为 free/none。
+    transient_failed: set[Cap] = set()
 
     def try_call(cap: Cap, fn, default_limits: dict[str, Any]) -> None:
         try:
@@ -148,9 +151,16 @@ def _probe_real(tiers: dict) -> tuple[CapabilitySet, list[str]]:
             )
             if is_perm_denied:
                 log.append(f"✗ {cap}(无权限)")
+            elif _is_transient(e):
+                # 仅**真瞬时**错误(超时/连接/5xx/429, 由 _is_transient 判定)才标记为疑似 —
+                # 与探测重试用同一判据。否则一个消息未命中权限关键词的确定性失败
+                # (如 401/"authentication failed"/"key expired")会被误当瞬时, 让降级
+                # 保护(保留旧付费档)反而掩盖真实的 Key 失效, 永不回落到 free-api。
+                transient_failed.add(cap)
+                log.append(f"? {cap} (瞬时: {cls}: {e})")
             else:
-                # 重试耗尽仍失败的瞬时错误 — 标记为疑似,而非直接判定"无此能力"
-                log.append(f"? {cap} ({cls}: {e})")
+                # 非权限关键词、也非瞬时 → 视为该能力确实不可用(不保留、不重试保护)
+                log.append(f"✗ {cap}({cls}: {e})")
 
     # 用各档默认上限作为占位(无 X-RateLimit-* 头时)
     # 取所有档的并集,逐 cap 试探
@@ -243,7 +253,25 @@ def _probe_real(tiers: dict) -> tuple[CapabilitySet, list[str]]:
         )
         log.append("✓ websocket (inferred from expert tier)")
 
-    return CapabilitySet(available), log
+    return CapabilitySet(available), log, transient_failed
+
+
+def _load_cached_capset(cache_path: Path) -> CapabilitySet | None:
+    """读取上次持久化的 capset(schema 匹配时)。供瞬时失败时保留旧档位用。
+
+    此时尚未 _persist 本次探测结果, 缓存文件仍是上一次的值。schema 不匹配则返回 None
+    (旧结构不可靠, 不作为保留依据)。
+    """
+    try:
+        if not cache_path.exists():
+            return None
+        with cache_path.open(encoding="utf-8") as f:
+            cached = json.load(f)
+        if cached.get("schema_version") != _CACHE_SCHEMA_VERSION:
+            return None
+        return _capset_from_json(cached)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def detect_capabilities(force: bool = False) -> CapabilitySet:
@@ -267,9 +295,26 @@ def detect_capabilities(force: bool = False) -> CapabilitySet:
 
     # 有 API key — 真实探测
     try:
-        capset, probe_log = _probe_real(tiers)
+        capset, probe_log, transient_failed = _probe_real(tiers)
         # 判定档位:无效 key → none,免费 key → free,付费 → starter/pro/expert
         classified = _classify_tier(capset, tiers)
+
+        # 瞬时探测失败不得触发降级: 分水岭 cap(单只日K / 复权因子)本次是瞬时失败
+        # (非明确无权限), 且此前缓存过付费档(有复权因子)时, 保留旧缓存档位、不持久化
+        # 降级。否则一次网络抖动就把付费用户误降为 free/none, 直到强制重探才恢复。
+        prev_capset = _load_cached_capset(cache_path)
+        prev_was_paid = prev_capset is not None and Cap.ADJ_FACTOR in prev_capset.all()
+        transient_downgrade = (
+            (classified.is_invalid and Cap.KLINE_DAILY_BY_SYMBOL in transient_failed)
+            or (classified.is_free and Cap.ADJ_FACTOR in transient_failed)
+        )
+        if prev_was_paid and transient_downgrade:
+            logger.warning(
+                "能力探测分水岭瞬时失败(非无权限): %s; 保留上次缓存档位, 不降级",
+                sorted(str(c) for c in transient_failed),
+            )
+            return prev_capset
+
         if classified.is_invalid:
             # 无效 key(连单只日K都拿不到):归 none 档,标记要求清除 key
             capset = _tier_to_capset(tiers["none"])

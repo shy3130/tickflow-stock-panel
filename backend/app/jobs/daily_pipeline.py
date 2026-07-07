@@ -17,6 +17,7 @@ from pathlib import Path
 import polars as pl
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from app.indicators.pipeline import run_pipeline
 from app.config import settings
@@ -179,6 +180,20 @@ def run_now(
         emit("sync_daily", 45, "日K 完成")
         logger.info("sync_daily: [%s ~ %s] done", start_date, today)
     _invalidate("daily")
+
+    # 单标的新鲜度: 全局 max(date) 会被任一有今日数据的标的"拉高", 掩盖停牌/复牌/
+    # 一直拉失败而掉队的个股缺口(全局判据只刷"今天", 永不回补掉队标的的历史缺口)。
+    # 这里检测并**可见化**(WARNING + 计入结果), 让掉队标的不再隐形。
+    # (自动回补暂不做 —— 需带退市判定, 否则对已退市标的每轮空拉浪费 API 额度。)
+    lagging_symbols: list[str] = []
+    if pull_a_share and latest_daily:
+        try:
+            lagging_symbols = repo.symbols_lagging(today, min_gap_days=3)
+            if lagging_symbols:
+                logger.warning("日K新鲜度: %d 只标的落后 >3 日 (停牌/退市/拉取失败; 样例: %s)",
+                               len(lagging_symbols), lagging_symbols[:10])
+        except Exception as e:  # noqa: BLE001
+            logger.warning("laggard detection failed: %s", e)
 
     # Step 1.5: 同步除权因子 — 范围与日K拉取方式对齐
     #   日K范围拉取(补缺口/首次) → 除权用日K范围 [daily_range_start, now]
@@ -462,6 +477,7 @@ def run_now(
         "etf_daily_rows": written_etf_daily,
         "etf_adj_factor_symbols": etf_adj_symbols,
         "minute_rows": written_minute,
+        "lagging_symbols": len(lagging_symbols),
         "skipped_stages": skipped,
     }
 
@@ -543,23 +559,36 @@ def _refresh_instruments_view(repo: KlineRepository) -> None:
 
 
 def _run_tracked(fn, job_label: str) -> None:
-    """调度触发时包装 JobStore 跟踪，确保同步历史有记录。"""
-    from app.services.pipeline_jobs import job_store
+    """调度触发时包装 JobStore 跟踪，确保同步历史有记录。
 
-    job_id = job_store.create()
-    job_store.start(job_id)
+    单飞: 若已有活跃(pending∨running)任务(手动同步中), 本次调度直接跳过, 不并发。
+    重任务执行槽: 再挡一层僵尸并发(reap 后线程仍活时不得并行写 parquet)。
+    """
+    from app.services.pipeline_jobs import job_store, release_run_slot, try_acquire_run_slot
+
+    job_id, is_new = job_store.create()
+    if not is_new:
+        logger.info("scheduled %s 跳过: 已有活跃任务在运行 (job_id=%s)", job_label, job_id)
+        return
+    if not try_acquire_run_slot():
+        logger.warning("scheduled %s 跳过: 重任务执行槽被占用(疑似上次任务卡死)", job_label)
+        job_store.fail(job_id, f"scheduled {job_label} skipped: 已有数据任务在运行")
+        return
 
     def progress(stage: str, pct: int, msg: str, stage_pct: int | None = None,
                  skip_log: bool = False) -> None:
         job_store.progress(job_id, stage, pct, msg, stage_pct=stage_pct, skip_log=skip_log)
 
     try:
+        job_store.start(job_id)
         result = fn(on_progress=progress)
         job_store.succeed(job_id, result)
         logger.info("scheduled %s completed: job_id=%s", job_label, job_id)
     except Exception:
         logger.exception("scheduled %s failed: job_id=%s", job_label, job_id)
         job_store.fail(job_id, f"scheduled {job_label} failed")
+    finally:
+        release_run_slot()
 
 
 # ================================================================
@@ -788,7 +817,11 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
         # 与手动触发 (/api/pipeline/run) 对齐: 管道落盘后重建 Polars 内存缓存,
         # 否则 live_agg 的昨日连板数等基准列会停留在旧交易日, 次日开盘连板梯队
         # 整体少算一档 (仅手动触发或重启才会刷缓存, cron 调度路径此前漏了这步)。
-        result = run_now(repo, capset, on_progress=on_progress)
+        # 用 app.state 上的**实时** capset(周期重探会热更新它), 而非启动时捕获的
+        # 旧 capset —— 否则 Key 中途过期/续费后, 调度管道仍按旧档位打端点。
+        app_state = _get_app_state()
+        capset_live = getattr(app_state, "capabilities", None) or capset
+        result = run_now(repo, capset_live, on_progress=on_progress)
         repo.refresh_cache()
         return result
 
@@ -817,6 +850,36 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
                             timezone="Asia/Shanghai"),
         id="depth_finalize",
         misfire_grace_time=3600,
+        replace_existing=True,
+    )
+
+    # 周期性能力重探: 付费 Key 中途过期/续费无需重启即可被发现。
+    # 只热更新 app.state.capabilities(API 端点、盘后管道 _pipeline_then_refresh 均读它);
+    # 档位变化记 WARNING, 让「Key 失效」在日志/前端可见, 不再静默按旧档位打 403 端点。
+    def _reprobe_capabilities():
+        from app.tickflow.policy import detect_capabilities, tier_label
+        app_state = _get_app_state()
+        if app_state is None:
+            return
+        try:
+            old = getattr(app_state, "capabilities", None)
+            old_n = len(old.all()) if old else -1
+            new_capset = detect_capabilities(force=True)
+            app_state.capabilities = new_capset
+            new_n = len(new_capset.all())
+            if old_n != new_n:
+                logger.warning(
+                    "能力集变化: %d → %d capabilities (档位=%s)。Key 过期/续费或端点波动, "
+                    "已热更新 app.state.capabilities。", old_n, new_n, tier_label(),
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("周期能力重探失败(保留现有能力集): %s", e)
+
+    scheduler.add_job(
+        _reprobe_capabilities,
+        trigger=IntervalTrigger(minutes=60),
+        id="reprobe_capabilities",
+        misfire_grace_time=600,
         replace_existing=True,
     )
 

@@ -1488,6 +1488,25 @@ class KlineRepository:
             return None
         return None
 
+    def symbols_lagging(self, reference_date: date, min_gap_days: int = 3) -> list[str]:
+        """返回日K覆盖落后的标的: 其最新 bar 早于 reference_date - min_gap_days。
+
+        全局 max(date) 只要有一只票有今日数据就成立, 会掩盖停牌/复牌/一直拉失败而
+        掉队的个股缺口。此方法按 symbol 聚合最新日期, 找出掉队者。只读, 不改数据。
+        """
+        from datetime import timedelta
+        try:
+            cutoff = reference_date - timedelta(days=min_gap_days)
+            with self._lock:
+                rows = self.db.execute(
+                    "SELECT symbol, max(date) AS mx FROM kline_daily "
+                    "GROUP BY symbol HAVING max(date) < ? ORDER BY mx",
+                    [cutoff],
+                ).fetchall()
+            return [r[0] for r in rows if r and r[0]]
+        except Exception:
+            return []
+
     def _latest_enriched_date_duckdb(self) -> date | None:
         try:
             with self._lock:

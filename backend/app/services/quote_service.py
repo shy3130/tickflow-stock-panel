@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, time as dt_time
 
 import polars as pl
@@ -33,6 +34,12 @@ import polars as pl
 from app.market_time import cn_now, cn_today
 
 logger = logging.getLogger(__name__)
+
+# Webhook(飞书等)投递专用线程池 —— 与行情轮询线程隔离。
+# send_feishu 内置重试(最坏 ~3×5s 超时 + 退避), 若在 _poll_loop 上同步投递,
+# webhook 慢/宕机会逐条累加, 拖垮整条实时行情+告警轮询。这里 fire-and-forget,
+# 失败由 webhook_adapter 记 WARNING(可见), 但绝不阻塞热路径。
+_WEBHOOK_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="feishu-webhook")
 
 
 class QuoteSubscriber:
@@ -752,10 +759,26 @@ class QuoteService:
     @staticmethod
     def _is_trading_hours() -> bool:
         # 显式北京时间: 容器/服务器本地时区可能是 UTC, 用 naive now() 会整体错开轮询窗口
+        # 注: 这是**轮询**窗口(含 9:15 集合竞价与 15:05 收盘缓冲, 用于盘前预热/收盘捕捉),
+        # 比连续竞价宽。监控告警用更严格的 _is_continuous_trading。
         now = cn_now()
         t = now.time()
         morning = dt_time(9, 15) <= t <= dt_time(11, 35)
         afternoon = dt_time(12, 55) <= t <= dt_time(15, 5)
+        return now.weekday() < 5 and (morning or afternoon)
+
+    @staticmethod
+    def _is_continuous_trading() -> bool:
+        """A股连续竞价时段(北京时间): 9:30-11:30 / 13:00-15:00, 仅工作日。
+
+        比 _is_trading_hours 严格: 排除 9:15-9:30 集合竞价(指示价, 非成交价)、
+        午间与 15:00 后收盘缓冲。监控评估只在此窗口进行, 不对竞价/收盘后的陈旧价告警。
+        (节假日由 _evaluate_monitors 里的「快照日期=当日」新鲜度判据兜底, 无需交易日历。)
+        """
+        now = cn_now()
+        t = now.time()
+        morning = dt_time(9, 30) <= t <= dt_time(11, 30)
+        afternoon = dt_time(13, 0) <= t <= dt_time(15, 0)
         return now.weekday() < 5 and (morning or afternoon)
 
     @staticmethod
@@ -770,9 +793,20 @@ class QuoteService:
     def _evaluate_monitors(self, daily_df: pl.DataFrame, quote_extra: pl.DataFrame | None) -> None:
         """行情更新后评估统一监控规则引擎,并刷新策略结果缓存。"""
         try:
+            # 仅在「交易日 + 连续竞价时段」评估监控 —— 避开集合竞价指示价、盘前/收盘后
+            # 缓冲。轮询窗口(_is_trading_hours)更宽是为盘前预热/收盘捕捉, 但告警不应
+            # 基于这些非连续竞价价格。
+            if not self._is_continuous_trading():
+                return
             # 获取 enriched 数据 (刚算好的)
             enriched_today, enriched_date = self.get_enriched_today()
             if enriched_today.is_empty():
+                return
+            # 快照日期必须是北京当日: 节假日或数据未刷新时 enriched_date 会落后于当日,
+            # 说明市场未在交易 → 跳过。无需维护 A股交易日历即可挡住节假日与陈旧价告警。
+            if enriched_date != cn_today():
+                logger.debug("监控评估跳过: enriched 快照日期 %s 非当日 %s (节假日/数据未刷新)",
+                             enriched_date, cn_today())
                 return
 
             all_alerts: list[dict] = []
@@ -931,7 +965,7 @@ class QuoteService:
                 "price": "价格", "market": "异动",
             }
             rules = engine.rules if engine is not None else {}
-            pushed = 0
+            enqueued = 0
             for ev in rule_events:
                 rule = rules.get(ev.get("rule_id"))
                 if not rule or not rule.get("webhook_enabled"):
@@ -943,12 +977,14 @@ class QuoteService:
                 message = ev.get("message") or ""
                 title = f"TickFlow · {source_label}"
                 body = f"{symbol} {name} {message}".strip() if symbol else (message or name)
-                if webhook_adapter.send_feishu(url, title, body, secret):
-                    pushed += 1
-            if pushed:
-                logger.info("飞书 Webhook 推送: %d 条", pushed)
+                # 提交到独立线程池, 不阻塞行情轮询线程。send_feishu 内含重试, 失败自行记
+                # WARNING; 应用内 alerts.jsonl 记录与 SSE 已在前面完成, 不依赖 webhook 成败。
+                _WEBHOOK_EXECUTOR.submit(webhook_adapter.send_feishu, url, title, body, secret)
+                enqueued += 1
+            if enqueued:
+                logger.info("飞书 Webhook 已提交 %d 条 (异步投递, 失败记 WARNING)", enqueued)
         except Exception as e:  # noqa: BLE001
-            logger.debug("Webhook 推送异常 (不影响告警主流程): %s", e)
+            logger.warning("Webhook 提交异常 (不影响告警主流程): %s", e)
 
     def _maybe_send_system_notifications(self, all_alerts: list[dict]) -> None:
         """把告警转发到操作系统通知中心 (由 preferences 开关控制)。
