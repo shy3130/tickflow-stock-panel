@@ -1281,6 +1281,59 @@ class BacktestEngine:
     # ── 统计计算 ──────────────────────────────────────
 
     @staticmethod
+    def _sortino_ratio(returns: np.ndarray, periods_per_year: int = 252) -> float | None:
+        """Sortino 比率: 用下行偏差 (仅惩罚负收益) 替代总标准差, 年化。
+
+        下行偏差 = sqrt(mean(min(r, 0)^2)), MAR=0 的目标半方差 (对全部样本求均, 非仅负样本)。
+        无下行波动 (无亏损) 时 Sortino 未定义, 返回 None (与 profit_factor 的 None 约定一致,
+        不虚报 0 或 inf)。样本不足 (<2) 返回 0.0 (与 sharpe 的退化约定一致)。
+        """
+        if len(returns) < 2:
+            return 0.0
+        mean = float(np.mean(returns))
+        downside = np.minimum(returns, 0.0)
+        downside_dev = float(np.sqrt(np.mean(downside ** 2)))
+        if downside_dev <= 0:
+            return None
+        return mean / downside_dev * float(np.sqrt(periods_per_year))
+
+    @staticmethod
+    def _mc_drawdown_percentiles(pnls: np.ndarray, n_sims: int = 1000) -> dict:
+        """自助重抽样交易序列, 估计最大回撤的分布 — 回答"仅因成交顺序运气, 回撤能有多坏"。
+
+        对每笔收益有放回重抽样 n_sims 次, 各自算最大回撤, 取分位:
+        - mc_maxdd_p50: 中位场景最大回撤
+        - mc_maxdd_p95: 95% 置信最坏场景 (= 分布 5 分位, 更负)
+
+        固定种子保证可复现/可测。样本 <3 无统计意义, 返回 None。
+        """
+        n = len(pnls)
+        if n < 3:
+            return {"mc_maxdd_p50": None, "mc_maxdd_p95": None}
+        rng = np.random.default_rng(42)
+        samples = rng.choice(pnls, size=(n_sims, n), replace=True)
+        equity = np.cumprod(1.0 + samples, axis=1)
+        peak = np.maximum.accumulate(equity, axis=1)
+        dd = (equity - peak) / peak
+        maxdds = dd.min(axis=1)
+        return {
+            "mc_maxdd_p50": round(float(np.percentile(maxdds, 50)), 4),
+            "mc_maxdd_p95": round(float(np.percentile(maxdds, 5)), 4),
+        }
+
+    @staticmethod
+    def _per_trade_block(pnls: np.ndarray, durations: np.ndarray) -> dict:
+        """per-trade 明细字段: best/worst/median_pnl/avg_holding_days。"""
+        if not len(pnls):
+            return {"best": 0.0, "worst": 0.0, "median_pnl": 0.0, "avg_holding_days": 0.0}
+        return {
+            "best": round(float(np.max(pnls)), 4),
+            "worst": round(float(np.min(pnls)), 4),
+            "median_pnl": round(float(np.median(pnls)), 4),
+            "avg_holding_days": round(float(np.mean(durations)), 1) if len(durations) else 0.0,
+        }
+
+    @staticmethod
     def _calc_stats(
         trades: list[TradeRecord],
         initial_capital: float,
@@ -1332,14 +1385,19 @@ class BacktestEngine:
         # 夏普 — 用交易收益标准差近似
         sharpe = float(np.mean(pnls) / np.std(pnls)) * np.sqrt(252) if np.std(pnls) > 0 else 0.0
 
+        # Sortino — 与 sharpe 同基准 (逐笔收益), 仅惩罚下行波动
+        sortino = BacktestEngine._sortino_ratio(pnls)
+
         # Calmar
         calmar = annual_return / abs(max_dd) if abs(max_dd) > 0.001 else 0.0
 
+        durations = np.array([t.duration for t in trades], dtype=float)
         return {
             "total_return": round(float(total_return), 4),
             "annual_return": round(float(annual_return), 4),
             "max_drawdown": round(float(max_dd), 4),
             "sharpe": round(float(sharpe), 2),
+            "sortino": round(float(sortino), 2) if sortino is not None else None,
             "calmar": round(float(calmar), 2),
             "win_rate": round(float(win_rate), 4),
             "profit_factor": round(float(profit_factor), 2) if np.isfinite(profit_factor) else None,
@@ -1347,6 +1405,8 @@ class BacktestEngine:
             "avg_pnl": round(float(np.mean(pnls)), 4),
             "avg_win": round(avg_win, 4),
             "avg_loss": round(avg_loss, 4),
+            **BacktestEngine._per_trade_block(pnls, durations),
+            **BacktestEngine._mc_drawdown_percentiles(pnls),
         }
 
     @staticmethod
@@ -1441,6 +1501,7 @@ class BacktestEngine:
         max_drawdown = float(drawdowns.min()) if len(drawdowns) else 0.0
         daily = np.array(daily_avg, dtype=float)
         sharpe = float(np.mean(daily) / np.std(daily) * np.sqrt(252)) if len(daily) > 1 and np.std(daily) > 0 else 0.0
+        sortino = BacktestEngine._sortino_ratio(daily)
 
         lo, hi, nbins = -0.20, 0.20, 20
         clipped = np.clip(pnls, lo, hi)
@@ -1471,8 +1532,10 @@ class BacktestEngine:
             "total_return": round(float(total_return), 4),
             "max_drawdown": round(float(max_drawdown), 4),
             "sharpe": round(float(sharpe), 2),
+            "sortino": round(float(sortino), 2) if sortino is not None else None,
             "return_distribution": dist,
             "execution": execution_stats,
+            **BacktestEngine._mc_drawdown_percentiles(pnls),
         }
 
         return SimResult(
@@ -1500,7 +1563,9 @@ class BacktestEngine:
         drawdowns = values / peaks - 1
         max_drawdown = float(drawdowns.min()) if len(drawdowns) else 0.0
         sharpe = float(np.mean(daily) / np.std(daily) * np.sqrt(252)) if len(daily) and np.std(daily) > 0 else 0.0
+        sortino = BacktestEngine._sortino_ratio(daily)
         pnls = np.array([t.pnl_pct for t in trades], dtype=float) if trades else np.array([])
+        durations = np.array([t.duration for t in trades], dtype=float) if trades else np.array([])
         exposures = np.array([float(r.get("exposure", 0.0)) for r in equity_curve], dtype=float)
         wins = pnls[pnls > 0]
         losses = pnls[pnls <= 0]
@@ -1511,6 +1576,7 @@ class BacktestEngine:
             "annual_return": round(float(annual_return), 4),
             "max_drawdown": round(float(max_drawdown), 4),
             "sharpe": round(float(sharpe), 2),
+            "sortino": round(float(sortino), 2) if sortino is not None else None,
             "calmar": round(float(annual_return / abs(max_drawdown)), 2) if abs(max_drawdown) > 0.001 else 0.0,
             "win_rate": round(float(len(wins) / len(pnls)), 4) if len(pnls) else 0.0,
             "profit_factor": round(float(avg_win / avg_loss), 2) if avg_loss > 0 else None,
@@ -1518,6 +1584,8 @@ class BacktestEngine:
             "avg_pnl": round(float(np.mean(pnls)), 4) if len(pnls) else 0.0,
             "avg_win": round(avg_win, 4),
             "avg_loss": round(avg_loss, 4),
+            **BacktestEngine._per_trade_block(pnls, durations),
+            **BacktestEngine._mc_drawdown_percentiles(pnls),
             "final_equity": round(final_equity, 2),
             "initial_capital": round(float(initial_capital), 2),
             "avg_exposure": round(float(np.mean(exposures)), 4) if len(exposures) else 0.0,
