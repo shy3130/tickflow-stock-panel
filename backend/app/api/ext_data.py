@@ -19,9 +19,11 @@ from app.services.ext_data import (
     ExtConfigStore,
     ExtField,
     PullConfig,
+    apply_config_mapping,
+    detect_symbol_candidates,
     ensure_utf8_csv,
     fix_symbol_format,
-    normalize_symbol,
+    infer_fields_from_df,
     parse_upload_file,
     write_ext_parquet,
     rows_to_parquet,
@@ -78,6 +80,16 @@ class PullConfigReq(BaseModel):
     enabled: bool = False
 
 
+class DetectUrlReq(BaseModel):
+    """URL 探测请求，不依赖已存在的扩展配置。"""
+    url: str = Field(..., min_length=1)
+    method: str = "GET"
+    headers: dict[str, str] | None = None
+    body: str | None = None
+    response_path: str = ""
+    field_map: dict[str, str] | None = None
+
+
 # ---------------------------------------------------------------------------
 # 辅助
 # ---------------------------------------------------------------------------
@@ -95,52 +107,7 @@ def _data_dir(request: Request) -> Path:
 # ---------------------------------------------------------------------------
 
 def _apply_mapping(df: pl.DataFrame, config: ExtConfig, data_dir: Path) -> pl.DataFrame:
-    """根据 config 的 symbol_map / code_map 自动生成 symbol 和 code 列。
-    
-    执行顺序：先 mapped（从文件列复制），再 computed（从已生成的列计算）。
-    """
-    sm = config.symbol_map or {}
-    cm = config.code_map or {}
-
-    # --- 第一步：mapped 类型，直接从文件列映射 ---
-    if sm.get("type") == "mapped" and sm["col"] in df.columns:
-        df = df.with_columns(df[sm["col"]].cast(pl.Utf8).alias("symbol"))
-
-    if cm.get("type") == "mapped" and cm["col"] in df.columns:
-        df = df.with_columns(df[cm["col"]].cast(pl.Utf8).alias("code"))
-
-    # --- 第二步：computed 类型，从已生成的列计算 ---
-    if "symbol" not in df.columns and sm.get("type") == "computed":
-        if sm.get("from") == "code" and "code" in df.columns:
-            # code → symbol: 000001 → 000001.SZ
-            from app.services.ext_data import build_code_lookup
-            lookup = build_code_lookup(data_dir)
-            df = df.with_columns(normalize_symbol(df["code"].cast(pl.Utf8), lookup).alias("symbol"))
-
-    if "code" not in df.columns and cm.get("type") == "computed":
-        if cm.get("from") == "symbol" and "symbol" in df.columns:
-            # symbol → code: 000001.SZ → 000001
-            df = df.with_columns(
-                df["symbol"].cast(pl.Utf8).str.split(".").list.first().alias("code")
-            )
-
-    # --- 兜底：如果只有一个，自动生成另一个 ---
-    if "symbol" in df.columns and "code" not in df.columns:
-        df = df.with_columns(
-            df["symbol"].cast(pl.Utf8).str.split(".").list.first().alias("code")
-        )
-    elif "code" in df.columns and "symbol" not in df.columns:
-        from app.services.ext_data import build_code_lookup
-        lookup = build_code_lookup(data_dir)
-        df = df.with_columns(normalize_symbol(df["code"].cast(pl.Utf8), lookup).alias("symbol"))
-
-    # 标准化 symbol 列
-    if "symbol" in df.columns:
-        from app.services.ext_data import build_code_lookup
-        lookup = build_code_lookup(data_dir)
-        df = df.with_columns(normalize_symbol(df["symbol"].cast(pl.Utf8), lookup))
-
-    return df
+    return apply_config_mapping(df, config, data_dir)
 
 
 def _clean_col_names(df: pl.DataFrame) -> pl.DataFrame:
@@ -681,16 +648,6 @@ def fix_symbol(request: Request, config_id: str):
 # Schema 发现
 # ---------------------------------------------------------------------------
 
-_POLARS_TYPE_MAP = {
-    "Int64": "int", "Int32": "int", "Int16": "int", "Int8": "int",
-    "UInt64": "int", "UInt32": "int", "UInt16": "int", "UInt8": "int",
-    "Float64": "float", "Float32": "float",
-    "Boolean": "bool",
-    "Utf8": "string", "String": "string",
-    "Date": "string", "Datetime": "string", "Duration": "string",
-    "Categorical": "string",
-}
-
 
 @router.post("/detect-fields")
 async def detect_fields(
@@ -729,41 +686,102 @@ async def detect_fields(
 
     # 清洗列名：去掉括号内的时间戳等信息
     df = _clean_col_names(df)
-
-    # 构建字段列表
-    fields = []
-    for col_name in df.columns:
-        pl_type = df[col_name].dtype
-        dtype = _POLARS_TYPE_MAP.get(str(pl_type.base_type()), "string")
-        fields.append({"name": col_name, "dtype": dtype, "label": col_name})
-
-    # --- 分别检测 symbol 候选 (000001.SZ) 和 code 候选 (6位纯数字) ---
-    import re
-    _CODE_PAT = re.compile(r"^\d{6}$")
-    _SYMBOL_PAT = re.compile(r"^\d{6}\.[A-Z]{2}$")
-
-    symbol_candidates: list[str] = []   # 数据匹配 000001.SZ 格式
-    code_candidates: list[str] = []     # 数据匹配 000001 格式
-
-    for col in df.columns:
-        col_data = df[col].cast(pl.Utf8).drop_nulls()
-        if len(col_data) == 0:
-            continue
-        sample = col_data.head(200).to_list()
-        sym_hits = sum(1 for v in sample if _SYMBOL_PAT.match(str(v).strip()))
-        code_hits = sum(1 for v in sample if _CODE_PAT.match(str(v).strip()))
-        total = len(sample)
-        if total > 0:
-            if sym_hits / total > 0.5:
-                symbol_candidates.append(col)
-            elif code_hits / total > 0.5:
-                code_candidates.append(col)
+    symbol_candidates, code_candidates = detect_symbol_candidates(df)
 
     return {
-        "fields": fields,
+        "fields": infer_fields_from_df(df),
         "rows": len(df),
         "symbol_candidates": symbol_candidates,
         "code_candidates": code_candidates,
+    }
+
+
+def _find_row_arrays(data, prefix: str = "", limit: int = 8) -> list[str]:
+    """自动寻找 JSON 中可能的数据数组路径。"""
+    found: list[str] = []
+
+    def walk(value, path: str) -> None:
+        if len(found) >= limit:
+            return
+        if isinstance(value, list):
+            if value and isinstance(value[0], dict):
+                found.append(path)
+            elif value and isinstance(value[0], list):
+                for i, item in enumerate(value[:3]):
+                    walk(item, f"{path}.{i}" if path else str(i))
+        elif isinstance(value, dict):
+            for key, child in value.items():
+                next_path = f"{path}.{key}" if path else key
+                walk(child, next_path)
+
+    walk(data, prefix)
+    return found
+
+
+@router.post("/detect-url")
+async def detect_url(body: DetectUrlReq):
+    """请求外部 URL，自动检测 JSON 行数据的字段和标的代码列。"""
+    from app.services.ext_pull import _extract_rows, _apply_field_map
+    import httpx
+
+    method = body.method.upper()
+    if method not in ("GET", "POST"):
+        raise HTTPException(400, "仅支持 GET / POST")
+
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            headers = body.headers or {}
+            kwargs: dict = {"headers": headers}
+            if method == "POST" and body.body:
+                kwargs["content"] = body.body
+                if "content-type" not in {k.lower() for k in headers}:
+                    kwargs["headers"]["Content-Type"] = "application/json"
+            resp = await client.request(method, body.url, **kwargs)
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as e:
+        raise HTTPException(400, f"URL 请求失败: {e}") from e
+
+    path_candidates = _find_row_arrays(data)
+    response_path = body.response_path
+    if not response_path:
+        if not path_candidates:
+            raise HTTPException(400, "未在响应中找到对象数组，请填写响应数据路径")
+        response_path = path_candidates[0]
+
+    try:
+        rows = _extract_rows(data, response_path)
+        rows = _apply_field_map(rows, body.field_map or {})
+    except Exception as e:
+        raise HTTPException(400, f"响应解析失败: {e}") from e
+
+    if not rows:
+        raise HTTPException(400, "提取到的行数为 0")
+    if not all(isinstance(row, dict) for row in rows[:200]):
+        raise HTTPException(400, "响应数据数组中的元素必须是对象")
+
+    sample_rows = rows[: min(len(rows), 500)]
+    try:
+        df = pl.DataFrame(sample_rows)
+    except Exception as e:
+        raise HTTPException(400, f"样例数据解析失败: {e}") from e
+
+    df = _clean_col_names(df)
+    symbol_candidates, code_candidates = detect_symbol_candidates(df)
+    preview = [
+        {k: _safe_json_value(v) for k, v in row.items()}
+        for row in df.head(10).to_dicts()
+    ]
+
+    return {
+        "status": "ok",
+        "total_rows": len(rows),
+        "response_path": response_path,
+        "response_path_candidates": path_candidates,
+        "fields": infer_fields_from_df(df),
+        "symbol_candidates": symbol_candidates,
+        "code_candidates": code_candidates,
+        "preview": preview,
     }
 
 

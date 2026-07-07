@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
@@ -266,6 +267,54 @@ _POLARS_DTYPE_MAP = {
     "bool": pl.Boolean,
 }
 
+_POLARS_TYPE_MAP = {
+    "Int64": "int", "Int32": "int", "Int16": "int", "Int8": "int",
+    "UInt64": "int", "UInt32": "int", "UInt16": "int", "UInt8": "int",
+    "Float64": "float", "Float32": "float",
+    "Boolean": "bool",
+    "Utf8": "string", "String": "string",
+    "Date": "string", "Datetime": "string", "Duration": "string",
+    "Categorical": "string",
+}
+
+_CODE_PAT = re.compile(r"^\d{6}$")
+_SYMBOL_PAT = re.compile(r"^\d{6}\.[A-Z]{2}$")
+
+
+def infer_fields_from_df(df: pl.DataFrame) -> list[dict]:
+    """从 DataFrame 推断扩展字段定义。"""
+    fields = []
+    for col_name in df.columns:
+        pl_type = df[col_name].dtype
+        dtype = _POLARS_TYPE_MAP.get(str(pl_type.base_type()), "string")
+        fields.append({"name": col_name, "dtype": dtype, "label": col_name})
+    return fields
+
+
+def detect_symbol_candidates(df: pl.DataFrame) -> tuple[list[str], list[str]]:
+    """识别 symbol/code 候选列。"""
+    symbol_candidates: list[str] = []
+    code_candidates: list[str] = []
+
+    for col in df.columns:
+        try:
+            col_data = df[col].cast(pl.Utf8).drop_nulls()
+        except Exception:
+            continue
+        if len(col_data) == 0:
+            continue
+        sample = col_data.head(200).to_list()
+        sym_hits = sum(1 for v in sample if _SYMBOL_PAT.match(str(v).strip()))
+        code_hits = sum(1 for v in sample if _CODE_PAT.match(str(v).strip()))
+        total = len(sample)
+        if total > 0:
+            if sym_hits / total > 0.5:
+                symbol_candidates.append(col)
+            elif code_hits / total > 0.5:
+                code_candidates.append(col)
+
+    return symbol_candidates, code_candidates
+
 
 def build_code_lookup(data_dir: Path) -> dict[str, str]:
     """从 instruments 维表构建 code → symbol 映射。"""
@@ -307,6 +356,43 @@ def normalize_symbol(series: pl.Series, lookup: dict[str, str] | None = None) ->
         return val
 
     return series.map_elements(_fix_one, return_dtype=pl.Utf8)
+
+
+def apply_config_mapping(df: pl.DataFrame, config: ExtConfig, data_dir: Path) -> pl.DataFrame:
+    """根据 config 的 symbol_map / code_map 自动生成 symbol 和 code 列。"""
+    sm = config.symbol_map or {}
+    cm = config.code_map or {}
+
+    if sm.get("type") == "mapped" and sm["col"] in df.columns:
+        df = df.with_columns(df[sm["col"]].cast(pl.Utf8).alias("symbol"))
+
+    if cm.get("type") == "mapped" and cm["col"] in df.columns:
+        df = df.with_columns(df[cm["col"]].cast(pl.Utf8).alias("code"))
+
+    if "symbol" not in df.columns and sm.get("type") == "computed":
+        if sm.get("from") == "code" and "code" in df.columns:
+            lookup = build_code_lookup(data_dir)
+            df = df.with_columns(normalize_symbol(df["code"].cast(pl.Utf8), lookup).alias("symbol"))
+
+    if "code" not in df.columns and cm.get("type") == "computed":
+        if cm.get("from") == "symbol" and "symbol" in df.columns:
+            df = df.with_columns(
+                df["symbol"].cast(pl.Utf8).str.split(".").list.first().alias("code")
+            )
+
+    if "symbol" in df.columns and "code" not in df.columns:
+        df = df.with_columns(
+            df["symbol"].cast(pl.Utf8).str.split(".").list.first().alias("code")
+        )
+    elif "code" in df.columns and "symbol" not in df.columns:
+        lookup = build_code_lookup(data_dir)
+        df = df.with_columns(normalize_symbol(df["code"].cast(pl.Utf8), lookup).alias("symbol"))
+
+    if "symbol" in df.columns:
+        lookup = build_code_lookup(data_dir)
+        df = df.with_columns(normalize_symbol(df["symbol"].cast(pl.Utf8), lookup))
+
+    return df
 
 
 def ensure_utf8_csv(file_path: Path) -> Path:
@@ -516,6 +602,7 @@ def rows_to_parquet(
         写入行数。
     """
     df = pl.DataFrame(rows)
+    df = apply_config_mapping(df, config, data_dir)
     if "symbol" in df.columns:
         df = df.with_columns(pl.col("symbol").cast(pl.Utf8))
     return write_ext_parquet(df, config, data_dir, snapshot_date=snapshot_date)

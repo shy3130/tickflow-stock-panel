@@ -133,9 +133,15 @@ async def fetch_and_ingest(
     # 字段映射
     rows = _apply_field_map(rows, pull.field_map)
 
-    # 校验 symbol 列
-    if rows and "symbol" not in rows[0]:
-        raise ValueError("数据行中缺少 symbol 字段，请配置 field_map 映射")
+    # 校验可关联标的的字段：直接 symbol/code，或配置里声明的映射源列。
+    row_keys = set(rows[0]) if rows else set()
+    mapped_cols = {
+        m.get("col")
+        for m in (config.symbol_map or {}, config.code_map or {})
+        if m.get("type") == "mapped" and m.get("col")
+    }
+    if rows and not ({"symbol", "code"} & row_keys or mapped_cols & row_keys):
+        raise ValueError("数据行中缺少 symbol/code 字段，请配置字段映射或标的映射")
 
     # 写入
     snap = date.today()
