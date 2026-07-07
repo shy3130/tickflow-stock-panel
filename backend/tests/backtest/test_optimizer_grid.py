@@ -56,6 +56,20 @@ def test_range_spec_expands_by_step():
     assert vals == [0.01, 0.02, 0.03]  # 含端点
 
 
+def test_range_spec_float_keeps_endpoint_despite_accumulation():
+    """0.1 步长的浮点累加易丢端点 (0.1+0.1+0.1=0.30000004); 整数计数必须保住 0.3。"""
+    meta = [{"id": "p", "type": "float", "default": 0.2, "min": 0.1, "max": 0.3, "step": 0.1}]
+    combos = expand_param_grid(meta, {"p": {"min": 0.1, "max": 0.3, "step": 0.1}})
+    vals = sorted(c["p"] for c in combos)
+    assert vals == [0.1, 0.2, 0.3]  # 含端点 0.3, 不丢
+
+
+def test_duplicate_values_folded():
+    combos = expand_param_grid(PARAMS_META, {"ma_proximity": [0.02, 0.02, 0.03]})
+    vals = sorted(c["ma_proximity"] for c in combos)
+    assert vals == [0.02, 0.03]  # 去重
+
+
 def test_range_spec_int_yields_ints():
     combos = expand_param_grid(PARAMS_META, {"min_boards": {"min": 1, "max": 4, "step": 1}})
     vals = sorted(c["min_boards"] for c in combos)

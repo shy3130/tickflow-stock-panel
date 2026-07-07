@@ -86,13 +86,67 @@ def test_all_combos_executed_once():
     assert ran == [0.01, 0.02, 0.03, 0.04, 0.05]
 
 
-def test_min_direction_objective():
-    # max_drawdown 为负; 但选 avg_holding_days(min 方向) 验证方向反转
+def test_min_direction_objective_restores_display_sign():
+    # avg_holding_days 是 min 方向: 最小者最优, 且 best_score 必须是原始正值 (非内部取负值)
     def score(p):
         return _FakeResult(stats={"avg_holding_days": p["ma_proximity"] * 100})
     out = _optimizer(score).optimize(_cfg(objective="avg_holding_days"))
-    # min 方向 -> 最小 avg_holding_days (0.01x100=1) 最优
     assert out["best_params"] == {"ma_proximity": 0.01}
+    # min 方向: 最优 avg_holding_days = 0.01*100 = 1.0, 用户应看到 +1.0 而非 -1.0
+    assert out["best_score"] == 1.0
+    # results 不应外露内部排序键 _sort
+    assert all("_sort" not in r for r in out["results"])
+    assert out["results"][0]["objective_raw"] == 1.0
+
+
+def test_max_drawdown_objective_prefers_smaller_drawdown():
+    # max_drawdown 为负值, max 方向: -0.1 (回撤更小) 应优于 -0.3
+    def score(p):
+        dd = {0.01: -0.1, 0.02: -0.3, 0.03: -0.2}[p["ma_proximity"]]
+        return _FakeResult(stats={"max_drawdown": dd})
+    out = _optimizer(score).optimize(_cfg(objective="max_drawdown"))
+    assert out["best_params"] == {"ma_proximity": 0.01}
+    assert out["best_score"] == -0.1  # 展示原始负值
+
+
+def test_service_exception_isolated_not_crashing_batch():
+    # 某组 service.run 抛异常 -> 应记为该组失败, 其余组正常完成, 不拖垮整批
+    def score(p):
+        if p["ma_proximity"] == 0.02:
+            raise KeyError("boom")
+        return _FakeResult(stats={"sortino": p["ma_proximity"] * 100})
+    out = _optimizer(score).optimize(_cfg())
+    assert out["n_completed"] == 3  # 三组都有结果记录 (含失败组)
+    assert out["best_params"] == {"ma_proximity": 0.03}  # 最优组不受影响
+    failed = [r for r in out["results"] if r.get("error")]
+    assert len(failed) == 1
+    assert "boom" in failed[0]["error"]
+
+
+def test_backtest_kwargs_illegal_key_rejected():
+    def score(p):
+        return _FakeResult(stats={"sortino": 1.0})
+    with pytest.raises(ValueError, match=r"非法字段|不能包含"):
+        _optimizer(score).optimize(_cfg(backtest_kwargs={"bad_field": 1}))
+
+
+def test_backtest_kwargs_reserved_key_rejected():
+    def score(p):
+        return _FakeResult(stats={"sortino": 1.0})
+    with pytest.raises(ValueError, match="不能包含"):
+        _optimizer(score).optimize(_cfg(backtest_kwargs={"symbols": ["x"]}))
+
+
+def test_base_params_merged_and_overridden_by_sweep():
+    # base_params 提供固定参数, combo 覆盖同名; 记录 service 实际收到的 params
+    def score(p):
+        return _FakeResult(stats={"sortino": 1.0})
+    opt = _optimizer(score)
+    opt.optimize(_cfg(base_params={"ma_proximity": 0.99, "other": 7}))
+    # 每次 run 收到的 params: ma_proximity 被 combo 覆盖, other 保留
+    for call in opt.service.calls:
+        assert call["other"] == 7
+        assert call["ma_proximity"] in (0.01, 0.02, 0.03)
 
 
 def test_none_and_error_results_sink_to_bottom():
