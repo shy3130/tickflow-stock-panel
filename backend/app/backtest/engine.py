@@ -1288,6 +1288,7 @@ class BacktestEngine:
         无下行波动 (无亏损) 时 Sortino 未定义, 返回 None (与 profit_factor 的 None 约定一致,
         不虚报 0 或 inf)。样本不足 (<2) 返回 0.0 (与 sharpe 的退化约定一致)。
         """
+        returns = returns[np.isfinite(returns)]  # 剔除 inf/nan, 防止污染均值/序列化出非法 JSON
         if len(returns) < 2:
             return 0.0
         mean = float(np.mean(returns))
@@ -1306,12 +1307,16 @@ class BacktestEngine:
         - mc_maxdd_p95: 95% 置信最坏场景 (= 分布 5 分位, 更负)
 
         固定种子保证可复现/可测。样本 <3 无统计意义, 返回 None。
+        大样本 (如 full 模式数千笔) 时按 2M 单元上限压降模拟次数, 防止瞬时数组 OOM。
         """
+        pnls = pnls[np.isfinite(pnls)]  # 剔除 inf/nan, 否则 cumprod 传播 nan 导致分位为 nan
         n = len(pnls)
         if n < 3:
             return {"mc_maxdd_p50": None, "mc_maxdd_p95": None}
+        # 内存护栏: samples/equity/peak/dd 各占 eff_sims*n*8B, 控总单元 <= 2M (~64MB 峰值)
+        eff_sims = min(n_sims, max(200, 2_000_000 // n))
         rng = np.random.default_rng(42)
-        samples = rng.choice(pnls, size=(n_sims, n), replace=True)
+        samples = rng.choice(pnls, size=(eff_sims, n), replace=True)
         equity = np.cumprod(1.0 + samples, axis=1)
         peak = np.maximum.accumulate(equity, axis=1)
         dd = (equity - peak) / peak
@@ -1324,6 +1329,8 @@ class BacktestEngine:
     @staticmethod
     def _per_trade_block(pnls: np.ndarray, durations: np.ndarray) -> dict:
         """per-trade 明细字段: best/worst/median_pnl/avg_holding_days。"""
+        pnls = pnls[np.isfinite(pnls)]  # 剔除 inf/nan, 防 best/worst 出非法值
+        durations = durations[np.isfinite(durations)] if len(durations) else durations
         if not len(pnls):
             return {"best": 0.0, "worst": 0.0, "median_pnl": 0.0, "avg_holding_days": 0.0}
         return {
