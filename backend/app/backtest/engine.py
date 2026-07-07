@@ -134,8 +134,9 @@ class PanelCache:
         end: date,
         columns: list[str] | None,
         compute_fn,
+        asset_type: str = "stock",
     ) -> pl.DataFrame:
-        key = self._make_key(symbols, start, end, columns)
+        key = self._make_key(symbols, start, end, columns, asset_type)
         now = time.monotonic()
 
         if key in self._cache:
@@ -145,7 +146,7 @@ class PanelCache:
                 return entry.df
             del self._cache[key]
 
-        df = compute_fn(symbols, start, end, columns)
+        df = compute_fn(symbols, start, end, columns, asset_type)
         self._cache[key] = _CacheEntry(df=df, ts=now)
         if len(self._cache) > self._max_size:
             self._cache.popitem(last=False)
@@ -155,13 +156,13 @@ class PanelCache:
         self._cache.clear()
 
     @staticmethod
-    def _make_key(symbols: list[str] | None, start: date, end: date, columns: list[str] | None) -> str:
+    def _make_key(symbols: list[str] | None, start: date, end: date, columns: list[str] | None, asset_type: str = "stock") -> str:
         if symbols is None:
             h = "all"
         else:
             h = hashlib.md5(",".join(sorted(symbols)).encode()).hexdigest()[:12]
         cols = "all" if columns is None else hashlib.md5(",".join(sorted(columns)).encode()).hexdigest()[:8]
-        return f"{h}:{start}:{end}:{cols}"
+        return f"{asset_type}:{h}:{start}:{end}:{cols}"
 
 
 # ================================================================
@@ -183,9 +184,10 @@ class BacktestEngine:
         start: date,
         end: date,
         columns: list[str] | None = None,
+        asset_type: str = "stock",
     ) -> pl.DataFrame:
-        """加载 enriched 数据面板，带缓存。"""
-        return self._cache.get_or_compute(symbols, start, end, columns, self._load_panel_inner)
+        """加载 enriched 数据面板，带缓存。asset_type='etf' 时读 ETF enriched。"""
+        return self._cache.get_or_compute(symbols, start, end, columns, self._load_panel_inner, asset_type=asset_type)
 
     def _load_panel_inner(
         self,
@@ -193,12 +195,13 @@ class BacktestEngine:
         start: date,
         end: date,
         columns: list[str] | None = None,
+        asset_type: str = "stock",
     ) -> pl.DataFrame:
         t0 = time.perf_counter()
 
-        # 近期区间优先复用 repository 的预计算 enriched 历史缓存，避免重复 scan_parquet + compute_all。
+        # 近期区间优先复用 repository 的预计算 enriched 历史缓存 (仅 stock: 该缓存为股票专用)。
         try:
-            if self.repo is not None and hasattr(self.repo, "get_enriched_range"):
+            if asset_type == "stock" and self.repo is not None and hasattr(self.repo, "get_enriched_range"):
                 cached = self.repo.get_enriched_range(start, end, symbols=symbols, columns=columns)
                 if cached is not None and not cached.is_empty():
                     elapsed = (time.perf_counter() - t0) * 1000
@@ -207,7 +210,8 @@ class BacktestEngine:
         except Exception as e:  # noqa: BLE001
             logger.debug("backtest load panel cache miss: %s", e)
 
-        enriched_glob = str(self.repo.store.data_dir / "kline_daily_enriched" / "**" / "*.parquet")
+        from app.tickflow.repository import enriched_dirname
+        enriched_glob = str(self.repo.store.data_dir / enriched_dirname(asset_type) / "**" / "*.parquet")
 
         try:
             lf = pl.scan_parquet(enriched_glob)
@@ -242,7 +246,9 @@ class BacktestEngine:
             return df
 
         from app.indicators.pipeline import compute_all
-        instruments = self.repo.get_instruments()
+        # 按 asset_type 取维表: ETF 回测须用 ETF 维表, 否则名称 JOIN 失败(全 null)、
+        # 涨停信号算在错误的 instruments 上。
+        instruments = self.repo.get_instruments_asset(asset_type)
         df = compute_all(df, instruments=instruments)
         if not instruments.is_empty() and "name" not in df.columns:
             inst_cols = [c for c in ["symbol", "name"] if c in instruments.columns]

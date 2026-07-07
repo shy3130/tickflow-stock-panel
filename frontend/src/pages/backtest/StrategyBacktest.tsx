@@ -512,15 +512,16 @@ function StrategyParamInput({ param, value, onChange }: {
   )
 }
 
-function StockPoolPicker({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: string; onChange: (value: string) => void; assetType?: 'stock' | 'etf' }) {
   const symbols = useMemo(() => value.split(',').map(s => s.trim()).filter(Boolean), [value])
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const [symbolNames, setSymbolNames] = useState<Record<string, string>>({})
   const ref = useRef<HTMLDivElement>(null)
+  const searchAssetTypes = assetType === 'etf' ? 'stock,etf' : 'stock'
   const search = useQuery({
-    queryKey: QK.instrumentSearch(query),
-    queryFn: () => api.instrumentSearch(query),
+    queryKey: QK.instrumentSearch(query, searchAssetTypes),
+    queryFn: () => api.instrumentSearch(query, 20, searchAssetTypes),
     enabled: query.trim().length > 0,
     staleTime: 30_000,
   })
@@ -659,6 +660,7 @@ export function StrategyBacktest() {
   const [selectedStrategy, setSelectedStrategy] = useState<string | null>(saved?.selectedStrategy ?? null)
   const [strategyGroup, setStrategyGroup] = useState<StrategyGroup>('all')
   const [symbols, setSymbols] = useState(saved?.symbols ?? '')
+  const [assetType, setAssetType] = useState<'stock' | 'etf'>(saved?.assetType ?? 'stock')
   const [start, setStart] = useState(saved?.start ?? THREE_MONTHS_AGO)
   const [end, setEnd] = useState(saved?.end ?? TODAY)
   // 成交口径: 建仓/清仓可独立配置。向后兼容老 matching (派生为 entry=exit=matching)。
@@ -698,8 +700,8 @@ export function StrategyBacktest() {
   const loadedStrategyRef = useRef<string | null>(null)
 
   const strategies = useQuery({
-    queryKey: QK.screenerStrategies,
-    queryFn: api.screenerStrategies,
+    queryKey: QK.screenerStrategies(assetType),
+    queryFn: () => api.screenerStrategies(assetType),
   })
 
   const strategyList = useMemo(() => strategies.data?.presets ?? [], [strategies.data])
@@ -767,6 +769,7 @@ export function StrategyBacktest() {
       storage.strategyBacktestLast.set({
         selectedStrategy,
         symbols,
+        assetType,
         start,
         end,
         matching,
@@ -792,6 +795,7 @@ export function StrategyBacktest() {
     if (!selectedStrategy) return
     startBacktest({
       strategy_id: selectedStrategy,
+      asset_type: assetType,
       symbols: symbols ? symbols.split(',').map(s => s.trim()).filter(Boolean) : null,
       start: start || null,
       end: end || undefined,
@@ -1947,7 +1951,24 @@ export function StrategyBacktest() {
 
               {settingsTab === 'range' && (
                 <ConfigSection title="回测范围">
-                  <StockPoolPicker value={symbols} onChange={setSymbols} />
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-muted">资产类型</span>
+                    <div className="inline-flex h-8 rounded-btn border border-border overflow-hidden">
+                      {(['stock', 'etf'] as const).map(t => (
+                        <button
+                          key={t}
+                          type="button"
+                          onClick={() => { setAssetType(t); setSelectedStrategy(null); setSymbols('') }}
+                          className={`h-full px-3 text-xs font-medium transition-colors cursor-pointer
+                            ${assetType === t ? 'bg-accent/10 text-accent' : 'text-muted hover:text-foreground'}`}
+                        >
+                          {t === 'stock' ? '股票' : 'ETF'}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="text-[11px] text-muted/70">ETF 仅技术类策略,读 ETF enriched</span>
+                  </div>
+                  <StockPoolPicker value={symbols} onChange={setSymbols} assetType={assetType} />
                   <div className="text-[11px] leading-5 text-muted">默认全市场回测，由基础过滤、策略条件和买卖触发器筛选；需要单票调试或自选池回测时再限定股票池。</div>
                 </ConfigSection>
               )}

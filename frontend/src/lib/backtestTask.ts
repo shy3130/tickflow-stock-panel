@@ -138,6 +138,7 @@ export function startBacktest(params: {
   overrides?: Record<string, any> | null
   mode?: 'position' | 'full'
   holding_days?: number
+  asset_type?: 'stock' | 'etf'
 }): void {
   // 取消之前的任务状态
   if (eventSource) {
@@ -169,6 +170,7 @@ export function startBacktest(params: {
     overrides: params.overrides ? JSON.stringify(params.overrides) : undefined,
     mode: params.mode,
     holding_days: params.holding_days,
+    asset_type: params.asset_type,
   })
 
   // 存 reconnect 信息 (刷新后用)

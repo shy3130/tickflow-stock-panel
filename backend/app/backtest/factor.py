@@ -52,6 +52,7 @@ class FactorConfig:
     weight: Literal["equal", "factor_weight"] = "equal"
     fees_pct: float = 0.0002
     slippage_bps: float = 5.0
+    asset_type: str = "stock"
 
 
 @dataclass
@@ -117,6 +118,7 @@ class FactorBacktestService:
             load_start,
             config.end,
             columns=panel_columns,
+            asset_type=config.asset_type,
         )
         if panel.is_empty():
             return _err("无数据，请检查日期范围或先运行盘后管道")
