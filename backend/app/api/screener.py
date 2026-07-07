@@ -12,7 +12,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from app.services.screener import PRESET_STRATEGIES, ScreenerService
+from app.services.screener import PRESET_STRATEGIES, ScreenerService, strategy_supports_asset
 from app.services import strategy_cache
 from app.strategy import config as strategy_config
 
@@ -28,6 +28,7 @@ class CustomRequest(BaseModel):
     pool: Optional[list[str]] = None
     as_of: Optional[date] = None
     ext_columns: Optional[str] = None
+    asset_type: str = "stock"
 
 
 class PresetRequest(BaseModel):
@@ -35,6 +36,7 @@ class PresetRequest(BaseModel):
     pool: Optional[list[str]] = None
     as_of: Optional[date] = None
     ext_columns: Optional[str] = None
+    asset_type: str = "stock"
 
 
 def _safe(result_dict: dict) -> dict:
@@ -174,23 +176,25 @@ def _update_cache_strategy(data_dir, as_of: str, strategy_id: str, safe_data: di
 
 
 @router.get("/strategies")
-def strategies(request: Request):
-    """策略清单（内置 + 自定义 + AI）。"""
+def strategies(request: Request, asset_type: str = Query("stock")):
+    """策略清单（内置 + 自定义 + AI）。按 asset_type 过滤：ETF 仅返回技术类内置策略。"""
     data_dir = request.app.state.repo.store.data_dir
     presets = []
     seen_ids: set[str] = set()
 
     # 内置策略
     for k, v in PRESET_STRATEGIES.items():
+        if not strategy_supports_asset(v, asset_type):
+            continue
         overrides = strategy_config.load_override(data_dir, k)
         name = (overrides.get("name") or v["name"]) if overrides else v["name"]
         desc = (overrides.get("description") or v["description"]) if overrides else v["description"]
         presets.append({"id": k, "name": name, "description": desc, "source": "builtin"})
         seen_ids.add(k)
 
-    # 自定义/AI 策略（不在 PRESET_STRATEGIES 中的）
+    # 自定义/AI 策略（不在 PRESET_STRATEGIES 中的）; 未标注资产类型, 保守仅 stock 返回
     engine = getattr(request.app.state, "strategy_engine", None)
-    if engine:
+    if engine and asset_type == "stock":
         for meta in engine.list_strategies():
             sid = meta["id"]
             if sid not in seen_ids:
@@ -210,7 +214,7 @@ def strategies(request: Request):
 @router.post("/run")
 def run_custom(req: CustomRequest, request: Request):
     repo = request.app.state.repo
-    svc = ScreenerService(repo)
+    svc = ScreenerService(repo, asset_type=req.asset_type)
     as_of = req.as_of or svc.latest_date()
     if not as_of:
         raise HTTPException(status_code=400,
@@ -230,7 +234,7 @@ def run_custom(req: CustomRequest, request: Request):
 @router.post("/run_preset")
 def run_preset(req: PresetRequest, request: Request):
     repo = request.app.state.repo
-    svc = ScreenerService(repo)
+    svc = ScreenerService(repo, asset_type=req.asset_type)
     as_of = req.as_of or svc.latest_date()
     if not as_of:
         raise HTTPException(status_code=400, detail="无可用数据日期")
