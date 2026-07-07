@@ -130,6 +130,7 @@ async def lifespan(app: FastAPI):
     from app.services.screener import ScreenerService
 
     _screener_svc = ScreenerService(repo)
+    _etf_screener_svc = ScreenerService(repo, asset_type="etf")
     strategy_dirs = [
         Path(__file__).resolve().parent / "strategy" / "builtin",
         store.data_dir / "strategies" / "custom",
@@ -153,6 +154,8 @@ async def lifespan(app: FastAPI):
     # 复用 ScreenerService 的历史窗口加载器 (三级缓存, 启动预计算命中 ~0ms),
     # 让声明 filter_history 的策略 (如反包) 也能在实时监控里跑选股 → 盘中触发通知。
     monitor_engine.set_history_loader(_screener_svc._load_enriched_history)
+    # ETF 版历史加载器: asset_type=etf 的 strategy 型规则用 (读 kline_etf_enriched)。
+    monitor_engine.set_history_loader_etf(_etf_screener_svc._load_enriched_history)
 
     # 自动迁移: 把旧 strategy_monitor_ids 同步为 type=strategy 规则 (统一到监控页)
     try:

@@ -167,6 +167,7 @@ def normalize(rule: dict) -> dict:
     """补全默认字段,返回规范化后的规则 (不校验)。"""
     r = dict(rule)
     r.setdefault("enabled", True)
+    r.setdefault("asset_type", "stock")
     r.setdefault("scope", "symbols")
     r.setdefault("symbols", [])
     r.setdefault("sector", None)

@@ -27,6 +27,7 @@ const emptyRule = (preset?: Partial<MonitorRule>): MonitorRule => ({
   name: '',
   enabled: true,
   type: 'signal',
+  asset_type: 'stock',
   scope: 'symbols',
   symbols: [],
   sector: null,
@@ -43,7 +44,6 @@ const emptyRule = (preset?: Partial<MonitorRule>): MonitorRule => ({
 export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
   const qc = useQueryClient()
   const options = useQuery({ queryKey: QK.monitorRuleOptions, queryFn: api.monitorRuleOptions })
-  const strategies = useQuery({ queryKey: QK.screenerStrategies, queryFn: api.screenerStrategies })
   const { data: prefs } = usePreferences()
   const feishuConfigured = !!(prefs?.feishu_webhook_url)
   const [editing] = useState(!!rule)
@@ -54,11 +54,19 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
       ? { ...rule, conditions: rule.conditions.map(c => ({ ...c })) }
       : { ...emptyRule(preset), webhook_enabled: preset?.webhook_enabled ?? !!(prefs?.webhook_enabled_default) },
   )
+  const assetType = draft.asset_type ?? 'stock'
+  // 策略列表跟随资产类型: ETF 只列技术类策略。
+  const strategies = useQuery({
+    queryKey: QK.screenerStrategies(assetType),
+    queryFn: () => api.screenerStrategies(assetType),
+  })
   const [error, setError] = useState('')
   const [symbolQuery, setSymbolQuery] = useState('')
+  // ETF 规则时标的搜索一并搜出 ETF。
+  const symbolAssetTypes = assetType === 'etf' ? 'stock,etf' : 'stock'
   const symbolSearch = useQuery({
-    queryKey: QK.instrumentSearch(symbolQuery),
-    queryFn: () => api.instrumentSearch(symbolQuery, 20),
+    queryKey: QK.instrumentSearch(symbolQuery, symbolAssetTypes),
+    queryFn: () => api.instrumentSearch(symbolQuery, 20, symbolAssetTypes),
     enabled: symbolQuery.length > 0,
   })
 
@@ -209,6 +217,26 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
           <X className="h-4 w-4" />
         </button>
       </div>
+
+      {/* 资产类型: 股票 / ETF (个股极简模式不显示) */}
+      {!simple && (
+        <div className="space-y-1.5">
+          <span className="text-[11px] text-muted">资产类型</span>
+          <div className="inline-flex h-9 rounded-btn border border-border overflow-hidden">
+            {(['stock', 'etf'] as const).map(t => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setDraft(d => ({ ...d, asset_type: t, strategy_id: null, symbols: [] }))}
+                className={`h-full px-4 text-xs font-medium transition-colors cursor-pointer
+                  ${assetType === t ? 'bg-accent/10 text-accent' : 'text-muted hover:text-foreground'}`}
+              >
+                {t === 'stock' ? '股票' : 'ETF'}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 描述 (可选) + 类型 */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">

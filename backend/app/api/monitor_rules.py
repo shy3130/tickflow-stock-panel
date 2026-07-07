@@ -38,6 +38,7 @@ class RuleModel(BaseModel):
     name: str
     enabled: bool = True
     type: str          # strategy | signal | price | market
+    asset_type: str = "stock"   # stock | etf (etf: strategy 型走 ETF 历史加载器)
     scope: str = "symbols"   # symbols | all | sector
     symbols: list[str] = []
     sector: str | None = None

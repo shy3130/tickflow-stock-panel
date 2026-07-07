@@ -783,22 +783,44 @@ class QuoteService:
             if self._app_state:
                 engine = getattr(self._app_state, "monitor_engine", None)
                 if engine and engine.rule_count > 0:
-                    # 预构建 symbol → name 映射 (enriched 已 drop name 列, 引擎触发时回填用)
+                    # 预构建 symbol → name 映射 (enriched 已 drop name 列, 引擎触发时回填用)。
+                    # 含股票 + ETF 维表, 保证 ETF 监控告警也能回填名称。
                     try:
+                        name_map: dict[str, str] = {}
                         inst_df = self._app_state.repo.get_instruments()
                         if not inst_df.is_empty() and "symbol" in inst_df.columns and "name" in inst_df.columns:
-                            engine.set_name_map({
-                                row["symbol"]: row["name"]
-                                for row in inst_df.select(["symbol", "name"]).iter_rows(named=True)
-                                if row.get("name")
-                            })
+                            for row in inst_df.select(["symbol", "name"]).iter_rows(named=True):
+                                if row.get("name"):
+                                    name_map[row["symbol"]] = row["name"]
+                        # 仅当存在 ETF 规则时补 ETF 维表 (股票名优先, setdefault 不覆盖股票)
+                        if engine.has_asset_rules("etf"):
+                            etf_inst = self._app_state.repo.get_etf_instruments()
+                            if not etf_inst.is_empty() and "symbol" in etf_inst.columns and "name" in etf_inst.columns:
+                                for row in etf_inst.select(["symbol", "name"]).iter_rows(named=True):
+                                    if row.get("name"):
+                                        name_map.setdefault(row["symbol"], row["name"])
+                        if name_map:
+                            engine.set_name_map(name_map)
                     except Exception as e:  # noqa: BLE001
                         logger.debug("name_map 构建失败 (不影响监控): %s", e)
                     # 连板梯队封单监控: 有 ladder 规则时, 从 depth_service 注入封单量到 enriched
                     eval_df = enriched_today
                     if engine.has_rule_type("ladder"):
                         eval_df = self._inject_sealed_vol(enriched_today, enriched_date)
-                    rule_events = engine.evaluate(eval_df)
+                    rule_events = engine.evaluate(eval_df, asset_type="stock")
+                    # ETF 规则轮: 股票快照不含 ETF, 用 ETF enriched 快照单独评估。
+                    # 独立 try —— ETF 轮任何异常都不得丢弃本轮已算出的股票告警。
+                    # refresh=False —— 不在轮询线程上触发 ETF 冷缓存的同步重算 (缓存由 ETF 实时
+                    # flush 焐热; 未焐热说明无 ETF 实时数据, 跳过本轮 ETF 评估)。
+                    if engine.has_asset_rules("etf") and self._repo is not None:
+                        try:
+                            etf_enriched, _ = self._repo.get_enriched_latest_asset("etf", refresh=False)
+                            if not etf_enriched.is_empty():
+                                rule_events = rule_events + engine.evaluate(
+                                    etf_enriched, asset_type="etf", reset_strategy_results=False,
+                                )
+                        except Exception as e:  # noqa: BLE001
+                            logger.warning("ETF 监控评估失败 (不影响股票告警): %s", e)
                     if rule_events:
                         # 落盘到 alerts.jsonl
                         try:
