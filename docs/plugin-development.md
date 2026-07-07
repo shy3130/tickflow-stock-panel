@@ -1,7 +1,9 @@
 # 数据源插件开发指南
 
 数据源插件是可选的行情数据来源(stock-sdk、akshare 等),作为独立模块放在
-`backend/app/plugins/` 下。用户**手动安装依赖**后才可用;不安装完全不影响主功能。
+`backend/app/plugins/` 下。用户**手动安装依赖**后才可用(开发模式);不安装完全不影响主功能。
+
+> 💡 **Docker 部署已预装**:内置插件(如 stock-sdk)的 Node 运行时与 `node_modules` 已在镜像构建期装好,Docker 下无需手动 `npm install`,开箱即用。下方"手动安装依赖"仅适用于开发模式。
 
 ## 快速上手
 
@@ -32,7 +34,9 @@ install_hint: "pip install xxx"          # 未装依赖时显示的安装提示
 | runtime | 含义 | 典型场景 |
 |---|---|---|
 | `python` | 纯 Python 依赖, `pip install` | akshare、tushare |
-| `node` | 需要 Node.js 运行时, `npm install` | stock-sdk |
+| `node` | 需要 Node.js 运行时, `npm install` | stock-sdk(已内置,见下) |
+
+> stock-sdk 在 Docker 镜像里已预装 Node 运行时与依赖;开发模式下才需手动 `npm install`。
 | `none` | 无额外依赖 | 纯 HTTP API 源 |
 
 `runtime` 字段当前仅用于 UI 展示, 实际依赖检测由 `check` 函数负责。

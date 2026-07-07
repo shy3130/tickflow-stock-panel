@@ -67,6 +67,7 @@ class StockSDKProvider:
     ) -> pl.DataFrame:
         if not symbols:
             return pl.DataFrame()
+        logger.info("stock-sdk daily 拉取开始(%d symbols)", len(symbols))
         frames: list[pl.DataFrame] = []
         chunks = chunked(symbols, _BATCH)
         for i, chunk in enumerate(chunks):
@@ -141,6 +142,7 @@ class StockSDKProvider:
         if not symbols:
             return pl.DataFrame()
         period = "".join(ch for ch in str(freq) if ch.isdigit()) or "5"
+        logger.info("stock-sdk minute 拉取开始(%d symbols, period=%s)", len(symbols), period)
         frames: list[pl.DataFrame] = []
         chunks = chunked(symbols, _BATCH)
         for i, chunk in enumerate(chunks):
@@ -193,6 +195,7 @@ class StockSDKProvider:
 
     # ---- realtime (全市场快照) ----
     def get_realtime(self) -> list[dict]:
+        logger.info("stock-sdk realtime 拉取开始(全市场快照)")
         try:
             result = bridge.run_job({"op": "realtime"}, timeout=120)
         except bridge.StockSDKBridgeError as e:

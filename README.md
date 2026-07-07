@@ -159,6 +159,8 @@ docker compose up --build
 # 打开 http://localhost:3018
 ```
 
+镜像已内置 **stock-sdk** 数据源插件(Node 运行时 + 依赖),开箱即用。
+
 > 📖 Docker 进阶、GitHub Actions 自构建、老 CPU 兼容、访问密码设置等见 [docs/deployment.md](./docs/deployment.md)。
 
 ### 跑起来后的第一次使用
@@ -226,13 +228,25 @@ fork同时请点个star哦,欢迎 Issue 和 PR。
 
 ---
 
+## 💬 交流群
+
+欢迎加入交流群,讨论使用问题、功能建议或量化策略。
+
+<img src="./community-qr-code.jpg" alt="交流群二维码" width="240" />
+
+---
+
 ## ⚠️ 免责声明
 
 本项目仅供**学习与量化研究**,**不构成任何投资建议**。回测结果不代表未来收益。A 股有风险,入市需谨慎。数据准确性以数据源 TickFlow 官方为准。
 
 ## 📄 License
 
-[MIT](./LICENSE) © tickflow-stock-panel contributors · 本项目依赖 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 提供数据服务,使用前请遵守其服务条款。
+[MIT](./LICENSE) © tickflow-stock-panel contributors 
+
+本项目依赖 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 提供数据服务,使用前请遵守其服务条款
+
+数据源插件 [stock-sdk](https://stock-sdk.linkdiary.cn) 遵循其各自的 ISC 协议。
 
 ## 社区
 

@@ -862,3 +862,22 @@ def get_version(request: Request) -> dict:
             return {"version": v}
 
     return {"version": "v0.0.0"}
+
+
+@router.post("/refresh-cache")
+def refresh_cache(request: Request) -> dict:
+    """重建 Polars 内存缓存 (clear + refresh), 不清数据、不清 alerts。
+
+    用于跨天后缓存残留、或维表更新后手动刷新场景。
+    与设置页「清理并刷新」的区别: 那个清前端 react-query, 这个重建后端 enriched 缓存。
+    """
+    repo = request.app.state.repo
+    repo.clear_cache()
+    repo.refresh_cache()
+    # 清除 Overview 总览聚合结果缓存 + Screener 历史 TTL 缓存
+    from app.api.overview import invalidate_overview_cache
+    invalidate_overview_cache()
+    from app.services.screener import ScreenerService
+    ScreenerService.clear_history_cache()
+    logger.info("refresh-cache: Polars 缓存已重建")
+    return {"ok": True}

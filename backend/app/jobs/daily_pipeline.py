@@ -69,10 +69,18 @@ def _resolve_universe(capset: CapabilitySet) -> list[str]:
 
 
 def run_instruments_sync(repo: KlineRepository) -> dict:
-    """盘前同步个股维表。"""
+    """盘前同步个股维表。
+
+    维表含当日涨跌停价 (limit_up/down), 同步完成后刷新 enriched 内存缓存,
+    确保跨天后连板梯队/选股等读到的是基于最新维表的数据 (而非前一交易日残留)。
+    """
     rows = instrument_sync.sync_instruments(repo.store.data_dir)
     _refresh_instruments_view(repo)
     _invalidate("instruments")
+    # 维表更新后重建 enriched 缓存 (clear + refresh, 与设置页「清理并刷新」同等效果)
+    if rows > 0:
+        repo.clear_cache()
+        repo.refresh_cache()
     return {"instruments_rows": rows}
 
 

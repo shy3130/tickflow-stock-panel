@@ -1317,6 +1317,7 @@ export const api = {
 
   dataStatus: () => request<DataStatus>('/api/data/status'),
   dataClear: () => request<{ deleted_files: number }>('/api/data/clear', { method: 'POST' }),
+  refreshCache: () => request<{ ok: boolean }>('/api/data/refresh-cache', { method: 'POST' }),
   enrichedSchema: (table: string) => request<EnrichedField[]>(`/api/data/schema/${table}`),
 
   testEndpoint: (url: string, rounds?: number) =>

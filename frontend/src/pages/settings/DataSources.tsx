@@ -43,6 +43,7 @@ export function SettingsDataSourcesPanel() {
 
   const switchProvider = useMutation({
     mutationFn: (name: string) => {
+      // tickflow: 5 个数据集全量重置为 tickflow
       if (name === 'tickflow') {
         return api.updateDataProviders({
           daily_data_provider: 'tickflow',
@@ -52,11 +53,19 @@ export function SettingsDataSourcesPanel() {
           financial_data_provider: 'tickflow',
         })
       }
+      // 非 tickflow: 按源声明的 datasets 动态切换。支持的数据集切到该源,
+      // 不支持的保持 tickflow, 使 preferences 与实际取数路由一致
+      // (避免 UI 显示某源、后台却走 tickflow 的假象)。
+      const supported = new Set(
+        allItems.find(s => s.name === name)?.datasets ?? []
+      )
+      const pick = (dataset: string) => (supported.has(dataset) ? name : 'tickflow')
       return api.updateDataProviders({
-        daily_data_provider: name,
-        adj_factor_provider: 'same_as_daily',
-        realtime_data_provider: name,
-        financial_data_provider: name,
+        daily_data_provider: pick('daily'),
+        adj_factor_provider: 'same_as_daily', // 除权始终跟随日K
+        realtime_data_provider: pick('realtime'),
+        minute_data_provider: pick('minute'),
+        financial_data_provider: pick('financial'),
       })
     },
     onSuccess: () => {
