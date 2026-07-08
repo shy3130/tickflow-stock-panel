@@ -1,27 +1,32 @@
+import { lazy } from 'react'
 import { createBrowserRouter, Navigate } from 'react-router-dom'
 import { Layout } from './components/Layout'
-import { Watchlist } from './pages/Watchlist'
-import { Screener } from './pages/Screener'
-import { Backtest } from './pages/Backtest'
-import { Financials } from './pages/Financials'
 import { Onboarding } from './pages/Onboarding'
 import { Auth } from './pages/Auth'
-import { Data } from './pages/Data'
-import { Monitor } from './pages/Monitor'
-import { Trading } from './pages/Trading'
-import { Dashboard } from './pages/Dashboard'
-import { AnalysisDetail } from './pages/AnalysisDetail'
-import { ConceptAnalysis } from './pages/ConceptAnalysis'
-import { IndustryAnalysis } from './pages/IndustryAnalysis'
-import { StockAnalysis } from './pages/StockAnalysis'
-import { Review } from './pages/Review'
-import { LimitUpLadder } from './pages/LimitUpLadder'
-import { Branding } from './pages/Branding'
-import { Settings } from './pages/Settings'
-import { Indices } from './pages/Indices'
-import { Dev } from './pages/Dev'
 import { useSettings } from './lib/useSharedQueries'
 import { Logo } from './components/Logo'
+
+// 代码分割: 页面全部 lazy 加载, 避免首屏打包所有页面 (ECharts / lightweight-charts /
+// framer-motion 等重库) → 大幅减小首屏 bundle。命名导出用 .then 映射为 default。
+// Layout / Onboarding / Auth 为应用外壳与入口, 保持同步加载。
+const Watchlist = lazy(() => import('./pages/Watchlist').then(m => ({ default: m.Watchlist })))
+const Screener = lazy(() => import('./pages/Screener').then(m => ({ default: m.Screener })))
+const Backtest = lazy(() => import('./pages/Backtest').then(m => ({ default: m.Backtest })))
+const Financials = lazy(() => import('./pages/Financials').then(m => ({ default: m.Financials })))
+const Data = lazy(() => import('./pages/Data').then(m => ({ default: m.Data })))
+const Monitor = lazy(() => import('./pages/Monitor').then(m => ({ default: m.Monitor })))
+const Trading = lazy(() => import('./pages/Trading').then(m => ({ default: m.Trading })))
+const Dashboard = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })))
+const AnalysisDetail = lazy(() => import('./pages/AnalysisDetail').then(m => ({ default: m.AnalysisDetail })))
+const ConceptAnalysis = lazy(() => import('./pages/ConceptAnalysis').then(m => ({ default: m.ConceptAnalysis })))
+const IndustryAnalysis = lazy(() => import('./pages/IndustryAnalysis').then(m => ({ default: m.IndustryAnalysis })))
+const StockAnalysis = lazy(() => import('./pages/StockAnalysis').then(m => ({ default: m.StockAnalysis })))
+const Review = lazy(() => import('./pages/Review').then(m => ({ default: m.Review })))
+const LimitUpLadder = lazy(() => import('./pages/LimitUpLadder').then(m => ({ default: m.LimitUpLadder })))
+const Branding = lazy(() => import('./pages/Branding').then(m => ({ default: m.Branding })))
+const Settings = lazy(() => import('./pages/Settings').then(m => ({ default: m.Settings })))
+const Indices = lazy(() => import('./pages/Indices').then(m => ({ default: m.Indices })))
+const Dev = lazy(() => import('./pages/Dev').then(m => ({ default: m.Dev })))
 
 // 首次使用守卫 —— 未完成向导则重定向到 /onboarding
 // 只挂在根路由上;/onboarding 本身不被守卫,避免循环重定向。

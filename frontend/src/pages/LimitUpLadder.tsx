@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react'
+import React, { useState, useCallback, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { RefreshCw, ChevronDown, Flame, Settings2, X, Bell, BellOff, AlertCircle } from 'lucide-react'
@@ -218,7 +218,7 @@ function useSealedDegrade(asOf: string, latestDate: string | undefined, sealedRe
 
 // ===== 单只股票卡片 =====
 
-function StockCard({ stock, extFields, direction, sealMode, monitored, monitorRule, onMonitorChange, hasDepth, onClick }: {
+const StockCard = React.memo(function StockCard({ stock, extFields, direction, sealMode, monitored, monitorRule, onMonitorChange, hasDepth, onClick }: {
   stock: LimitLadderStock
   extFields: ExtFieldConfig
   direction: Direction
@@ -227,7 +227,7 @@ function StockCard({ stock, extFields, direction, sealMode, monitored, monitorRu
   monitorRule?: MonitorRule
   onMonitorChange: () => void
   hasDepth: boolean
-  onClick: () => void
+  onClick: (symbol: string, name?: string) => void
 }) {
   const [showMonitorMenu, setShowMonitorMenu] = useState(false)
   const [menuAnchor, setMenuAnchor] = useState<DOMRect | null>(null)
@@ -287,7 +287,7 @@ function StockCard({ stock, extFields, direction, sealMode, monitored, monitorRu
         />
       )}
       <button
-      onClick={onClick}
+      onClick={() => onClick(stock.symbol, stock.name ?? undefined)}
       className={`w-full flex flex-col items-start gap-1 px-2.5 py-2 rounded-md transition-all duration-200 cursor-pointer hover:opacity-100 ${style.bg} ${style.bar} ${monitored ? 'ring-1 ring-amber-400/50 ring-inset' : ''}`}
       style={style.cardStyle ? { ...style.cardStyle } : undefined}
       onMouseEnter={e => {
@@ -357,7 +357,7 @@ function StockCard({ stock, extFields, direction, sealMode, monitored, monitorRu
     </button>
     </div>
   )
-}
+})
 
 // ===== 封单监控菜单 =====
 
@@ -1084,7 +1084,7 @@ function TierGroup({ tier, defaultOpen, extFields, filterKeys, bf, onStockClick,
                   monitorRule={ladderRules.get(s.symbol)}
                   onMonitorChange={onMonitorChange}
                   hasDepth={hasDepth}
-                  onClick={() => onStockClick(s.symbol, s.name ?? undefined)}
+                  onClick={onStockClick}
                 />
               ))}
             </div>
@@ -1398,7 +1398,7 @@ export function LimitUpLadder() {
 
   // 连板梯队封单监控规则 (type=ladder): {symbol → rule} 映射
   const { data: monitorRulesData, refetch: refetchMonitorRules } = useQuery({
-    queryKey: ['monitor-rules'],
+    queryKey: QK.monitorRules,
     queryFn: () => api.monitorRulesList(),
     staleTime: 30 * 1000,
   })
@@ -1463,10 +1463,10 @@ export function LimitUpLadder() {
     storage.limitLadderExtFields.set(f)
   }, [])
 
-  const handleStockClick = (symbol: string, name?: string) => {
+  const handleStockClick = useCallback((symbol: string, name?: string) => {
     setPreviewSymbol(symbol)
     setPreviewName(name ?? '')
-  }
+  }, [])
 
   const extColumnsParam = useMemo(() => buildExtColumnsParam(extFields), [extFields])
 

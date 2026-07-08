@@ -323,7 +323,10 @@ function RealtimeDot({ title = '实时监控中' }: { title?: string }) {
 
 // ===== 卡片组件 =====
 
-function StockCard({
+// 共享的空 K 线数组常量 — 避免每次渲染传入新的 [] 破坏 StockCard 的 memo
+const EMPTY_KLINE: KlineRow[] = []
+
+const StockCard = React.memo(function StockCard({
   r,
   candleRows,
   showCandle,
@@ -331,7 +334,7 @@ function StockCard({
   onConfirmRemove,
   onCancelRemove,
   onRequestRemove,
-  confirmRemove,
+  isConfirming,
   extCols,
   expandedCells,
   onToggleExpand,
@@ -344,7 +347,7 @@ function StockCard({
   onConfirmRemove: (symbol: string) => void
   onCancelRemove: () => void
   onRequestRemove: (symbol: string) => void
-  confirmRemove: string | null
+  isConfirming: boolean
   extCols: ColumnConfig[]
   expandedCells: Set<string>
   onToggleExpand: (key: string) => void
@@ -379,7 +382,7 @@ function StockCard({
 
       {/* 删除按钮 / 确认区 */}
       <div className="absolute top-1.5 right-1.5 z-10">
-        {confirmRemove === r.symbol ? (
+        {isConfirming ? (
           <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
             <button
               onClick={() => onConfirmRemove(r.symbol)}
@@ -488,7 +491,7 @@ function StockCard({
       )}
     </div>
   )
-}
+})
 
 // ===== 主页面 =====
 
@@ -656,7 +659,7 @@ export function Watchlist() {
       // 2. 清除 list 缓存，触发后台 refetch
       qc.invalidateQueries({ queryKey: QK.watchlist })
       qc.invalidateQueries({ queryKey: QK.watchlistEnriched() })
-      qc.invalidateQueries({ queryKey: QK.watchlistKlineBatch('') })
+      qc.invalidateQueries({ queryKey: ['watchlist-kline-batch'] })
     },
   })
 
@@ -680,13 +683,23 @@ export function Watchlist() {
       qc.setQueryData(['watchlist-enriched', extColumnsParam], { rows: [], as_of: null, elapsed_ms: 0 })
       qc.invalidateQueries({ queryKey: QK.watchlist })
       qc.invalidateQueries({ queryKey: QK.watchlistEnriched() })
-      qc.invalidateQueries({ queryKey: QK.watchlistKlineBatch('') })
+      qc.invalidateQueries({ queryKey: ['watchlist-kline-batch'] })
     },
   })
 
   // 二次确认状态
   const [confirmClear, setConfirmClear] = useState(false)
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
+
+  // 稳定的 per-symbol 回调 (供 memo 化的 StockCard 使用, 避免每次渲染都传新引用)
+  const handleCardPreview = useCallback((sym: string, name: string) => {
+    setPreviewSymbol(sym); setPreviewName(name)
+  }, [])
+  const handleCardConfirmRemove = useCallback((sym: string) => {
+    remove.mutate(sym); setConfirmRemove(null)
+  }, [remove])
+  const handleCardCancelRemove = useCallback(() => setConfirmRemove(null), [])
+  const handleCardRequestRemove = useCallback((sym: string) => setConfirmRemove(sym), [])
 
   const allSymbols = list.data?.symbols?.map(s => s.symbol) ?? []
   const rows = enriched.data?.rows ?? []
@@ -1206,13 +1219,13 @@ export function Watchlist() {
                 <StockCard
                   key={r.symbol}
                   r={r}
-                  candleRows={klineData[r.symbol] ?? []}
+                  candleRows={klineData[r.symbol] ?? EMPTY_KLINE}
                   showCandle={dailyKVisible}
-                  onPreview={(sym, name) => { setPreviewSymbol(sym); setPreviewName(name) }}
-                  onConfirmRemove={(sym) => { remove.mutate(sym); setConfirmRemove(null) }}
-                  onCancelRemove={() => setConfirmRemove(null)}
-                  onRequestRemove={(sym) => setConfirmRemove(sym)}
-                  confirmRemove={confirmRemove}
+                  onPreview={handleCardPreview}
+                  onConfirmRemove={handleCardConfirmRemove}
+                  onCancelRemove={handleCardCancelRemove}
+                  onRequestRemove={handleCardRequestRemove}
+                  isConfirming={confirmRemove === r.symbol}
                   extCols={visibleExtCols}
                   expandedCells={expandedCells}
                   onToggleExpand={handleToggleExpand}

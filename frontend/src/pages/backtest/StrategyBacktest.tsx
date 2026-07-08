@@ -775,7 +775,7 @@ export function StrategyBacktest() {
   }, [strategies.isLoading, strategyList, selectedStrategy])
 
   const strategyDetail = useQuery({
-    queryKey: ['strategy-detail', selectedStrategy],
+    queryKey: QK.strategyDetail(selectedStrategy ?? ''),
     queryFn: () => api.strategyGet(selectedStrategy!),
     enabled: !!selectedStrategy,
   })
@@ -1497,13 +1497,17 @@ export function StrategyBacktest() {
                 <Loader2 className="relative h-4 w-4 animate-spin text-accent" />
               </span>
               <div className="min-w-0">
-                <div className="text-xs font-medium text-accent">
-                  {backtestTask?.progress
-                    ? `回测中 · 第 ${backtestTask.progress.day}/${backtestTask.progress.total} 天 (${backtestTask.progress.date})`
-                    : '正在重新计算回测…'}
+                <div className={backtestTask?.reconnecting ? 'text-xs font-medium text-warning' : 'text-xs font-medium text-accent'}>
+                  {backtestTask?.reconnecting
+                    ? '连接中断，重试中…'
+                    : backtestTask?.progress
+                      ? `回测中 · 第 ${backtestTask.progress.day}/${backtestTask.progress.total} 天 (${backtestTask.progress.date})`
+                      : '正在重新计算回测…'}
                 </div>
                 <div className="mt-0.5 text-[11px] text-secondary">
-                  {result ? '当前展示上次结果，完成后自动替换' : '正在加载回测数据…'}
+                  {backtestTask?.reconnecting
+                    ? '正在尝试恢复连接，若持续失败可停止后重试'
+                    : result ? '当前展示上次结果，完成后自动替换' : '正在加载回测数据…'}
                 </div>
               </div>
               {backtestTask?.progress && (

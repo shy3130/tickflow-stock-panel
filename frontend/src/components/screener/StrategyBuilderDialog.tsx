@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { Modal } from '@/components/Modal'
 import { X, Sparkles, Save, Loader2, ChevronLeft, ChevronRight, AlertTriangle, Settings2, FileText, Copy, Check, Terminal } from 'lucide-react'
 import { api } from '@/lib/api'
 import { storage } from '@/lib/storage'
@@ -253,12 +253,12 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
   const hasParams = params.length > 0 || entrySignals.length > 0 || exitSignals.length > 0 || Object.keys(scoring).length > 0
 
   return (
-    <AnimatePresence>
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-        className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
-        onClick={e => { if (e.target === e.currentTarget) handleClose() }}>
-        <motion.div initial={{ opacity: 0, scale: 0.95, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 10 }}
-          className="w-[820px] max-h-[88vh] bg-surface/95 backdrop-blur-xl border border-border/50 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+    <Modal
+      onClose={handleClose}
+      labelledBy="strategy-builder-title"
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+      panelClassName="w-[820px] max-h-[88vh] bg-surface/95 backdrop-blur-xl border border-border/50 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+    >
 
           {/* 标题 */}
           <div className="grid grid-cols-[1fr_auto_1fr] items-center px-5 py-2.5 border-b border-border/50">
@@ -272,7 +272,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
               </button>
             </div>
             {/* 中间：标题 */}
-            <span className="text-sm font-semibold text-foreground">
+            <span id="strategy-builder-title" className="text-sm font-semibold text-foreground">
               {strategyId ? '修改策略' : '创建策略'}
             </span>
             {/* 右侧：步骤 + 关闭 */}
@@ -284,7 +284,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
                   <span className={'w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ' + (step === 2 ? 'bg-amber-400/20 text-amber-400' : 'bg-border/50 text-muted')}>2</span>
                 </div>
               )}
-              <button onClick={handleClose} className="p-1.5 rounded-lg hover:bg-elevated"><X className="h-4 w-4 text-muted" /></button>
+              <button aria-label="关闭" onClick={handleClose} className="p-1.5 rounded-lg hover:bg-elevated"><X className="h-4 w-4 text-muted" /></button>
             </div>
           </div>
 
@@ -506,8 +506,6 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
             </div>
           </div>
           )}
-        </motion.div>
-      </motion.div>
-    </AnimatePresence>
+    </Modal>
   )
 }
