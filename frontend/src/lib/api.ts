@@ -945,6 +945,10 @@ export const api = {
       etf_symbol_count?: number
       quote_age_ms: number | null
       is_trading_hours: boolean
+      is_polling_window?: boolean
+      market_phase?: string
+      final_sync_done?: boolean
+      final_sync_failed?: string | null
       last_fetch_ms: number | null
     }>('/api/intraday/status'),
   quoteInterval: () =>

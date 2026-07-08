@@ -152,6 +152,9 @@ class QuoteService:
         self._index_symbol_count: int = 0
         self._etf_symbol_count: int = 0
         self._index_quotes_cache: pl.DataFrame | None = None
+        # 午休/收盘最终同步状态: 到边界后必须成功拉取一版行情, 再进入休盘态。
+        self._final_sync_done: set[tuple[date, str]] = set()
+        self._final_sync_failed: dict[tuple[date, str], str] = {}
 
     # ================================================================
     # 生命周期
@@ -381,6 +384,10 @@ class QuoteService:
         from app.services import preferences
         age = (time.perf_counter() - self._fetch_time) * 1000 if self._fetch_time else -1
         mode = self.realtime_mode()
+        phase = self._market_phase()
+        final_key = self._final_sync_key(phase)
+        final_done = bool(final_key and final_key in self._final_sync_done)
+        final_failed = self._final_sync_failed.get(final_key) if final_key else None
         return {
             "enabled": self._enabled,
             "running": self._running,
@@ -392,7 +399,12 @@ class QuoteService:
             "index_symbol_count": self._index_symbol_count,
             "etf_symbol_count": self._etf_symbol_count,
             "quote_age_ms": round(age, 0) if age >= 0 else None,
-            "is_trading_hours": self._is_trading_hours(),
+            # 交易时段 = 连续竞价; polling_window 另行返回,避免午休/收盘缓冲误显示为交易中。
+            "is_trading_hours": self._is_continuous_trading(),
+            "is_polling_window": self._should_poll_for_phase(phase),
+            "market_phase": phase,
+            "final_sync_done": final_done,
+            "final_sync_failed": final_failed,
             "last_fetch_ms": round(self._fetched_at, 0) if self._fetched_at else None,
         }
 
@@ -408,10 +420,21 @@ class QuoteService:
     def _poll_loop(self) -> None:
         while self._running and self._enabled:
             try:
-                if self._is_trading_hours():
-                    self._fetch_quotes()
+                phase = self._market_phase()
+                if self._should_fetch_for_phase(phase):
+                    is_final = phase in {"morning_final", "close_final"}
+                    ok = self._fetch_quotes(final=is_final)
+                    if is_final:
+                        key = self._final_sync_key(phase)
+                        if key and ok:
+                            self._final_sync_done.add(key)
+                            self._final_sync_failed.pop(key, None)
+                            logger.info("%s 最终行情同步完成, 进入休盘态", "午休" if phase == "morning_final" else "收盘")
+                        elif key:
+                            self._final_sync_failed[key] = "fetch_failed"
+                            logger.warning("%s 最终行情同步失败, 将继续重试", "午休" if phase == "morning_final" else "收盘")
                 else:
-                    logger.debug("非交易时段, 跳过行情轮询")
+                    logger.debug("非轮询阶段(%s), 跳过行情轮询", phase)
             except Exception as e:  # noqa: BLE001
                 logger.warning("行情轮询异常: %s", e)
 
@@ -420,13 +443,17 @@ class QuoteService:
                 time.sleep(0.5)
                 waited += 0.5
 
-    def _fetch_quotes(self) -> None:
-        """按当前档位拉取行情。加锁串行化 (后台轮询 vs 手动 refresh)。"""
+    def _fetch_quotes(self, *, final: bool = False) -> bool:
+        """按当前档位拉取行情。加锁串行化 (后台轮询 vs 手动 refresh)。返回本轮是否成功更新。"""
         with self._fetch_lock:
+            before = self._fetched_at
+            if final:
+                logger.info("最终行情同步开始")
             if self.realtime_mode() == "watchlist":
                 self._fetch_watchlist_quotes()
-                return
-            self._fetch_full_market_quotes()
+            else:
+                self._fetch_full_market_quotes()
+            return self._fetched_at > before
 
     def _fetch_full_market_quotes(self) -> None:
         """拉取全市场行情 → 写 daily + 计算 enriched + 更新缓存。"""
@@ -763,15 +790,50 @@ class QuoteService:
         return df
 
     @staticmethod
-    def _is_trading_hours() -> bool:
-        # 显式北京时间: 容器/服务器本地时区可能是 UTC, 用 naive now() 会整体错开轮询窗口
-        # 注: 这是**轮询**窗口(含 9:15 集合竞价与 15:05 收盘缓冲, 用于盘前预热/收盘捕捉),
-        # 比连续竞价宽。监控告警用更严格的 _is_continuous_trading。
+    def _market_phase() -> str:
+        """A股行情轮询阶段(北京时间)。
+
+        final 阶段用于午休/收盘定版: 需要至少成功拉取一版边界后的行情, 才算进入休盘。
+        """
         now = cn_now()
+        if now.weekday() >= 5:
+            return "closed"
         t = now.time()
-        morning = dt_time(9, 15) <= t <= dt_time(11, 35)
-        afternoon = dt_time(12, 55) <= t <= dt_time(15, 5)
-        return now.weekday() < 5 and (morning or afternoon)
+        if dt_time(9, 15) <= t < dt_time(9, 30):
+            return "preopen"
+        if dt_time(9, 30) <= t < dt_time(11, 30):
+            return "morning"
+        if dt_time(11, 30) <= t < dt_time(12, 55):
+            return "morning_final"
+        if dt_time(12, 55) <= t < dt_time(13, 0):
+            return "pre_afternoon"
+        if dt_time(13, 0) <= t < dt_time(15, 0):
+            return "afternoon"
+        if t >= dt_time(15, 0):
+            return "close_final"
+        return "closed"
+
+    @staticmethod
+    def _final_sync_key(phase: str) -> tuple[date, str] | None:
+        if phase == "morning_final":
+            return (cn_today(), "morning")
+        if phase == "close_final":
+            return (cn_today(), "close")
+        return None
+
+    def _should_poll_for_phase(self, phase: str) -> bool:
+        """是否处于会主动拉行情的阶段。final 阶段成功后即停止。"""
+        if phase in {"preopen", "morning", "pre_afternoon", "afternoon"}:
+            return True
+        key = self._final_sync_key(phase)
+        return bool(key and key not in self._final_sync_done)
+
+    def _should_fetch_for_phase(self, phase: str) -> bool:
+        return self._should_poll_for_phase(phase)
+
+    def _is_trading_hours(self) -> bool:
+        """行情轮询窗口(兼容旧调用): 包含盘前预热和未完成的午休/收盘定版。"""
+        return self._should_poll_for_phase(self._market_phase())
 
     @staticmethod
     def _is_continuous_trading() -> bool:
