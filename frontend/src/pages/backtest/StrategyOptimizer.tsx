@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Play, Square, Trophy } from 'lucide-react'
 import { api, type StrategyDetail, type StrategyParamDef } from '@/lib/api'
@@ -9,6 +9,7 @@ import {
   startOptimize,
   stopOptimize,
   clearOptimize,
+  tryReconnectOptimize,
   useOptimizerTask,
 } from '@/lib/optimizerTask'
 
@@ -72,9 +73,16 @@ export function StrategyOptimizer() {
   const selected = strategies.find(s => s.id === strategyId)
   const params = selected?.params ?? []
 
-  // 切策略时重置 sweep 配置
+  // 刷新/切页后: 恢复未完成的优化任务
+  useEffect(() => {
+    tryReconnectOptimize()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // 切策略时重置 sweep 配置, 并清除旧策略的结果 (避免右侧残留错配)
   const onSelectStrategy = (id: string) => {
     setStrategyId(id)
+    clearOptimize()
     const s = strategies.find(x => x.id === id)
     const init: Record<string, Sweep> = {}
     for (const p of s?.params ?? []) init[p.id] = defaultSweep(p)
@@ -279,7 +287,7 @@ export function StrategyOptimizer() {
                           ? <span className="text-red-400">失败: {r.error.slice(0, 40)}</span>
                           : <span className="text-foreground">{Object.entries(r.params).map(([k, v]) => `${k}=${v}`).join(', ')}</span>}
                       </td>
-                      <td className="px-2 py-1.5 text-right font-medium">{r.objective_raw != null ? r.objective_raw : '—'}</td>
+                      <td className="px-2 py-1.5 text-right font-medium">{r.objective_raw != null ? r.objective_raw.toFixed(3) : '—'}</td>
                       <td className="px-2 py-1.5 text-right">{r.stats?.sharpe ?? '—'}</td>
                       <td className="px-2 py-1.5 text-right">{r.stats?.sortino ?? '—'}</td>
                       <td className="px-2 py-1.5 text-right">{r.stats?.total_return != null ? fmtPct(r.stats.total_return) : '—'}</td>
@@ -290,6 +298,11 @@ export function StrategyOptimizer() {
                   ))}
                 </tbody>
               </table>
+              {result.results.length > 50 && (
+                <div className="mt-2 text-center text-[11px] text-secondary">
+                  仅显示前 50 组 · 共 {result.results.length} 组
+                </div>
+              )}
             </div>
           </div>
         )}

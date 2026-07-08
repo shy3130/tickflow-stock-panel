@@ -596,6 +596,8 @@ async def optimize_stream(
     if settings.backtest_range_guard and (end_date - start_date).days + 1 > BACKTEST_MAX_SERVER_DAYS:
         guard_violated = True
 
+    # 空串归一为 None, 与 cancel 侧 `_get("direction") or None` 口径一致, 避免 job_key 失配。
+    direction = direction or None
     bt_kwargs = _opt_backtest_kwargs(
         matching, fees_pct, commission_pct, stamp_tax_pct, slippage_bps,
         max_positions, max_exposure_pct, initial_capital, position_sizing, mode, holding_days,
@@ -622,7 +624,11 @@ async def optimize_stream(
             try:
                 grid = json.loads(param_grid)
             except (json.JSONDecodeError, TypeError):
-                job.error = "param_grid 不是合法 JSON"
+                grid = None
+            # grid 必须是非空 dict; null/[]/"" 等合法 JSON 但结构错误也在此拦下,
+            # 否则会跳过线程启动却不置 done -> event_generator 永久空转、job 挂死。
+            if not isinstance(grid, dict) or not grid:
+                job.error = "param_grid 必须是非空的参数网格对象"
                 job.done = True
                 job.finish_ts = time.time()
                 grid = None
@@ -660,6 +666,9 @@ async def optimize_stream(
                 if job.done:
                     if job.error:
                         yield f"event: error\ndata: {json.dumps({'message': job.error}, ensure_ascii=False)}\n\n"
+                    elif job.cancel_event.is_set():
+                        # 取消时优化器把每组记为 cancelled 并正常返回, 需在此分流为取消提示而非"完成"。
+                        yield f"event: error\ndata: {json.dumps({'message': '优化已取消'}, ensure_ascii=False)}\n\n"
                     elif job.result is not None:
                         yield f"event: done\ndata: {json.dumps(job.result, ensure_ascii=False, default=str)}\n\n"
                     return
