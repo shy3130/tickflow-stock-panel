@@ -1636,6 +1636,41 @@ class KlineRepository:
         with self._lock:
             self.store._register_unified_views()
 
+    def rebuild_views(self) -> None:
+        """重建全部 13 张 parquet 视图并重挂 unified 视图 —— 唯一权威实现。
+
+        原先 daily_pipeline._refresh_views(盘后管道) 与 /api/data/clear(清库) 各自
+        内联了同一份视图重建 SQL, 清库那份还漏了几张视图导致漂移。此处收敛为单一入口:
+        覆盖全部 13 张视图 (二者的超集), 空目录 (清库后) 也能安全重挂。
+        """
+        d = self.store.data_dir.as_posix()
+        views = {
+            "kline_daily": f"{d}/kline_daily/**/*.parquet",
+            "kline_enriched": f"{d}/kline_daily_enriched/**/*.parquet",
+            "kline_index_daily": f"{d}/kline_index_daily/**/*.parquet",
+            "kline_index_enriched": f"{d}/kline_index_enriched/**/*.parquet",
+            "kline_etf_daily": f"{d}/kline_etf_daily/**/*.parquet",
+            "kline_etf_enriched": f"{d}/kline_etf_enriched/**/*.parquet",
+            "kline_etf_minute": f"{d}/kline_etf_minute/**/*.parquet",
+            "kline_minute": f"{d}/kline_minute/**/*.parquet",
+            "adj_factor": f"{d}/adj_factor/**/*.parquet",
+            "adj_factor_etf": f"{d}/adj_factor_etf/**/*.parquet",
+            "instruments": f"{d}/instruments/**/*.parquet",
+            "instruments_index": f"{d}/instruments_index/**/*.parquet",
+            "instruments_etf": f"{d}/instruments_etf/**/*.parquet",
+        }
+        for name, path in views.items():
+            try:
+                with self._lock:
+                    self.db.execute(
+                        f"CREATE OR REPLACE VIEW {name} AS "
+                        f"SELECT * FROM read_parquet('{path}', union_by_name=true)"
+                    )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("rebuild view %s failed: %s", name, e)
+        with self._lock:
+            self.store._register_unified_views()
+
     @staticmethod
     def _atomic_write_parquet(df: pl.DataFrame, out: Path) -> None:
         """先写临时文件再原子替换, 避免进程中断留下损坏的 parquet。
