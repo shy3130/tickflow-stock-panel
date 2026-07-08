@@ -1,8 +1,10 @@
 """Screener API。"""
 from __future__ import annotations
 
+import glob as _glob
 import logging
 import math
+import os
 import re
 import time
 from dataclasses import asdict
@@ -64,11 +66,34 @@ def _quote_ident(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
+# ── 扩展列 value_map 缓存 ────────────────────────────────────────────
+# 每次请求 _load_ext_value_maps 都会重新从磁盘读 ext parquet 并重建 {symbol: value}。
+# 用底层 parquet 文件的 (路径, mtime) 签名做 memoize: 文件未变则复用上次的 map,
+# parquet 被重写 (mtime 变化) 时自动失效重算。仅缓存基于 config 的快照/时序路径,
+# 无 config 的 DuckDB view 回退路径不缓存 (少见)。
+_ext_value_map_cache: dict[tuple[str, str], tuple[Any, dict[str, Any]]] = {}
+
+
+def _ext_parquet_signature(cfg, data_dir) -> Optional[tuple]:
+    """该扩展配置底层 parquet 文件的 (路径, mtime) 签名; 出错返回 None (禁用缓存)。"""
+    try:
+        from app.api.ext_data import _parquet_glob
+        pattern = _parquet_glob(cfg, data_dir)
+        files = sorted(_glob.glob(pattern, recursive=True))
+        if not files:
+            return None
+        return tuple((f, os.path.getmtime(f)) for f in files)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _load_ext_value_maps(repo, ext_columns: Optional[str]) -> dict[str, dict[str, Any]]:
     """按请求加载扩展列，返回 {输出列名: {symbol: value}}。
 
     策略结果缓存是共享文件，不能被不同 ext_columns 组合污染；因此扩展列只在
     返回前通过该投影映射追加到结果副本中。
+
+    基于 config 的路径按 parquet 文件 mtime 签名 memoize, 文件未变时跳过磁盘重读。
     """
     ext_specs = _parse_ext_columns(ext_columns) if ext_columns else []
     if not ext_specs:
@@ -87,8 +112,15 @@ def _load_ext_value_maps(repo, ext_columns: Optional[str]) -> dict[str, dict[str
     for config_id, field_name in ext_specs:
         out_col = f"{config_id}__{field_name}"
         cfg = configs.get(config_id)
+        cache_key = (config_id, field_name)
+        sig = _ext_parquet_signature(cfg, data_dir) if cfg else None
         try:
             if cfg:
+                # 命中缓存 (文件签名一致) → 复用, 免去磁盘重读
+                cached = _ext_value_map_cache.get(cache_key)
+                if cached is not None and sig is not None and cached[0] == sig:
+                    value_maps[out_col] = cached[1]
+                    continue
                 # 时序扩展表只取最新分区，避免历史分区把同一 symbol JOIN 放大。
                 ext_df, _ = _read_ext_dataframe(cfg, data_dir)
             else:
@@ -101,11 +133,14 @@ def _load_ext_value_maps(repo, ext_columns: Optional[str]) -> dict[str, dict[str
                 continue
 
             ext_df = ext_df.select(["symbol", field_name]).unique(subset=["symbol"], keep="last")
-            value_maps[out_col] = {
+            vmap = {
                 str(row["symbol"]): _safe_ext_value(row.get(field_name))
                 for row in ext_df.to_dicts()
                 if row.get("symbol")
             }
+            value_maps[out_col] = vmap
+            if cfg and sig is not None:
+                _ext_value_map_cache[cache_key] = (sig, vmap)
         except Exception as e:  # noqa: BLE001
             logger.debug("screener ext column join skipped for %s.%s: %s", config_id, field_name, e)
 
@@ -479,8 +514,6 @@ def limit_ladder(
 
     ext_columns: 动态 JOIN 扩展数据, 如 "concept.concept,industry.industry"
     """
-    from datetime import timedelta
-
     import polars as pl
 
     is_down = direction == "down"
@@ -540,17 +573,10 @@ def limit_ladder(
     sealed_counts_up = _count_sealed(up_map, sealed_up_ready)
     sealed_counts_down = _count_sealed(down_map, sealed_down_ready)
 
-    # 加载前一日数据获取 prev consecutive_limit_ups/downs
-    prev_consec: pl.DataFrame = pl.DataFrame()
-    for delta in range(1, 10):
-        candidate = as_of - timedelta(days=delta)
-        df_prev = svc._load_enriched_for_date(candidate)
-        if not df_prev.is_empty() and consec_col in df_prev.columns:
-            prev_consec = df_prev.select(
-                "symbol",
-                pl.col(consec_col).alias("prev_consec"),
-            )
-            break
+    # 加载前一日的 prev consecutive_limit_ups/downs
+    # 窄读: 仅取前一交易日的 [symbol, consec_col] 两列 (存储列, 直接谓词下推读 parquet),
+    # 替代旧的 range(1,10) 循环逐日 _load_enriched_for_date 全量指标重算 (最坏 9× 全市场重算)。
+    prev_consec: pl.DataFrame = svc.load_prior_consecutive(as_of, consec_col)
 
     if not prev_consec.is_empty():
         df = df.join(prev_consec, on="symbol", how="left")

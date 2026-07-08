@@ -207,7 +207,8 @@ class FactorBacktestService:
 
         from app.indicators.pipeline import compute_indicators
 
-        computed = compute_indicators(panel)
+        # 只需要单个因子列 → 用 needed 裁剪, 跳过无关的 EMA/KDJ/RSI 等计算 pass
+        computed = compute_indicators(panel, needed={factor_col})
         if factor_col not in computed.columns:
             return panel
         return computed.select(["symbol", "date", "close", factor_col])
@@ -242,7 +243,6 @@ class FactorBacktestService:
         import datetime as _dt
 
         all_dates = sorted(panel["date"].unique().to_list())
-        date_set = set(all_dates)
 
         if rebalance == "weekly":
             # 调仓日 = 每周一
@@ -268,45 +268,58 @@ class FactorBacktestService:
             panel = panel.with_columns(pl.lit(None).cast(pl.Float64).alias("_next_return"))
             return panel
 
-        # 对每个调仓日，找到下一个调仓日
+        # 对每个调仓日，找到下一个调仓日 (仅在 unique 日期上做, 成本极低)
         sorted_rebalance = sorted(rebalance_dates)
-        next_rebalance_map: dict = {}
+        reb_dates: list = []
+        next_dates: list = []
         for i, d in enumerate(sorted_rebalance):
             if i + 1 < len(sorted_rebalance):
-                next_rebalance_map[d] = sorted_rebalance[i + 1]
+                reb_dates.append(d)
+                next_dates.append(sorted_rebalance[i + 1])
             # 最后一个调仓日没有下一个，不计算收益
 
-        # 构建 (date, symbol) → next_rebalance_date 的 close 价格映射
+        if not reb_dates:
+            panel = panel.with_columns(pl.lit(None).cast(pl.Float64).alias("_next_return"))
+            return panel
+
         panel = panel.sort(["symbol", "date"])
-        dates_col = panel["date"].to_list()
-        close_col = panel["close"].to_list()
-        symbol_col = panel["symbol"].to_list()
+        date_dtype = panel.schema["date"]
 
-        # 先找下个调仓日的 close
-        # 建立 (date, symbol) → close 的快速查找
-        price_map: dict[tuple, float] = {}
-        for i in range(len(dates_col)):
-            price_map[(str(dates_col[i]), symbol_col[i])] = close_col[i]
+        # 调仓日 → 下一调仓日 的映射表 (向量化 JOIN, 替代 Python 逐行 price_map 循环)
+        rebal_df = pl.DataFrame(
+            {"date": reb_dates, "_next_reb_date": next_dates}
+        ).with_columns(
+            pl.col("date").cast(date_dtype),
+            pl.col("_next_reb_date").cast(date_dtype),
+        )
 
-        next_returns = [None] * len(panel)
-        for i in range(len(panel)):
-            d = dates_col[i]
-            d_val = d if isinstance(d, _dt.date) else _dt.date.fromisoformat(str(d))
-            if d not in rebalance_dates:
-                continue
-            next_d = next_rebalance_map.get(d)
-            if next_d is None:
-                continue
-            next_d_str = str(next_d)[:10]
-            d_str = str(d)[:10]
-            sym = symbol_col[i]
-            next_close = price_map.get((next_d_str, sym))
-            cur_close = close_col[i]
-            if next_close is not None and cur_close and cur_close > 0:
-                next_returns[i] = (next_close / cur_close - 1.0)
+        # (symbol, 下一调仓日) → 该日 close 的查找表 (等价于原 price_map, 重复取 last)
+        price_lookup = (
+            panel.select(
+                pl.col("symbol"),
+                pl.col("date").alias("_next_reb_date"),
+                pl.col("close").alias("_next_close"),
+            )
+            .unique(subset=["symbol", "_next_reb_date"], keep="last")
+        )
 
-        panel = panel.with_columns(
-            pl.Series("_next_return", next_returns, dtype=pl.Float64)
+        # 只在调仓日标记行有效: 下一调仓日该股 close / 当日 close - 1; 缺价或非调仓日为 null
+        panel = (
+            panel.join(rebal_df, on="date", how="left")
+            .join(price_lookup, on=["symbol", "_next_reb_date"], how="left")
+            .with_columns(
+                pl.when(
+                    pl.col("_next_reb_date").is_not_null()
+                    & pl.col("_next_close").is_not_null()
+                    & (pl.col("close") > 0)
+                )
+                .then(pl.col("_next_close") / pl.col("close") - 1.0)
+                .otherwise(None)
+                .cast(pl.Float64)
+                .alias("_next_return")
+            )
+            .drop(["_next_reb_date", "_next_close"])
+            .sort(["symbol", "date"])
         )
         return panel
 
@@ -323,14 +336,16 @@ class FactorBacktestService:
             )
             .with_columns(
                 (
-                    ((pl.col("_factor_ord") * n_groups) / pl.col("_factor_count"))
-                    .floor()
-                    .cast(pl.Int64)
-                    + 1
+                    pl.lit("Q")
+                    + (
+                        ((pl.col("_factor_ord") * n_groups) / pl.col("_factor_count"))
+                        .floor()
+                        .cast(pl.Int64)
+                        + 1
+                    )
+                    .clip(1, n_groups)
+                    .cast(pl.Utf8)
                 )
-                .clip(1, n_groups)
-                .cast(pl.Utf8)
-                .map_elements(lambda v: f"Q{v}", return_dtype=pl.Utf8)
                 .alias("_group")
             )
             .drop(["_factor_ord", "_factor_count"])

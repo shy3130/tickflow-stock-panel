@@ -267,6 +267,44 @@ class ScreenerService:
         df_full = self._compute_enriched_full(df, target_date)
         return df_full
 
+    def load_prior_consecutive(self, as_of: date, consec_col: str) -> pl.DataFrame:
+        """窄读: 仅取前一交易日的 [symbol, consec_col] 两列 (谓词下推到单日 parquet)。
+
+        consecutive_limit_ups / consecutive_limit_downs 是 enriched 的存储列,
+        可直接从 parquet 读取, 无需 _load_enriched_for_date 的全量指标重算
+        (历史日期该慢路径最坏会触发 9 次全市场 compute_enriched_full)。
+
+        选取逻辑与旧循环等价: 在 as_of 前 1~9 天内找到第一个存在的日分区
+        (即前一交易日), 读取其 symbol + consec_col。存储列的值与重算值逐位一致
+        (连板计数为 run-length, 150 天 warmup 完全覆盖 A 股最长连板, 二者相等)。
+
+        返回列: symbol, prev_consec。找不到前一交易日时返回空 DataFrame。
+        """
+        enriched_dir = self.repo.store.data_dir / self._enriched_dirname
+        for delta in range(1, 10):
+            candidate = as_of - timedelta(days=delta)
+            target_parquet = enriched_dir / f"date={candidate.isoformat()}" / "part.parquet"
+            if not target_parquet.exists():
+                continue
+            try:
+                lf = pl.scan_parquet(target_parquet)
+                cols = lf.collect_schema().names()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("load_prior_consecutive scan failed for %s: %s", candidate, e)
+                return pl.DataFrame()
+            # 存储列理论上必含 consec_col; 若该分区缺列则继续向前找 (与旧循环一致)
+            if "symbol" not in cols or consec_col not in cols:
+                continue
+            try:
+                return lf.select(
+                    "symbol",
+                    pl.col(consec_col).alias("prev_consec"),
+                ).collect()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("load_prior_consecutive read failed for %s: %s", candidate, e)
+                return pl.DataFrame()
+        return pl.DataFrame()
+
     def _compute_enriched_full(self, df_target: pl.DataFrame, target_date: date) -> pl.DataFrame:
         """从 14 列基础数据即时计算完整 enriched (含全部指标和信号)。
 
@@ -437,6 +475,10 @@ class ScreenerService:
             df = df.filter(pl.col("symbol").is_in(pool))
 
         # 用 DuckDB 做 SQL 过滤 (注册临时视图)
+        # 用独立的 :memory: 连接 (而非复用 repo 共享连接的 cursor): conditions 是用户
+        # 传入的 SQL 片段, 隔离连接下注入至多能碰 read_csv/read_parquet 文件; 若复用共享
+        # 连接则会把 app 已注册的真实业务表也暴露给注入, 扩大攻击面。隔离连接创建开销极低。
+        con = None
         try:
             import duckdb
             con = duckdb.connect(database=":memory:")
@@ -448,10 +490,15 @@ class ScreenerService:
             if limit:
                 sql += f" LIMIT {limit}"
             df_result = con.execute(sql).pl()
-            con.close()
         except Exception as e:  # noqa: BLE001
             logger.warning("screener SQL query failed: %s", e)
             df_result = pl.DataFrame()
+        finally:
+            if con is not None:
+                try:
+                    con.close()
+                except Exception:  # noqa: BLE001
+                    pass
 
         rows = df_result.to_dicts() if not df_result.is_empty() else []
         elapsed = (time.perf_counter() - t0) * 1000
