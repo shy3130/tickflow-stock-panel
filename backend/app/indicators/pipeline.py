@@ -487,12 +487,11 @@ def compute_limit_signals(df: pl.DataFrame, instruments: pl.DataFrame) -> pl.Dat
     if df.is_empty():
         return df
 
-    # 从 instruments 取 ST 标记 + 流通股本(换手率用)
+    # 从 instruments 取 ST 标记、流通股本(换手率用)以及最新日涨跌停价
     inst_cols = ["symbol"]
-    if "name" in instruments.columns:
-        inst_cols.append("name")
-    if "float_shares" in instruments.columns:
-        inst_cols.append("float_shares")
+    for c in ["name", "float_shares", "limit_up", "limit_down"]:
+        if c in instruments.columns:
+            inst_cols.append(c)
     inst_subset = instruments.select(inst_cols).unique(subset=["symbol"])
 
     if "name" in instruments.columns:
@@ -565,6 +564,27 @@ def compute_limit_signals(df: pl.DataFrame, instruments: pl.DataFrame) -> pl.Dat
         .alias("_theoretical_limit_down")
     )
 
+    # 生效涨跌停价: 最新日优先使用维表权威值; 历史日期继续使用理论价。
+    # instruments 只有最新快照, 不能用于历史日期; >=10000 视为新股无涨跌停限制哨兵值。
+    _SENTINEL = 10000.0
+    is_latest_date = pl.col("date") == pl.col("date").max()
+    if "limit_up" in df.columns:
+        effective_limit_up = pl.when(
+            is_latest_date & pl.col("limit_up").is_not_null() & (pl.col("limit_up") < _SENTINEL)
+        ).then(pl.col("limit_up")).otherwise(pl.col("_theoretical_limit_up"))
+    else:
+        effective_limit_up = pl.col("_theoretical_limit_up")
+    if "limit_down" in df.columns:
+        effective_limit_down = pl.when(
+            is_latest_date & pl.col("limit_down").is_not_null() & (pl.col("limit_down") < _SENTINEL)
+        ).then(pl.col("limit_down")).otherwise(pl.col("_theoretical_limit_down"))
+    else:
+        effective_limit_down = pl.col("_theoretical_limit_down")
+    df = df.with_columns([
+        effective_limit_up.alias("_effective_limit_up"),
+        effective_limit_down.alias("_effective_limit_down"),
+    ])
+
     # ── signal_limit_up ──
     df = df.with_columns(
         pl.when(
@@ -572,7 +592,7 @@ def compute_limit_signals(df: pl.DataFrame, instruments: pl.DataFrame) -> pl.Dat
             & (pl.col("_prev_raw_close") > 0)
             & (pl.col("raw_close") > 0)
         ).then(
-            (pl.col("raw_close") - pl.col("_theoretical_limit_up")).abs() < 0.005
+            pl.col("raw_close") >= (pl.col("_effective_limit_up") - 0.005)
         ).otherwise(None).cast(pl.Boolean)
         .alias("signal_limit_up")
     )
@@ -606,7 +626,7 @@ def compute_limit_signals(df: pl.DataFrame, instruments: pl.DataFrame) -> pl.Dat
             & (pl.col("_prev_raw_close") > 0)
             & (pl.col("raw_close") > 0)
         ).then(
-            (pl.col("raw_close") - pl.col("_theoretical_limit_down")).abs() < 0.005
+            pl.col("raw_close") <= (pl.col("_effective_limit_down") + 0.005)
         ).otherwise(None).cast(pl.Boolean)
         .alias("signal_limit_down")
     )
@@ -641,7 +661,7 @@ def compute_limit_signals(df: pl.DataFrame, instruments: pl.DataFrame) -> pl.Dat
             & (pl.col("_prev_raw_close") > 0)
         ).then(
             (~pl.col("signal_limit_down").fill_null(False))              # 最终没跌停
-            & (pl.col("low") <= pl.col("_theoretical_limit_down") + 0.005)  # 曾触及跌停
+            & (pl.col("low") <= pl.col("_effective_limit_down") + 0.005)  # 曾触及跌停
             & (pl.col("close") > pl.col("open"))                          # 收阳
         ).otherwise(None).cast(pl.Boolean)
         .alias("signal_limit_down_recovery")
@@ -656,7 +676,7 @@ def compute_limit_signals(df: pl.DataFrame, instruments: pl.DataFrame) -> pl.Dat
             & (pl.col("raw_high") > 0)
         ).then(
             (~pl.col("signal_limit_up").fill_null(False))               # 最终没封住涨停
-            & (pl.col("raw_high") >= pl.col("_theoretical_limit_up") - 0.005)  # 曾触及涨停价
+            & (pl.col("raw_high") >= pl.col("_effective_limit_up") - 0.005)  # 曾触及涨停价
         ).otherwise(None).cast(pl.Boolean)
         .alias("signal_broken_limit_up")
     )
@@ -664,6 +684,7 @@ def compute_limit_signals(df: pl.DataFrame, instruments: pl.DataFrame) -> pl.Dat
     # 清理临时列 + JOIN 引入的 instruments 列 (不存入 enriched)
     cleanup = ["_prev_raw_close", "_board_pct", "_limit_pct",
                "_theoretical_limit_up", "_theoretical_limit_down",
+               "_effective_limit_up", "_effective_limit_down",
                "_grp_up", "_grp_down"]
     if "_is_st" in df.columns:
         cleanup.append("_is_st")
@@ -671,8 +692,8 @@ def compute_limit_signals(df: pl.DataFrame, instruments: pl.DataFrame) -> pl.Dat
     for c in df.columns:
         if c.endswith("_inst"):
             cleanup.append(c)
-    # name 和 float_shares 只用于计算, 不存入 enriched
-    for c in ["name", "float_shares"]:
+    # name / float_shares / limit_up / limit_down 只用于计算, 不存入 enriched
+    for c in ["name", "float_shares", "limit_up", "limit_down"]:
         if c in df.columns and c != "turnover_rate":
             cleanup.append(c)
     df = df.drop([c for c in cleanup if c in df.columns])
