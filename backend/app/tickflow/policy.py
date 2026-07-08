@@ -123,6 +123,7 @@ def _probe_real(tiers: dict) -> tuple[CapabilitySet, list[str], set[Cap]]:
     # 探测专用客户端:强制走付费端点验证 key。
     # base_url 用用户自定义端点(若已配置测速切换),否则默认 api.tickflow.org。
     probe_base = _base_url() or PAID_ENDPOINT
+    logger.info("开始能力探测 (付费端点=%s, SDK默认超时=30s×重试3)", probe_base)
     tf = TickFlow(api_key=key, base_url=probe_base)
     available: dict[Cap, CapabilityLimits] = {}
     log: list[str] = []
@@ -131,6 +132,9 @@ def _probe_real(tiers: dict) -> tuple[CapabilitySet, list[str], set[Cap]]:
     transient_failed: set[Cap] = set()
 
     def try_call(cap: Cap, fn, default_limits: dict[str, Any]) -> None:
+        # 分段耗时日志: 记录每个 cap 探测的开始/结束/耗时/结果, 便于定位卡死环节。
+        _t0 = time.perf_counter()
+        logger.info("能力探测开始: %s", cap.value)
         try:
             _call_with_retry(fn)
             available[cap] = CapabilityLimits(
@@ -138,8 +142,11 @@ def _probe_real(tiers: dict) -> tuple[CapabilitySet, list[str], set[Cap]]:
                 batch=default_limits.get("batch"),
                 subscribe=default_limits.get("subscribe"),
             )
+            _elapsed = time.perf_counter() - _t0
             log.append(f"✓ {cap}")
+            logger.info("能力探测完成: %s ✓ (%.2fs)", cap.value, _elapsed)
         except Exception as e:  # noqa: BLE001
+            _elapsed = time.perf_counter() - _t0
             msg = str(e).lower()
             cls = e.__class__.__name__
             # PermissionError 类名 / HTTP 403 / 中英文权限关键词都算"明确无权限"
@@ -151,6 +158,7 @@ def _probe_real(tiers: dict) -> tuple[CapabilitySet, list[str], set[Cap]]:
             )
             if is_perm_denied:
                 log.append(f"✗ {cap}(无权限)")
+                logger.info("能力探测完成: %s ✗ 无权限 (%.2fs)", cap.value, _elapsed)
             elif _is_transient(e):
                 # 仅**真瞬时**错误(超时/连接/5xx/429, 由 _is_transient 判定)才标记为疑似 —
                 # 与探测重试用同一判据。否则一个消息未命中权限关键词的确定性失败
@@ -158,9 +166,11 @@ def _probe_real(tiers: dict) -> tuple[CapabilitySet, list[str], set[Cap]]:
                 # 保护(保留旧付费档)反而掩盖真实的 Key 失效, 永不回落到 free-api。
                 transient_failed.add(cap)
                 log.append(f"? {cap} (瞬时: {cls}: {e})")
+                logger.warning("能力探测瞬时失败: %s ? %s: %s (%.2fs)", cap.value, cls, e, _elapsed)
             else:
                 # 非权限关键词、也非瞬时 → 视为该能力确实不可用(不保留、不重试保护)
                 log.append(f"✗ {cap}({cls}: {e})")
+                logger.info("能力探测完成: %s ✗ %s: %s (%.2fs)", cap.value, cls, e, _elapsed)
 
     # 用各档默认上限作为占位(无 X-RateLimit-* 头时)
     # 取所有档的并集,逐 cap 试探
@@ -295,7 +305,9 @@ def detect_capabilities(force: bool = False) -> CapabilitySet:
 
     # 有 API key — 真实探测
     try:
+        _probe_t0 = time.perf_counter()
         capset, probe_log, transient_failed = _probe_real(tiers)
+        logger.info("能力探测全部完成, 总耗时 %.2fs", time.perf_counter() - _probe_t0)
         # 判定档位:无效 key → none,免费 key → free,付费 → starter/pro/expert
         classified = _classify_tier(capset, tiers)
 

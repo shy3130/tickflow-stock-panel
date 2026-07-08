@@ -477,11 +477,17 @@ class QuoteService:
 
             resp = []
             if universes:
+                _u0 = time.perf_counter()
+                logger.info("拉取全市场行情 (universes=%s, SDK超时=30s×重试3)", universes)
                 resp.extend(tf.quotes.get_by_universes(universes=universes) or [])
+                logger.info("全市场行情拉取完成: %d 条 (%.2fs)", len(resp), time.perf_counter() - _u0)
             if preferences.get_realtime_pull_index() and preferences.get_realtime_index_mode() == "core":
-                resp.extend(tf.quotes.get(symbols=sorted(core_index_symbols)) or [])
+                _i0 = time.perf_counter()
+                _core_syms = sorted(core_index_symbols)
+                resp.extend(tf.quotes.get(symbols=_core_syms) or [])
+                logger.info("核心指数行情拉取完成: %d 只 (%.2fs)", len(_core_syms), time.perf_counter() - _i0)
         except Exception as e:  # noqa: BLE001
-            logger.warning("行情拉取失败: %s", e)
+            logger.warning("行情拉取失败 (%.2fs): %s", time.perf_counter() - t0, e)
             return
 
         if not resp:
