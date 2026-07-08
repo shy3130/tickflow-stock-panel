@@ -121,14 +121,9 @@ class _CacheEntry:
 
 
 class PanelCache:
-    """LRU + TTL 数据面板缓存。
+    """LRU + TTL 数据面板缓存。"""
 
-    线程安全: 优化器/walk-forward 会用多线程对同一 symbols/日期跑不同参数,
-    整个 get_or_compute 加锁 — 首个线程 compute 时其余等待, 完成后全部命中缓存,
-    同一面板只 scan_parquet + compute_all 一次。
-    """
-
-    def __init__(self, max_size: int = 4, ttl_seconds: int = 900):
+    def __init__(self, max_size: int = 2, ttl_seconds: int = 180):
         self._cache: OrderedDict[str, _CacheEntry] = OrderedDict()
         self._max_size = max_size
         self._ttl = ttl_seconds
