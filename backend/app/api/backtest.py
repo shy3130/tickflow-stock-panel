@@ -271,13 +271,18 @@ _running_jobs: dict[str, _BacktestJob] = {}
 _jobs_lock = threading.Lock()
 _JOB_TTL = 300  # 完成后保留 5 分钟
 
+# 并发回测上限: 多个重回测同时跑会 OOM (服务器内存约 1.8GB)。用信号量限并发,
+# 超出的任务在 _run_backtest 里排队, SSE 连接照常保持, run 一开始就有进度。
+_backtest_semaphore = threading.Semaphore(2)
+
 
 def _cleanup_stale_jobs():
-    """清理过期任务 (完成超过 TTL 的)。"""
+    """清理过期任务 (完成超过 TTL 的)。全程持 _jobs_lock: 迭代+pop 与其他访问互斥。"""
     now = time.time()
-    stale = [k for k, j in _running_jobs.items() if j.done and now - j.finish_ts > _JOB_TTL]
-    for k in stale:
-        _running_jobs.pop(k, None)
+    with _jobs_lock:
+        stale = [k for k, j in _running_jobs.items() if j.done and now - j.finish_ts > _JOB_TTL]
+        for k in stale:
+            _running_jobs.pop(k, None)
 
 
 def _make_job_key(
@@ -404,6 +409,9 @@ async def strategy_stream(
             )
 
             def _run_backtest():
+                # 信号量限并发: 超额任务在此阻塞排队, 不并发吃满内存 (等待期间 cancel_event
+                # 仍可置位, svc.run 会据此提前返回 cancelled)。持槽跑完在 finally 释放。
+                _backtest_semaphore.acquire()
                 try:
                     result = svc.run(cfg, lambda d: job.progress.append(d), job.cancel_event)
                     job.result = result
@@ -413,6 +421,8 @@ async def strategy_stream(
                     job.error = str(e)
                     job.done = True
                     job.finish_ts = time.time()
+                finally:
+                    _backtest_semaphore.release()
 
             # 启动后台线程 (不阻塞事件循环)
             threading.Thread(target=_run_backtest, daemon=True).start()
@@ -493,7 +503,9 @@ async def strategy_cancel(request: Request):
         stamp_tax_pct=_get_opt_float("stamp_tax_pct"),
         asset_type=_get("asset_type", "stock"),
     )
-    job = _running_jobs.get(job_key)
+    # 持锁读任务表: 与 _cleanup_stale_jobs 的 pop、stream 的写入互斥
+    with _jobs_lock:
+        job = _running_jobs.get(job_key)
     if job and not job.done:
         job.cancel_event.set()
         return {"ok": True}

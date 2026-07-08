@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -88,6 +89,10 @@ class StrategyMonitorService:
         self._alert_handler = alert_handler
         # strategy_id → 监控配置
         self._watching: dict[str, dict] = {}
+        # _watching 跨线程锁: on_quote_update 跑在行情轮询线程迭代 _watching,
+        # API 线程同时 start/stop 增删会抛 "dict changed size during iteration"。
+        # 增删与迭代前的快照都持此锁 (镜像 MonitorRuleEngine.evaluate 的 list 快照)。
+        self._watching_lock = threading.Lock()
 
     def start(self, strategy_id: str, config: dict) -> None:
         """开始监控一个策略
@@ -98,19 +103,23 @@ class StrategyMonitorService:
             "alerts": [{"field": "rsi_14", "op": ">", "value": 80, "message": "..."}],
         }
         """
-        self._watching[strategy_id] = config
+        with self._watching_lock:
+            self._watching[strategy_id] = config
         logger.info("strategy monitor started: %s", strategy_id)
 
     def stop(self, strategy_id: str) -> None:
-        self._watching.pop(strategy_id, None)
+        with self._watching_lock:
+            self._watching.pop(strategy_id, None)
         logger.info("strategy monitor stopped: %s", strategy_id)
 
     def stop_all(self) -> None:
-        self._watching.clear()
+        with self._watching_lock:
+            self._watching.clear()
 
     @property
     def watching(self) -> dict[str, dict]:
-        return dict(self._watching)
+        with self._watching_lock:
+            return dict(self._watching)
 
     def on_quote_update(self, df: pl.DataFrame) -> list[StrategyAlert]:
         """行情更新后调用。向量化检查所有监控策略。
@@ -125,7 +134,11 @@ class StrategyMonitorService:
 
         all_alerts: list[StrategyAlert] = []
 
-        for strategy_id, cfg in self._watching.items():
+        # 迭代前持锁快照, 避免行情线程迭代时 API 线程 start/stop 改变字典大小
+        with self._watching_lock:
+            watching_items = list(self._watching.items())
+
+        for strategy_id, cfg in watching_items:
             # 买入信号
             entry_sigs = cfg.get("entry_signals", [])
             if entry_sigs:

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -126,6 +127,10 @@ class PanelCache:
         self._cache: OrderedDict[str, _CacheEntry] = OrderedDict()
         self._max_size = max_size
         self._ttl = ttl_seconds
+        # 跨请求单例, SSE 回测在各自 daemon 线程并发访问 OrderedDict。
+        # 无锁的 move_to_end/del/popitem check-then-act 会抛 "OrderedDict mutated"。
+        # 用实例锁守护所有 OrderedDict 变更; compute_fn (重扫盘) 放锁外避免串行化。
+        self._lock = threading.Lock()
 
     def get_or_compute(
         self,
@@ -139,21 +144,25 @@ class PanelCache:
         key = self._make_key(symbols, start, end, columns, asset_type)
         now = time.monotonic()
 
-        if key in self._cache:
-            entry = self._cache[key]
-            if now - entry.ts < self._ttl:
-                self._cache.move_to_end(key)
-                return entry.df
-            del self._cache[key]
+        with self._lock:
+            if key in self._cache:
+                entry = self._cache[key]
+                if now - entry.ts < self._ttl:
+                    self._cache.move_to_end(key)
+                    return entry.df
+                del self._cache[key]
 
+        # 计算在锁外 (可能重扫 parquet, 耗时); 并发相同 key 至多重复算一次, 不会崩
         df = compute_fn(symbols, start, end, columns, asset_type)
-        self._cache[key] = _CacheEntry(df=df, ts=now)
-        if len(self._cache) > self._max_size:
-            self._cache.popitem(last=False)
+        with self._lock:
+            self._cache[key] = _CacheEntry(df=df, ts=now)
+            if len(self._cache) > self._max_size:
+                self._cache.popitem(last=False)
         return df
 
     def invalidate(self) -> None:
-        self._cache.clear()
+        with self._lock:
+            self._cache.clear()
 
     @staticmethod
     def _make_key(symbols: list[str] | None, start: date, end: date, columns: list[str] | None, asset_type: str = "stock") -> str:
