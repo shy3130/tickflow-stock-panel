@@ -429,10 +429,10 @@ class DepthService:
         """盘中轮询: 按 capset 自适应间隔拉 depth, 更新内存缓存。"""
         while self._running:
             try:
-                if self._is_trading_hours():
+                if self._is_continuous_trading():
                     self._poll_once()
                 else:
-                    logger.debug("depth sealed: 非交易时段, 跳过")
+                    logger.debug("depth sealed: 非连续竞价时段, 跳过(避免集合竞价盘口覆盖 11:30 定格值)")
             except Exception as e:  # noqa: BLE001
                 logger.warning("depth sealed 轮询异常: %s", e)
 
@@ -582,4 +582,21 @@ class DepthService:
         t = now.time()
         morning = dt_time(9, 25) <= t <= dt_time(11, 35)
         afternoon = dt_time(12, 55) <= t <= dt_time(15, 5)
+        return now.weekday() < 5 and (morning or afternoon)
+
+    @staticmethod
+    def _is_continuous_trading() -> bool:
+        """A股连续竞价时段(北京时间): 9:30-11:30 / 13:00-15:00, 仅工作日。
+
+        比 _is_trading_hours 严格: 排除午间休市前后(11:30-13:00)。
+        depth sealed 轮询用此窗口而非宽窗口, 关键原因:
+        12:55-13:00 午后集合竞价准备期, ask1/bid1 盘口语义与连续竞价不同,
+        「涨停价上卖一==0」的真封判定在此期间失效, 会用竞价盘口覆盖 11:30
+        已定格的正确 sealed 值, 导致涨停股误判为 sealed=False(假涨停)被错误扣减。
+        与 quote_service._is_continuous_trading 窗口定义保持一致。
+        """
+        now = cn_now()
+        t = now.time()
+        morning = dt_time(9, 30) <= t <= dt_time(11, 30)
+        afternoon = dt_time(13, 0) <= t <= dt_time(15, 0)
         return now.weekday() < 5 and (morning or afternoon)
