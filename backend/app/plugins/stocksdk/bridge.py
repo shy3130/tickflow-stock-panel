@@ -53,6 +53,8 @@ def run_job(job: dict, timeout: int = DEFAULT_TIMEOUT) -> dict:
             input=payload,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             cwd=str(_HERE),
         )
