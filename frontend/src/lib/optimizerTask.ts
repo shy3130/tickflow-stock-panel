@@ -64,8 +64,10 @@ let current: OptimizerTask | null = null
 const listeners = new Set<() => void>()
 let taskSeq = 0
 let eventSource: EventSource | null = null
+let currentJobKey: string | null = null
 
 const RECONNECT_KEY = 'optimizer_reconnect'
+const JOB_KEY_KEY = 'optimizer_job_key'
 
 function emit() {
   listeners.forEach(fn => fn())
@@ -95,6 +97,17 @@ function connectSSE(url: string): void {
   const es = new EventSource(url)
   eventSource = es
 
+  // 首事件: 后端回吐 job_key, 存下供 cancel 直接引用 (无需前端重算)
+  es.addEventListener('job', (e: MessageEvent) => {
+    try {
+      const key = JSON.parse(e.data)?.key
+      if (key) {
+        currentJobKey = key
+        localStorage.setItem(JOB_KEY_KEY, key)
+      }
+    } catch { /* ignore */ }
+  })
+
   es.addEventListener('progress', (e: MessageEvent) => {
     if (current?.id !== id) return
     try {
@@ -116,7 +129,9 @@ function connectSSE(url: string): void {
     }
     es.close()
     eventSource = null
+    currentJobKey = null
     localStorage.removeItem(RECONNECT_KEY)
+    localStorage.removeItem(JOB_KEY_KEY)
   })
 
   es.addEventListener('error', (e: MessageEvent) => {
@@ -175,12 +190,12 @@ export function startOptimize(params: StartOptimizeParams): void {
 }
 
 export async function stopOptimize(): Promise<void> {
-  const qs = localStorage.getItem(RECONNECT_KEY)
-  if (qs) {
+  const jobKey = currentJobKey ?? localStorage.getItem(JOB_KEY_KEY)
+  if (jobKey) {
     await fetch('/api/backtest/optimize/cancel', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ qs }),
+      body: JSON.stringify({ job_key: jobKey }),
     }).catch(() => {})
   }
   if (eventSource) {
@@ -191,7 +206,9 @@ export async function stopOptimize(): Promise<void> {
     current = { ...current, isPending: false, error: '已取消' }
     emit()
   }
+  currentJobKey = null
   localStorage.removeItem(RECONNECT_KEY)
+  localStorage.removeItem(JOB_KEY_KEY)
 }
 
 export function clearOptimize(): void {

@@ -1,8 +1,6 @@
 """优化器 API job_key 契约测试 — 守护 stream 与 cancel 的 key 对齐 (仿 PR3 C1 教训)。"""
 from __future__ import annotations
 
-from urllib.parse import urlencode
-
 from app.api.backtest import _OPT_BT_FIELDS, _make_opt_job_key, _opt_backtest_kwargs
 
 
@@ -26,35 +24,37 @@ def test_job_key_distinguishes_grid_and_objective():
     assert base != _make_opt_job_key("s", None, None, None, '{"p":[1,2]}', "sharpe", None, sig)   # objective 不同
 
 
-def test_stream_and_cancel_compute_same_key():
-    """cancel 从 query string 复原参数, 必须与 stream 算出同一 job_key, 否则取消失效。"""
-    grid = '{"ma_proximity":[0.01,0.02]}'
-    # stream 侧
-    bt = _opt_backtest_kwargs("open_t+1", 0.0002, None, None, 5.0, 10, 1.0, 1_000_000.0, "equal", "position", 5)
-    stream_key = _make_opt_job_key("s", None, None, None, grid, "sortino", None, _sig(bt))
+def test_cancel_looks_up_job_by_echoed_key():
+    """重构后: cancel 直接用 stream 回吐的 job_key 查表, 不再重算参数。
 
-    # cancel 侧: 复原自 query string (urlencode 等价前端 URLSearchParams)
-    qs = urlencode({
-        "strategy_id": "s", "param_grid": grid, "objective": "sortino",
-        "matching": "open_t+1", "fees_pct": "0.0002", "slippage_bps": "5.0",
-        "max_positions": "10", "max_exposure_pct": "1.0", "initial_capital": "1000000.0",
-        "position_sizing": "equal", "mode": "position", "holding_days": "5",
-    })
-    from urllib.parse import parse_qs
-    p = parse_qs(qs)
-    def g(k, d=""):
-        return p.get(k, [d])[0]
-    def gf(k):
-        v = g(k)
-        return float(v) if v else None
-    bt2 = _opt_backtest_kwargs(
-        g("matching", "open_t+1"), float(g("fees_pct", "0.0002")), gf("commission_pct"), gf("stamp_tax_pct"),
-        float(g("slippage_bps", "5")), int(g("max_positions", "10")), float(g("max_exposure_pct", "1")),
-        float(g("initial_capital", "1000000")), g("position_sizing", "equal"), g("mode", "position"),
-        int(g("holding_days", "5")),
-    )
-    cancel_key = _make_opt_job_key(
-        g("strategy_id"), g("symbols") or None, g("start") or None, g("end") or None,
-        g("param_grid") or None, g("objective", "sortino"), g("direction") or None, _sig(bt2),
-    )
-    assert stream_key == cancel_key
+    这消除了'两侧重算必须逐字段一致'的脆弱契约 (PR3 C1 / direction 空串失配的根因)。
+    """
+    import asyncio
+
+    from app.api.backtest import _BacktestJob, _running_jobs, optimize_cancel
+
+    class _Req:
+        def __init__(self, body):
+            self._body = body
+        async def json(self):
+            return self._body
+
+    key = "optkey_test_1"
+    job = _BacktestJob(key)
+    _running_jobs[key] = job
+    try:
+        # 用回吐的 key 取消 → 命中并 set cancel_event
+        res = asyncio.run(optimize_cancel(_Req({"job_key": key})))
+        assert res["ok"] is True
+        assert job.cancel_event.is_set()
+
+        # 已完成任务再取消 → ok False
+        job.done = True
+        res2 = asyncio.run(optimize_cancel(_Req({"job_key": key})))
+        assert res2["ok"] is False
+
+        # 未知 key → ok False, 不抛异常
+        res3 = asyncio.run(optimize_cancel(_Req({"job_key": "nonexistent"})))
+        assert res3["ok"] is False
+    finally:
+        _running_jobs.pop(key, None)

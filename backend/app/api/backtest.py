@@ -616,6 +616,9 @@ async def optimize_stream(
             is_new = False
 
     async def event_generator():
+        # 首个事件回吐 job_key, 前端存下供 cancel 直接引用 (消除两侧重算契约)。
+        yield f"event: job\ndata: {json.dumps({'key': job_key}, ensure_ascii=False)}\n\n"
+
         if guard_violated:
             yield f"event: error\ndata: {json.dumps({'message': BACKTEST_SERVER_GUARD_MESSAGE}, ensure_ascii=False)}\n\n"
             return
@@ -688,39 +691,14 @@ async def optimize_stream(
 
 @router.post("/optimize/cancel")
 async def optimize_cancel(request: Request):
-    """取消优化任务 (前端传 query string, 后端算同一 job_key)。"""
-    from urllib.parse import parse_qs
+    """取消优化任务 — 前端传 stream 首事件回吐的 job_key, 后端直接查表。
+
+    不再让 cancel 侧重算 job_key: 两侧重算必须逐字段一致的脆弱契约(PR3 C1 / direction
+    空串失配都源于此)在此彻底消除。stream 首个 SSE 事件把后端算出的 key 回吐给前端,
+    cancel 原样传回即可。
+    """
     body = await request.json()
-    p = parse_qs(body.get("qs", ""))
-    def _get(key: str, default: str = "") -> str:
-        return p.get(key, [default])[0]
-    def _get_opt_float(key: str) -> float | None:
-        v = _get(key)
-        return float(v) if v else None
-    bt_kwargs = _opt_backtest_kwargs(
-        _get("matching", "open_t+1"),
-        float(_get("fees_pct", "0.0002")),
-        _get_opt_float("commission_pct"),
-        _get_opt_float("stamp_tax_pct"),
-        float(_get("slippage_bps", "5")),
-        int(_get("max_positions", "10")),
-        float(_get("max_exposure_pct", "1")),
-        float(_get("initial_capital", "1000000")),
-        _get("position_sizing", "equal"),
-        _get("mode", "position"),
-        int(_get("holding_days", "5")),
-    )
-    bt_sig = "|".join(f"{k}={bt_kwargs[k]}" for k in _OPT_BT_FIELDS)
-    job_key = _make_opt_job_key(
-        _get("strategy_id"),
-        _get("symbols") or None,
-        _get("start") or None,
-        _get("end") or None,
-        _get("param_grid") or None,
-        _get("objective", "sortino"),
-        _get("direction") or None,
-        bt_sig,
-    )
+    job_key = body.get("job_key", "")
     job = _running_jobs.get(job_key)
     if job and not job.done:
         job.cancel_event.set()
