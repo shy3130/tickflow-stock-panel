@@ -1325,6 +1325,9 @@ class BacktestEngine:
         大样本 (如 full 模式数千笔) 时按 2M 单元上限压降模拟次数, 防止瞬时数组 OOM。
         """
         pnls = pnls[np.isfinite(pnls)]  # 剔除 inf/nan, 否则 cumprod 传播 nan 导致分位为 nan
+        # 防御: 单笔 pnl <= -100% 时 (1+pnl) <= 0 会让 cumprod 符号翻转/得非正净值, 回撤失真。
+        # 回测有止损, 实际不会发生; 兜底 clip 到 -99.99% 保证 (1+pnl) 恒正。
+        pnls = np.clip(pnls, -0.9999, None)
         n = len(pnls)
         if n < 3:
             return {"mc_maxdd_p50": None, "mc_maxdd_p95": None}
@@ -1407,7 +1410,8 @@ class BacktestEngine:
         # 夏普 — 用交易收益标准差近似
         sharpe = float(np.mean(pnls) / np.std(pnls)) * np.sqrt(252) if np.std(pnls) > 0 else 0.0
 
-        # Sortino — 与 sharpe 同基准 (逐笔收益), 仅惩罚下行波动
+        # Sortino: 刻意沿用本函数 sharpe 的逐笔收益 x sqrt(252) 基准。逐笔年化非严格正确,
+        # 但保证同一函数内 sharpe/sortino 口径一致可比 (内部一致 > 局部绝对)。仅惩罚下行波动。
         sortino = BacktestEngine._sortino_ratio(pnls)
 
         # Calmar

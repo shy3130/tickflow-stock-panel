@@ -81,6 +81,16 @@ def test_mc_drawdown_ignores_non_finite():
     assert BacktestEngine._mc_drawdown_percentiles(dirty) == BacktestEngine._mc_drawdown_percentiles(_MC_INPUT)
 
 
+def test_mc_drawdown_clips_sub_minus_100pct_pnl():
+    """防御: 单笔 pnl <= -100% 会让 (1+pnl)<=0 使 cumprod 符号翻转; clip 后分位仍有限。"""
+    pnls = np.array([0.05, -1.5, 0.08, -0.06, 0.02, -0.04])  # -1.5 = -150%, 现实不会有
+    r = BacktestEngine._mc_drawdown_percentiles(pnls)
+    assert r["mc_maxdd_p50"] is not None
+    for v in (r["mc_maxdd_p50"], r["mc_maxdd_p95"]):
+        assert v == v  # 非 nan
+        assert -1.0 <= v <= 0.0  # 回撤有界在 (-100%, 0], 未因符号翻转失真
+
+
 def test_mc_drawdown_all_positive_has_zero_drawdown():
     """全正收益: 任何重排都无回撤 → 分位均为 0。"""
     pnls = np.array([0.01, 0.02, 0.03, 0.04, 0.05])

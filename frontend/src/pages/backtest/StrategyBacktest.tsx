@@ -1665,7 +1665,7 @@ export function StrategyBacktest() {
                   color="#34d399" />
                 <Stat label="蒙卡回撤(中位)" value={pick('mc_maxdd_p50') != null ? fmtPct(pick('mc_maxdd_p50') as number) : '—'}
                   color="#34d399" />
-                <Stat label="蒙卡回撤(95%最坏)" value={pick('mc_maxdd_p95') != null ? fmtPct(pick('mc_maxdd_p95') as number) : '—'}
+                <Stat label="蒙卡回撤(95%置信不差于此)" value={pick('mc_maxdd_p95') != null ? fmtPct(pick('mc_maxdd_p95') as number) : '—'}
                   color="#34d399" />
                 <Stat label="胜率" value={pick('win_rate') != null ? fmtPct(pick('win_rate') as number) : '—'} />
                 <Stat label="交易数" value={pick('n_trades') != null ? String(pick('n_trades')) : '—'} />
