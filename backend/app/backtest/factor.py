@@ -174,7 +174,7 @@ class FactorBacktestService:
         # ── 2. 分层回测 ──
         panel = self._add_groups(panel, factor_col, config.n_groups)
         group_nav = self._calc_group_nav(panel, config)
-        group_stats = self._calc_group_stats(group_nav, config.start, config.end)
+        group_stats = self._calc_group_stats(group_nav, config.start, config.end, config.rebalance)
 
         # ── 3. 多空组合 ──
         long_short_nav, long_short_stats = self._calc_long_short(group_nav, config)
@@ -399,6 +399,7 @@ class FactorBacktestService:
     @staticmethod
     def _calc_group_stats(
         group_nav: list[dict], start: date, end: date,
+        rebalance: str = "monthly",
     ) -> list[dict]:
         if not group_nav:
             return []
@@ -432,10 +433,12 @@ class FactorBacktestService:
                 if values[j - 1] > 0:
                     daily_rets.append(values[j] / values[j - 1] - 1)
 
-            # 夏普
+            # 夏普 — 年化系数必须匹配 group_nav 的调仓频率 (每个净值点 = 一个调仓周期收益);
+            # 周/月频收益若乘 √252 会把 Sharpe 高估 √(252/期数) 倍 (月频 ≈4.6x, 周频 ≈2.2x)。
             if daily_rets:
                 arr = np.array(daily_rets)
-                sharpe = float(np.mean(arr) / np.std(arr)) * np.sqrt(252) if np.std(arr) > 0 else 0.0
+                _ann = {"daily": 252, "weekly": 52, "monthly": 12}.get(rebalance, 252)
+                sharpe = float(np.mean(arr) / np.std(arr)) * np.sqrt(_ann) if np.std(arr) > 0 else 0.0
                 win_rate = float(np.mean(arr > 0))
             else:
                 sharpe = 0.0

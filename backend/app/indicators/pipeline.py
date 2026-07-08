@@ -643,10 +643,11 @@ def compute_limit_signals(df: pl.DataFrame, instruments: pl.DataFrame) -> pl.Dat
         .alias("_board_pct")
     )
 
-    # ST → 5%（覆盖板块默认值）
+    # ST → 5%, 但仅限主板风险警示股; 创业板/科创板/北交所 ST 保留各自板块限幅
+    # (注册制改革后 创业板 300/301、科创板 688/689 的 ST 仍执行 20%, 北交所 30%)。
     if "_is_st" in df.columns:
         df = df.with_columns(
-            pl.when(pl.col("_is_st").fill_null(False))
+            pl.when(pl.col("_is_st").fill_null(False) & ~(is_chinext | is_star | is_bj))
             .then(0.05)
             .otherwise(pl.col("_board_pct"))
             .alias("_limit_pct")
@@ -1549,7 +1550,10 @@ def _compute_limit_signals_today(df: pl.DataFrame, instruments: pl.DataFrame) ->
         .otherwise(0.10)
     )
     if "_is_st" in df.columns:
-        limit_pct = pl.when(pl.col("_is_st").fill_null(False)).then(0.05).otherwise(limit_pct)
+        # ST 5% 仅主板生效; 创业板/科创板/北交所 ST 保留板块限幅 (同 compute_limit_signals)
+        limit_pct = pl.when(
+            pl.col("_is_st").fill_null(False) & ~(is_chinext | is_star | is_bj)
+        ).then(0.05).otherwise(limit_pct)
     limit_pct = limit_pct.alias("_limit_pct")
 
     limit_up_price = _limit_price(prev_raw, limit_pct, up=True)
