@@ -46,13 +46,17 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
   const options = useQuery({ queryKey: QK.monitorRuleOptions, queryFn: api.monitorRuleOptions })
   const { data: prefs } = usePreferences()
   const feishuConfigured = !!(prefs?.feishu_webhook_url)
+  const wecomConfigured = !!(prefs?.wecom_webhook_url)
   const [editing] = useState(!!rule)
-  // 新建规则: 预填全局「默认推送渠道」(飞书), preset 显式指定时以 preset 为准。
+  // 新建规则: 预填全局「默认推送渠道」(多选数组), preset 显式指定时以 preset 为准。
   // 编辑规则: 完全沿用规则自身配置, 不受默认值影响。
   const [draft, setDraft] = useState<MonitorRule>(
     rule
       ? { ...rule, conditions: rule.conditions.map(c => ({ ...c })) }
-      : { ...emptyRule(preset), webhook_enabled: preset?.webhook_enabled ?? !!(prefs?.webhook_enabled_default) },
+      : {
+          ...emptyRule(preset),
+          webhook_channels: preset?.webhook_channels ?? (prefs?.webhook_default_channels ?? []),
+        },
   )
   const assetType = draft.asset_type ?? 'stock'
   // 策略列表跟随资产类型: ETF 只列技术类策略。
@@ -120,6 +124,13 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
     }
     setSymbolQuery('')
   }
+
+  // 勾选/取消勾选某个推送渠道 (飞书 / 企业微信 各自独立)
+  const toggleChannel = (ch: string) =>
+    setDraft(d => {
+      const cur = d.webhook_channels ?? []
+      return { ...d, webhook_channels: cur.includes(ch) ? cur.filter(c => c !== ch) : [...cur, ch] }
+    })
 
   const thresholdFields = options.data?.threshold_fields ?? []
   const operators = options.data?.operators ?? ['>', '>=', '<', '<=', '==', '!=']
@@ -404,7 +415,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
         </label>
       </div>
 
-      {/* Webhook 推送 — 飞书可用, QMT/ptrade 待定 */}
+      {/* Webhook 推送 — 飞书 / 企业微信 可用, QMT/ptrade 待定 */}
       <div className="rounded-btn border border-border/40 bg-base/40 p-3 space-y-2">
         <div className="flex items-center gap-1.5">
           <span className="text-[11px] font-medium text-foreground">Webhook 推送</span>
@@ -417,15 +428,32 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
           <label className="flex items-center gap-2 cursor-pointer">
             <input
               type="checkbox"
-              checked={!!draft.webhook_enabled}
-              onChange={e => setDraft(d => ({ ...d, webhook_enabled: e.target.checked }))}
+              checked={(draft.webhook_channels ?? []).includes('feishu')}
+              onChange={() => toggleChannel('feishu')}
               className="h-3 w-3 accent-accent cursor-pointer"
             />
             <span className="text-[11px] text-foreground">飞书</span>
             <span className="text-[9px] text-muted">群机器人</span>
-            {draft.webhook_enabled && (
+            {(draft.webhook_channels ?? []).includes('feishu') && (
               <span className={`ml-auto text-[9px] ${feishuConfigured ? 'text-emerald-500' : 'text-warning'}`}>
                 {feishuConfigured ? '已配置' : '未配置'}
+              </span>
+            )}
+          </label>
+
+          {/* 企业微信 (可用) */}
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={(draft.webhook_channels ?? []).includes('wecom')}
+              onChange={() => toggleChannel('wecom')}
+              className="h-3 w-3 accent-accent cursor-pointer"
+            />
+            <span className="text-[11px] text-foreground">企业微信</span>
+            <span className="text-[9px] text-muted">群机器人</span>
+            {(draft.webhook_channels ?? []).includes('wecom') && (
+              <span className={`ml-auto text-[9px] ${wecomConfigured ? 'text-emerald-500' : 'text-warning'}`}>
+                {wecomConfigured ? '已配置' : '未配置'}
               </span>
             )}
           </label>
@@ -445,18 +473,32 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
           </label>
         </div>
 
-        {/* 飞书勾选但全局未配置 → 提示前往设置 */}
-        {draft.webhook_enabled && !feishuConfigured && (
-          <p className="text-[10px] leading-relaxed text-warning/80">
-            飞书 Webhook 地址尚未配置,
-            <Link to="/settings?tab=monitoring" className="text-accent hover:text-accent/80">前往设置页配置 →</Link>
-          </p>
-        )}
-        {draft.webhook_enabled && feishuConfigured && (
-          <p className="text-[10px] leading-relaxed text-muted">
-            命中本规则时,告警将推送到设置页配置的飞书群。
-          </p>
-        )}
+        {/* 勾选了某渠道但该渠道地址未配置 → 提示前往设置 */}
+        {(draft.webhook_channels ?? []).length > 0 && (() => {
+          const selected = draft.webhook_channels ?? []
+          const unconfigured: string[] = []
+          if (selected.includes('feishu') && !feishuConfigured) unconfigured.push('飞书')
+          if (selected.includes('wecom') && !wecomConfigured) unconfigured.push('企业微信')
+          if (unconfigured.length === 0) return null
+          return (
+            <p className="text-[10px] leading-relaxed text-warning/80">
+              {unconfigured.join('、')}尚未配置,
+              <Link to="/settings?tab=monitoring" className="text-accent hover:text-accent/80">前往设置页配置 →</Link>
+            </p>
+          )
+        })()}
+        {(draft.webhook_channels ?? []).length > 0 && (() => {
+          const selected = draft.webhook_channels ?? []
+          const ready: string[] = []
+          if (selected.includes('feishu') && feishuConfigured) ready.push('飞书')
+          if (selected.includes('wecom') && wecomConfigured) ready.push('企业微信')
+          if (ready.length === 0) return null
+          return (
+            <p className="text-[10px] leading-relaxed text-muted">
+              命中本规则时,告警将推送到已配置的{ready.join(' + ')}。
+            </p>
+          )
+        })()}
       </div>
 
       {error && <div className="rounded-btn border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger">{error}</div>}

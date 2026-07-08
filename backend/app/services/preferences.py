@@ -496,18 +496,51 @@ def set_wecom_webhook_url(url: str) -> str:
 
 
 def get_webhook_enabled_default() -> bool:
-    """新建监控规则时是否默认勾选「飞书推送」。
+    """新建监控规则时是否默认勾选推送 (老布尔, 已由 webhook_default_channels 取代)。
 
-    数据模型当前只有一个 webhook_enabled 布尔 (即飞书), QMT/ptrade 待定。
-    此默认值供规则编辑器新建规则时预填, 单条规则仍可独立修改。
+    保留向后兼容: 读取 webhook_default_channels 非空时返回 True。
     """
-    return load().get("webhook_enabled_default", False)
+    return bool(get_webhook_default_channels())
 
 
 def set_webhook_enabled_default(enabled: bool) -> bool:
-    """保存飞书推送默认勾选态。"""
-    save({"webhook_enabled_default": bool(enabled)})
+    """保存推送默认勾选态 (老布尔兼容入口)。
+
+    新数据模型为渠道数组; 此处把老布尔转译: True→['feishu','wecom'], False→[]。
+    """
+    set_webhook_default_channels(["feishu", "wecom"] if enabled else [])
     return get_webhook_enabled_default()
+
+
+def get_webhook_default_channels() -> list[str]:
+    """新建监控规则时默认勾选的推送渠道 (多选)。
+
+    空列表 = 新建规则默认不推送; ['feishu'] = 默认推飞书。
+    此默认值供规则编辑器新建规则时预填, 单条规则仍可独立修改。
+
+    向后兼容: 老版本只有布尔 webhook_enabled_default (勾选即飞书+企业微信双推),
+    这里把 True 迁移为 ['feishu','wecom'], 还原当时的实际行为。
+    """
+    d = load()
+    raw = d.get("webhook_default_channels")
+    if isinstance(raw, list):
+        return [c for c in raw if c in REVIEW_PUSH_CHANNELS]
+    # 兼容老布尔开关 (勾选即双推)
+    if d.get("webhook_enabled_default") is True:
+        return ["feishu", "wecom"]
+    return []
+
+
+def set_webhook_default_channels(channels: list[str]) -> list[str]:
+    """保存新建规则默认推送渠道 (多选)。过滤白名单外、去重、保序。空列表 = 不推送。"""
+    seen: set[str] = set()
+    cleaned: list[str] = []
+    for c in channels or []:
+        if c in REVIEW_PUSH_CHANNELS and c not in seen:
+            seen.add(c)
+            cleaned.append(c)
+    save({"webhook_default_channels": cleaned})
+    return cleaned
 
 
 def get_screener_auto_run() -> bool:

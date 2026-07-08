@@ -440,7 +440,8 @@ export interface MonitorRule {
   severity: 'info' | 'warn' | 'critical'
   message: string
   webhook_url?: string
-  webhook_enabled?: boolean
+  webhook_enabled?: boolean  // 兼容老规则, 已由 webhook_channels 取代
+  webhook_channels?: string[]  // 命中时推送的外部渠道 (合法值 'feishu' | 'wecom')
   created_at?: string
   // ladder 专属: 封单监控
   metric?: 'sealed_vol' | 'sealed_amount'  // 量(手) / 额(元)
@@ -792,6 +793,7 @@ export interface Preferences {
   feishu_webhook_secret?: string
   wecom_webhook_url?: string
   webhook_enabled_default?: boolean
+  webhook_default_channels?: string[]
   sidebar_index_symbols: string[]
   nav_order: string[]
   nav_hidden: string[]
@@ -997,6 +999,11 @@ export const api = {
     request<{ webhook_enabled_default: boolean }>('/api/settings/preferences/webhook-enabled-default', {
       method: 'PUT',
       body: JSON.stringify({ enabled }),
+    }),
+  updateWebhookDefaultChannels: (channels: string[]) =>
+    request<{ webhook_default_channels: string[] }>('/api/settings/preferences/webhook-default-channels', {
+      method: 'PUT',
+      body: JSON.stringify({ channels }),
     }),
   updatePipelineSchedule: (hour: number, minute: number) =>
     request<{ hour: number; minute: number }>('/api/settings/preferences/pipeline-schedule', {

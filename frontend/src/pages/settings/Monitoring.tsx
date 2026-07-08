@@ -54,8 +54,8 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const refreshPages = prefs?.sse_refresh_pages ?? {}
   const limitLadderMonitor = prefs?.limit_ladder_monitor_enabled ?? false
   const hasDepth = !!caps?.capabilities?.['depth5.batch']
-  // 新建监控规则时是否默认勾选飞书推送 (全局默认值, 单条规则可独立修改)
-  const webhookDefault = prefs?.webhook_enabled_default ?? false
+  // 新建监控规则时默认勾选的推送渠道 (全局默认值数组, 单条规则可独立修改)
+  const webhookDefaultChannels = prefs?.webhook_default_channels ?? []
   const sidebarIndexSymbols = prefs?.sidebar_index_symbols ?? SIDEBAR_INDEX_OPTIONS.map(i => i.symbol)
   const indicesPinned = prefs?.indices_nav_pinned ?? true
   const isRunning = quoteStatus?.running ?? false
@@ -128,10 +128,13 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     qc.invalidateQueries({ queryKey: QK.preferences })
   }, [qc])
 
-  const toggleWebhookDefault = useCallback(async (enabled: boolean) => {
-    await api.updateWebhookDefault(enabled)
+  // 勾选/取消勾选某个默认推送渠道 (飞书 / 企业微信 各自独立)
+  const toggleDefaultChannel = useCallback(async (ch: string, enabled: boolean) => {
+    const cur = prefs?.webhook_default_channels ?? []
+    const next = enabled ? [...cur, ch] : cur.filter(c => c !== ch)
+    await api.updateWebhookDefaultChannels(next)
     qc.invalidateQueries({ queryKey: QK.preferences })
-  }, [qc])
+  }, [qc, prefs])
 
   const saveFeishuWebhook = useMutation({
     mutationFn: ({ url, secret }: { url: string; secret: string }) => api.updateFeishuWebhook(url, secret),
@@ -437,15 +440,15 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
               >
                 <input
                   type="checkbox"
-                  checked={webhookDefault}
-                  onChange={e => { e.stopPropagation(); toggleWebhookDefault(e.target.checked) }}
+                  checked={webhookDefaultChannels.includes('feishu')}
+                  onChange={e => { e.stopPropagation(); toggleDefaultChannel('feishu', e.target.checked) }}
                   onClick={e => e.stopPropagation()}
                   title="作为新建规则的默认推送渠道"
                   className="h-3 w-3 accent-accent cursor-pointer"
                 />
                 <span className="text-[11px] font-medium text-foreground">飞书</span>
                 <span className="text-[9px] text-muted">群机器人</span>
-                {webhookDefault && (
+                {webhookDefaultChannels.includes('feishu') && (
                   <span className="rounded bg-accent/15 px-1 py-px text-[9px] text-accent">默认</span>
                 )}
                 <span className={`ml-auto text-[9px] ${feishuWebhookUrl ? 'text-emerald-500' : 'text-warning'}`}>
@@ -523,15 +526,15 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
               >
                 <input
                   type="checkbox"
-                  checked={webhookDefault}
-                  onChange={e => { e.stopPropagation(); toggleWebhookDefault(e.target.checked) }}
+                  checked={webhookDefaultChannels.includes('wecom')}
+                  onChange={e => { e.stopPropagation(); toggleDefaultChannel('wecom', e.target.checked) }}
                   onClick={e => e.stopPropagation()}
                   title="作为新建规则的默认推送渠道"
                   className="h-3 w-3 accent-accent cursor-pointer"
                 />
                 <span className="text-[11px] font-medium text-foreground">企业微信</span>
                 <span className="text-[9px] text-muted">群机器人</span>
-                {webhookDefault && (
+                {webhookDefaultChannels.includes('wecom') && (
                   <span className="rounded bg-accent/15 px-1 py-px text-[9px] text-accent">默认</span>
                 )}
                 <span className={`ml-auto text-[9px] ${wecomWebhookUrl ? 'text-emerald-500' : 'text-warning'}`}>

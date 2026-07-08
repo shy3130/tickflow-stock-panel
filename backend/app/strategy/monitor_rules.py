@@ -189,6 +189,15 @@ def normalize(rule: dict) -> dict:
     r.setdefault("message", "")
     r.setdefault("webhook_url", "")
     r.setdefault("webhook_enabled", False)
+    # webhook_channels: 命中时推送的外部渠道 (合法值 'feishu' | 'wecom')。
+    # 向后兼容: 老规则只有 webhook_enabled 布尔 (当时勾选即飞书+企业微信双推),
+    # 这里把 webhook_enabled=True 但未带 webhook_channels 的老规则迁移为 ['feishu','wecom'],
+    # 还原其当时的实际行为, 用户无感知。
+    if r.get("webhook_channels") is None:
+        r["webhook_channels"] = ["feishu", "wecom"] if r.get("webhook_enabled") else []
+    else:
+        # 防御性过滤, 只保留合法渠道
+        r["webhook_channels"] = [c for c in r["webhook_channels"] if c in ("feishu", "wecom")]
     r.setdefault("created_at", datetime.now(timezone.utc).isoformat())
     return r
 

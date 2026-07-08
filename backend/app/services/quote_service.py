@@ -895,7 +895,7 @@ class QuoteService:
                 # cooldown 去重已在 MonitorRuleEngine 做过, 这里只负责转发。
                 self._maybe_send_system_notifications(all_alerts)
 
-            # Webhook 推送 (飞书等外部 IM, 由规则 webhook_enabled 开关控制)。
+            # Webhook 推送 (飞书等外部 IM, 由规则 webhook_channels 指定渠道)。
             # 紧随系统通知, 同样静默降级不阻断主流程。
             if rule_events:
                 self._maybe_send_webhook(rule_events, engine)
@@ -940,10 +940,10 @@ class QuoteService:
             return enriched_today
 
     def _maybe_send_webhook(self, rule_events: list[dict], engine) -> None:
-        """把告警通过 Webhook 推送到外部 IM (由规则 webhook_enabled 开关控制)。
+        """把告警通过 Webhook 推送到外部 IM (由规则 webhook_channels 指定渠道)。
 
         - 飞书 / 企业微信任一已配置即生效 (两个都没配才跳过)
-        - 仅推送 webhook_enabled=True 的规则触发的告警
+        - 仅推送 webhook_channels 非空的规则触发的告警, 且只投递被勾选的渠道
         - 失败静默, 不阻断主流程
         - 去重: 复用 MonitorRuleEngine 的 cooldown, 此处不重复去重
 
@@ -970,7 +970,10 @@ class QuoteService:
             enqueued = 0
             for ev in rule_events:
                 rule = rules.get(ev.get("rule_id"))
-                if not rule or not rule.get("webhook_enabled"):
+                # webhook_channels 指定命中的渠道 (['feishu'] / ['wecom'] / ['feishu','wecom'] / []).
+                # 空列表 = 该规则不推送。仅推送「渠道已选 + 对应地址已配置」的组合。
+                channels = rule.get("webhook_channels") if rule else None
+                if not channels:
                     continue
                 source = ev.get("source", "")
                 source_label = source_labels.get(source, source or "通知")
@@ -980,16 +983,17 @@ class QuoteService:
                 title = f"TickFlow · {source_label}"
                 body = f"{symbol} {name} {message}".strip() if symbol else (message or name)
                 # 提交到独立线程池, 不阻塞行情轮询线程 (webhook 慢/重试不拖累实时行情+告警)。
-                # 飞书 + 企业微信双通道; 应用内 alerts.jsonl 记录与 SSE 已在前面完成, 不依赖
-                # webhook 成败, 失败由 webhook_adapter 记 WARNING(可见)。
-                if feishu_url:
+                # 按渠道独立投递: 飞书 / 企业微信谁被勾选且已配置就推谁。
+                # 应用内 alerts.jsonl 记录与 SSE 已在前面完成, 不依赖 webhook 成败,
+                # 失败由 webhook_adapter 记 WARNING(可见)。
+                if feishu_url and "feishu" in channels:
                     _WEBHOOK_EXECUTOR.submit(webhook_adapter.send_feishu, feishu_url, title, body, feishu_secret)
                     enqueued += 1
-                if wecom_url:
+                if wecom_url and "wecom" in channels:
                     _WEBHOOK_EXECUTOR.submit(webhook_adapter.send_wecom, wecom_url, title, body)
                     enqueued += 1
             if enqueued:
-                logger.info("Webhook 已提交 %d 条 (异步投递, 飞书+企业微信, 失败记 WARNING)", enqueued)
+                logger.info("Webhook 已提交 %d 条 (异步投递, 按渠道独立投递, 失败记 WARNING)", enqueued)
         except Exception as e:  # noqa: BLE001
             logger.warning("Webhook 提交异常 (不影响告警主流程): %s", e)
 

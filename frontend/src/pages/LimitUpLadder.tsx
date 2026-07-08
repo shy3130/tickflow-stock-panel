@@ -374,9 +374,9 @@ function MonitorMenu({ stock, direction, sealMode, monitorRule, anchorRect, hasD
   const ruleId = `mr_ladder_${stock.symbol.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase()}`
   const existing = monitorRule
 
-  // 推送外部开关默认值: 取偏好设置中的全局默认 (已有规则沿用其值)
+  // 推送渠道默认值: 取偏好设置中的全局默认 (已有规则沿用其值)
   const { data: prefs } = usePreferences()
-  const webhookDefault = prefs?.webhook_enabled_default ?? false
+  const webhookDefaultChannels = prefs?.webhook_default_channels ?? []
 
   // 单位倍率: 输入值 × 倍率 = 原始单位 (量=手, 额=元)
   const VOL_UNITS = [
@@ -404,7 +404,12 @@ function MonitorMenu({ stock, direction, sealMode, monitorRule, anchorRect, hasD
     const mult = units.find(u => u.key === initUnit)?.mult ?? 1
     return String(existing.threshold / mult)
   })
-  const [pushExternal, setPushExternal] = useState(existing?.webhook_enabled ?? webhookDefault)
+  // 推送渠道 (多选): 新建取全局默认, 已有规则沿用其 webhook_channels
+  const [pushChannels, setPushChannels] = useState<string[]>(
+    existing?.webhook_channels ?? webhookDefaultChannels,
+  )
+  const togglePushChannel = (ch: string) =>
+    setPushChannels(cur => cur.includes(ch) ? cur.filter(c => c !== ch) : [...cur, ch])
   const [saving, setSaving] = useState(false)
 
   const warnLabel = direction === 'down' ? '翘板预警' : '炸板预警'
@@ -440,7 +445,7 @@ function MonitorMenu({ stock, direction, sealMode, monitorRule, anchorRect, hasD
         cooldown_seconds: existing?.cooldown_seconds ?? 600,
         severity: 'warn',
         message: '',
-        webhook_enabled: pushExternal,
+        webhook_channels: pushChannels,
       } as MonitorRule)
       onChanged()
       onClose()
@@ -531,21 +536,30 @@ function MonitorMenu({ stock, direction, sealMode, monitorRule, anchorRect, hasD
             </select>
           </div>
 
-          {/* 推送渠道: 胶囊标签 (后续可扩展钉钉/企微等), 选中带强调色 */}
+          {/* 推送渠道: 胶囊标签 (飞书 / 企业微信 各自独立勾选), 选中带强调色 */}
           <div className="flex items-center gap-2">
             <span className="text-[10px] text-muted shrink-0 w-8">推送</span>
-            <button
-              type="button"
-              onClick={() => setPushExternal(v => !v)}
-              className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium transition-colors border cursor-pointer ${
-                pushExternal
-                  ? 'bg-accent/15 text-accent border-accent/40'
-                  : 'bg-elevated/40 text-muted border-border hover:text-secondary'
-              }`}
-            >
-              <span className={`w-1.5 h-1.5 rounded-full ${pushExternal ? 'bg-accent' : 'bg-muted/50'}`} />
-              飞书
-            </button>
+            {([
+              { key: 'feishu', label: '飞书' },
+              { key: 'wecom', label: '企业微信' },
+            ] as const).map(ch => {
+              const on = pushChannels.includes(ch.key)
+              return (
+                <button
+                  key={ch.key}
+                  type="button"
+                  onClick={() => togglePushChannel(ch.key)}
+                  className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium transition-colors border cursor-pointer ${
+                    on
+                      ? 'bg-accent/15 text-accent border-accent/40'
+                      : 'bg-elevated/40 text-muted border-border hover:text-secondary'
+                  }`}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${on ? 'bg-accent' : 'bg-muted/50'}`} />
+                  {ch.label}
+                </button>
+              )
+            })}
           </div>
 
           {/* 权限提示 (免费用户) */}
