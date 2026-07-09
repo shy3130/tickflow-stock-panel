@@ -61,6 +61,7 @@ ENRICHED_STORAGE_COLS = [
     "turnover_rate",                           # 依赖当时的 float_shares, 不可回推
     "consecutive_limit_ups",                   # 递推状态, 需从历史 cum_sum
     "consecutive_limit_downs",
+    "quote_ts",                                # 行情时间戳(ms): 盘后校验/量比折算/跨天完整性
 ]
 
 
@@ -400,6 +401,9 @@ def compute_indicators(df: pl.DataFrame, needed: set[str] | None = None) -> pl.D
         _p1.append(pl.col("volume").rolling_mean(10).over("symbol").alias("vol_ma10"))
     if "_vol_ma5" in want:
         _p1.append(pl.col("volume").rolling_mean(5).over("symbol").alias("_vol_ma5"))
+    if "vol_ratio_5d" in want:
+        # 前5日平均成交量(不含当天), 标准量比分母: volume.shift(1).rolling_mean(5)
+        _p1.append(pl.col("volume").shift(1).rolling_mean(5).over("symbol").alias("_vol_ma5_prev"))
     if "high_60d" in want:
         _p1.append(pl.col("close").rolling_max(60).over("symbol").alias("high_60d"))
     if "low_60d" in want:
@@ -450,8 +454,10 @@ def compute_indicators(df: pl.DataFrame, needed: set[str] | None = None) -> pl.D
             pl.col("_tr").ewm_mean(alpha=1.0 / 14, adjust=False).over("symbol").alias("atr_14"),
         )
     if "vol_ratio_5d" in want:
+        # 标准量比(同花顺/东财): 今日成交量 / 前5日均量(不含当天)
+        # 盘后全量路径: 当日 volume 是完整全天量, 无需时间折算
         df = df.with_columns(
-            (pl.col("volume") / pl.col("_vol_ma5")).alias("vol_ratio_5d"),
+            (pl.col("volume") / pl.col("_vol_ma5_prev")).alias("vol_ratio_5d"),
         )
     _p4mom: list[pl.Expr] = []
     if "momentum_5d" in want:
@@ -516,7 +522,7 @@ def compute_indicators(df: pl.DataFrame, needed: set[str] | None = None) -> pl.D
 
     # 清理临时列 (只丢弃实际存在的临时列)
     _temp_cols = ["_boll_std", "_tr", "_ema12", "_ema26",
-                  "_kdj_ln", "_kdj_hn", "_vol_ma5", "_daily_pct",
+                  "_kdj_ln", "_kdj_hn", "_vol_ma5", "_vol_ma5_prev", "_daily_pct",
                   "_delta", "_gain", "_loss",
                   "_rsi_avg_gain_6", "_rsi_avg_loss_6",
                   "_rsi_avg_gain_14", "_rsi_avg_loss_14",
@@ -1226,6 +1232,7 @@ def compute_enriched_today(
     prev_enriched: pl.DataFrame,
     today_ohlcv: pl.DataFrame,
     instruments: pl.DataFrame | None = None,
+    elapsed_minutes: float | None = None,
 ) -> pl.DataFrame:
     """用昨天的递推状态 + 今天的 OHLCV 增量计算今天的 enriched 数据。
 
@@ -1236,6 +1243,8 @@ def compute_enriched_today(
         prev_enriched:  repo.get_enriched_latest() — 昨天的完整 enriched (用于信号交叉判断)
         today_ohlcv:    今天的 OHLCV (symbol, date, open, high, low, close, volume, amount)
         instruments:    维表 (涨跌停/换手率需要)
+        elapsed_minutes: 当日已交易分钟数(用于标准量比的时间折算)。
+            None 或 0 表示不折算(盘后或时间不可用, 此时 volume 已是全天量)。
 
     返回:
         今天的 enriched DataFrame (~5500 行, 64 列)
@@ -1371,12 +1380,21 @@ def compute_enriched_today(
         ])
 
     # ---- 量比 ----
+    # vol_ma5/vol_ma10 保留原语义(含当天的均量), 其他地方在用
     vol_ma5 = (pl.col("_vol_ma5_partial_sum") + pl.col("volume")) / 5
     vol_ma10 = (pl.col("_vol_ma10_partial_sum") + pl.col("volume")) / 10
+    # 标准量比(同花顺/东财): 今日累计成交量 / (前5日均量 × 已交易分钟数/240)
+    # _vol_ma5_prev_sum 是前5个交易日成交量之和(tail(5)), 不含当天
+    # 盘中 volume 是部分量, 按 elapsed_minutes 折算到全天量级
+    vol_ma5_prev = pl.col("_vol_ma5_prev_sum") / 5  # 前5日均量(不含当天)
+    if elapsed_minutes and elapsed_minutes > 0:
+        time_factor = 240.0 / elapsed_minutes  # 盘中折算: 部分量 → 全天量级
+    else:
+        time_factor = 1.0  # 盘后/无效时间: 不折算(此时 volume 已是全天量)
     df = df.with_columns([
         vol_ma5.alias("vol_ma5"),
         vol_ma10.alias("vol_ma10"),
-        (pl.col("volume") / vol_ma5).alias("vol_ratio_5d"),
+        ((pl.col("volume") * time_factor) / vol_ma5_prev).alias("vol_ratio_5d"),
     ])
 
     # ---- 极值 60 日 ----
@@ -1471,7 +1489,7 @@ def compute_enriched_today(
         "_high_59d", "_low_59d",
         "_close_5d_ago", "_close_10d_ago", "_close_20d_ago",
         "_close_30d_ago", "_close_60d_ago",
-        "_vol_ma5_partial_sum", "_vol_ma10_partial_sum",
+        "_vol_ma5_partial_sum", "_vol_ma10_partial_sum", "_vol_ma5_prev_sum",
         "_kdj_8d_low", "_kdj_8d_high",
         "_window_len",
         "_rsi_avg_gain_6", "_rsi_avg_loss_6",
