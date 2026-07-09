@@ -477,7 +477,7 @@ def set_feishu_webhook_secret(secret: str) -> str:
 
 
 def get_wecom_webhook_url() -> str:
-    """企业微信群机器人 Webhook 地址 — 与飞书并列的第二推送通道。
+    """企业微信群推送 Webhook 地址 — 与飞书并列的第二推送通道。
 
     存储完整 URL (https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx);
     用户也可只填 key, 由 webhook_adapter.normalize_wecom_url 自动补全。

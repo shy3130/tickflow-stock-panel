@@ -1,10 +1,10 @@
 """Webhook 推送适配器 — 把告警事件推送到外部 IM / 量化软件。
 
 职责: 把后端产生的告警事件, 通过用户配置的 Webhook 地址推送到外部。
-     目前支持飞书群机器人; QMT / ptrade 等量化通道为待定。
+     目前支持飞书群推送 Webhook; QMT / ptrade 等量化通道为待定。
 
 飞书自定义机器人接入:
-  1. 飞书群 → 群设置 → 群机器人 → 添加「自定义机器人」
+  1. 飞书群 → 群设置 → 群推送 Webhook → 添加「自定义机器人」
   2. 复制生成的 Webhook 地址 (形如 https://open.feishu.cn/open-apis/bot/v2/hook/xxx)
   3. (可选) 安全设置 → 启用「签名校验」, 记录签名密钥(secret)
   4. 填入设置页「飞书 Webhook」配置
@@ -28,7 +28,7 @@ _MAX_LEN = 500
 # 卡片消息正文最长字符 (飞书 interactive 卡片上限 30KB, 保守留余量给标题/结构)
 _CARD_MAX_LEN = 28000
 
-# 企业微信群机器人 markdown 消息上限 4096 字节 (非字符; 中文每字 3 字节),
+# 企业微信群推送 Webhook markdown 消息上限 4096 字节 (非字符; 中文每字 3 字节),
 # 留余量给标题、格式符及截断提示行。
 _WECOM_MD_MAX_BYTES = 4000
 
@@ -144,7 +144,7 @@ def _post_feishu(webhook_url: str, payload: dict, secret: str) -> bool:
 
 
 def send_feishu(webhook_url: str, title: str, body: str, secret: str = "") -> bool:
-    """推送一条文本消息到飞书群机器人。
+    """推送一条文本消息到飞书群推送 Webhook。
 
     Args:
         webhook_url: 飞书自定义机器人 Webhook 地址
@@ -168,7 +168,7 @@ def send_feishu(webhook_url: str, title: str, body: str, secret: str = "") -> bo
 
 
 def send_feishu_card(webhook_url: str, title: str, subtitle: str, body_md: str, secret: str = "") -> bool:
-    """推送一条 interactive 卡片消息到飞书群机器人 —— 用 lark_md 渲染完整 markdown 报告。
+    """推送一条 interactive 卡片消息到飞书群推送 Webhook —— 用 lark_md 渲染完整 markdown 报告。
 
     飞书「自定义机器人」webhook 不支持文件附件, 但 interactive 卡片的 lark_md 元素
     可渲染 markdown, 能承载完整复盘报告(通常 2-5KB, 远小于卡片 30KB 上限)。
@@ -215,13 +215,13 @@ def send_feishu_card(webhook_url: str, title: str, subtitle: str, body_md: str, 
 
 
 # ================================================================
-# 企业微信群机器人
+# 企业微信群推送 Webhook
 # ================================================================
 #
-# 与飞书自定义机器人几乎同构: 同样是"群机器人 Webhook + POST JSON"。
+# 与飞书自定义机器人几乎同构: 同样是"群推送 Webhook + POST JSON"。
 # 关键差异:
 #   1. Webhook 形态: https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx
-#   2. 无需签名校验 (key 本身即凭证; 企业微信群机器人可选"签名校验"但极少用)
+#   2. 无需签名校验 (key 本身即凭证; 企业微信群推送 Webhook 可选"签名校验"但极少用)
 #   3. Markdown 原生支持 (msgtype=markdown), 不必像飞书那样包进 interactive 卡片
 #   4. 成功响应: {"errcode":0,"errmsg":"ok"}
 #
@@ -233,11 +233,11 @@ WECOM_HOOK_PREFIX = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send"
 
 
 def is_valid_wecom_url(url: str) -> bool:
-    """校验是否为合法的企业微信群机器人 Webhook 地址。
+    """校验是否为合法的企业微信群推送 Webhook 地址。
 
     允许两种写法:
       - 完整: https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx
-      - 仅 key: xxx (企业微信群机器人 key 为 36 位 UUID 样式, 保存时自动补全)
+      - 仅 key: xxx (企业微信群推送 Webhook 的 key 为 36 位 UUID 样式, 保存时自动补全)
     """
     if not url:
         return False
@@ -289,10 +289,10 @@ def _post_wecom(webhook_url: str, payload: dict) -> bool:
 
 
 def send_wecom(webhook_url: str, title: str, body: str) -> bool:
-    """推送一条文本消息到企业微信群机器人。
+    """推送一条文本消息到企业微信群推送 Webhook。
 
     Args:
-        webhook_url: 企业微信群机器人 Webhook 地址 (或纯 key, 会自动补全)
+        webhook_url: 企业微信群推送 Webhook 地址 (或纯 key, 会自动补全)
         title:       消息标题 (与正文拼接为一条文本)
         body:        消息正文
 
@@ -313,13 +313,13 @@ def send_wecom(webhook_url: str, title: str, body: str) -> bool:
 
 
 def send_wecom_markdown(webhook_url: str, title: str, body_md: str) -> bool:
-    """推送一条 Markdown 消息到企业微信群机器人 —— 承载完整复盘报告。
+    """推送一条 Markdown 消息到企业微信群推送 Webhook —— 承载完整复盘报告。
 
-    企业微信群机器人原生支持 markdown 类型 (比飞书 interactive 卡片简单),
+    企业微信群推送 Webhook 原生支持 markdown 类型 (比飞书 interactive 卡片简单),
     支持 # ## **粗体** >引用 - 列表 等基础语法, 单条上限 4096 字节。
 
     Args:
-        webhook_url: 企业微信群机器人 Webhook 地址 (或纯 key)
+        webhook_url: 企业微信群推送 Webhook 地址 (或纯 key)
         title:       标题 (作为一级标题 ## 拼到正文前)
         body_md:     markdown 正文
 

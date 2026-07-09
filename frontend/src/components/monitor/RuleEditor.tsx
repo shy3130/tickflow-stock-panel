@@ -433,7 +433,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
               className="h-3 w-3 accent-accent cursor-pointer"
             />
             <span className="text-[11px] text-foreground">飞书</span>
-            <span className="text-[9px] text-muted">群机器人</span>
+            <span className="text-[9px] text-muted">群推送 Webhook</span>
             {(draft.webhook_channels ?? []).includes('feishu') && (
               <span className={`ml-auto text-[9px] ${feishuConfigured ? 'text-emerald-500' : 'text-warning'}`}>
                 {feishuConfigured ? '已配置' : '未配置'}
@@ -450,7 +450,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
               className="h-3 w-3 accent-accent cursor-pointer"
             />
             <span className="text-[11px] text-foreground">企业微信</span>
-            <span className="text-[9px] text-muted">群机器人</span>
+            <span className="text-[9px] text-muted">群推送 Webhook</span>
             {(draft.webhook_channels ?? []).includes('wecom') && (
               <span className={`ml-auto text-[9px] ${wecomConfigured ? 'text-emerald-500' : 'text-warning'}`}>
                 {wecomConfigured ? '已配置' : '未配置'}

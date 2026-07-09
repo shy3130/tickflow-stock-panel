@@ -829,9 +829,9 @@ class WecomWebhookPrefsIn(BaseModel):
 
 @router.put("/preferences/wecom-webhook")
 def update_wecom_webhook(req: WecomWebhookPrefsIn) -> dict:
-    """企业微信群机器人 Webhook 地址 — 与飞书并列的第二推送通道。
+    """企业微信群推送 Webhook 地址 — 与飞书并列的第二推送通道。
 
-    - url: 传入空串表示清空配置; 非空需为合法企业微信群机器人地址, 或纯 key。
+    - url: 传入空串表示清空配置; 非空需为合法企业微信群推送 Webhook 地址, 或纯 key。
     - 用户可只填 key (webhook/send?key=xxx 的 xxx 部分), 后端自动补全为完整 URL。
     """
     from app.services import preferences
@@ -841,7 +841,7 @@ def update_wecom_webhook(req: WecomWebhookPrefsIn) -> dict:
     if url and not webhook_adapter.is_valid_wecom_url(url):
         raise HTTPException(
             status_code=400,
-            detail="Webhook 地址非法, 需为企业微信群机器人地址 "
+            detail="Webhook 地址非法, 需为企业微信群推送 Webhook 地址 "
                    "(https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=... 或纯 key)",
         )
     saved_url = preferences.set_wecom_webhook_url(url)
