@@ -818,7 +818,12 @@ class QuoteService:
         ] if c in df.columns]
         if not keep or "symbol" not in keep:
             return pl.DataFrame()
-        return df.select(keep)
+        out = df.select(keep)
+        # 实时 API 的 turnover_rate 入口契约为小数制(0.05 = 5%).
+        # enriched 内部统一存百分数值(5 = 5%), 后续页面/筛选直接展示和比较。
+        if "turnover_rate" in out.columns:
+            out = out.with_columns((pl.col("turnover_rate").cast(pl.Float64, strict=False) * 100).alias("turnover_rate"))
+        return out
 
     @staticmethod
     def _build_index_quotes(records: list[dict]) -> pl.DataFrame:
