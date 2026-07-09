@@ -892,6 +892,31 @@ def update_wecom_bot(req: WecomBotPrefsIn, request: Request) -> dict:
     }
 
 
+class WecomBotToggleIn(BaseModel):
+    enabled: bool
+
+
+@router.put("/preferences/wecom-bot-toggle")
+def toggle_wecom_bot(req: WecomBotToggleIn, request: Request) -> dict:
+    """独立开关: 启用/禁用智能机器人长连接(不改动凭证)。
+
+    凭证不齐时强制返回未启用(无法连接)。
+    """
+    from app.services import preferences
+
+    bot_id = preferences.get_wecom_bot_id()
+    secret = preferences.get_wecom_bot_secret()
+    enabled = req.enabled and bool(bot_id) and bool(secret)
+    preferences.set_wecom_bot_enabled(enabled)
+
+    bot_svc = getattr(request.app.state, "wecom_bot_service", None)
+    status: dict = {}
+    if bot_svc:
+        bot_svc.apply_credential_change()
+        status = bot_svc.status()
+    return {"wecom_bot_enabled": enabled, "wecom_bot_status": status}
+
+
 class WebhookEnabledDefaultIn(BaseModel):
     enabled: bool
 

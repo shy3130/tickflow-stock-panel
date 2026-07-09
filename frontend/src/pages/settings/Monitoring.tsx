@@ -211,6 +211,18 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     saveWecomBot.mutate({ botId: botIdDraft.trim(), secret: botSecretDraft.trim() })
   }, [botIdDraft, botSecretDraft, saveWecomBot])
 
+  // 智能机器人长连接开关(不改动凭证): 开启→连接, 关闭→断开
+  const toggleBotConnection = useMutation({
+    mutationFn: (enabled: boolean) => api.toggleWecomBot(enabled),
+    onSuccess: (data) => {
+      setBotStatus({
+        connected: data.wecom_bot_status?.connected ?? false,
+        last_error: data.wecom_bot_status?.last_error ?? '',
+      })
+      qc.invalidateQueries({ queryKey: QK.preferences })
+    },
+  })
+
   const runFix = useMutation({
     mutationFn: () => api.runLimitLadderFix(),
     onSuccess: (data) => {
@@ -639,6 +651,15 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                 onClick={() => setBotOpen(o => !o)}
                 className="flex items-center gap-2 px-2.5 py-2 cursor-pointer transition-colors hover:bg-base/60"
               >
+                <input
+                  type="checkbox"
+                  checked={wecomBotEnabled}
+                  onChange={e => { e.stopPropagation(); toggleBotConnection.mutate(e.target.checked) }}
+                  onClick={e => e.stopPropagation()}
+                  disabled={!wecomBotId || toggleBotConnection.isPending}
+                  title="开启后建立长连接保活, 关闭则断开"
+                  className="h-3 w-3 accent-accent cursor-pointer disabled:opacity-40"
+                />
                 <span className="text-[11px] font-medium text-foreground">企业微信</span>
                 <span className="text-[9px] text-muted">智能机器人</span>
                 <span className={`ml-auto text-[9px] ${wecomBotId ? (botStatus?.connected ? 'text-emerald-500' : 'text-warning') : 'text-muted'}`}>
@@ -649,6 +670,10 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
 
               {botOpen && (
                 <div className="border-t border-border/60 bg-base/30 p-3">
+                  <p className="mb-2.5 text-[10px] text-muted leading-relaxed">
+                    勾选卡片左侧开关可启用长连接保活(开启后后端持续保持与企业微信的
+                    WebSocket 连接)。保存凭证后需勾选才会连接, 取消勾选则立即断开。
+                  </p>
                   <label className="block space-y-1.5">
                     <span className="text-[11px] text-muted">BotID</span>
                     <input
