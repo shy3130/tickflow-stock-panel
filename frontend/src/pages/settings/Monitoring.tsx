@@ -639,8 +639,8 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                 onClick={() => setBotOpen(o => !o)}
                 className="flex items-center gap-2 px-2.5 py-2 cursor-pointer transition-colors hover:bg-base/60"
               >
-                <span className="text-[11px] font-medium text-foreground">智能机器人</span>
-                <span className="text-[9px] text-muted">长连接</span>
+                <span className="text-[11px] font-medium text-foreground">企业微信</span>
+                <span className="text-[9px] text-muted">智能机器人</span>
                 <span className={`ml-auto text-[9px] ${wecomBotId ? (botStatus?.connected ? 'text-emerald-500' : 'text-warning') : 'text-muted'}`}>
                   {wecomBotId ? (botStatus?.connected ? '已连接' : (wecomBotEnabled ? '连接中' : '已配置')) : '未配置'}
                 </span>
