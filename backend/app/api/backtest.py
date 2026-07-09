@@ -524,8 +524,8 @@ _OPT_BT_FIELDS = [
 ]
 
 
-def _make_opt_job_key(strategy_id, symbols, start, end, param_grid, objective, direction, bt_sig) -> str:
-    raw = f"OPT|{strategy_id}|{symbols}|{start}|{end}|{param_grid}|{objective}|{direction}|{bt_sig}"
+def _make_opt_job_key(strategy_id, symbols, start, end, param_grid, objective, direction, bt_sig, params=None, overrides=None) -> str:
+    raw = f"OPT|{strategy_id}|{symbols}|{start}|{end}|{param_grid}|{objective}|{direction}|{bt_sig}|{params}|{overrides}"
     return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 
@@ -556,6 +556,8 @@ async def optimize_stream(
     objective: str = "sortino",
     direction: str | None = None,
     max_workers: int = 4,
+    params: str | None = None,       # JSON: 未扫描参数固定为用户当前值 (base_params)
+    overrides: str | None = None,    # JSON: 策略当前的 basic_filter/signals/风控等覆盖
     symbols: str | None = None,
     start: str | None = None,
     end: str | None = None,
@@ -603,7 +605,7 @@ async def optimize_stream(
         max_positions, max_exposure_pct, initial_capital, position_sizing, mode, holding_days,
     )
     bt_sig = "|".join(f"{k}={bt_kwargs[k]}" for k in _OPT_BT_FIELDS)
-    job_key = _make_opt_job_key(strategy_id, symbols, start, end, param_grid, objective, direction, bt_sig)
+    job_key = _make_opt_job_key(strategy_id, symbols, start, end, param_grid, objective, direction, bt_sig, params, overrides)
 
     _cleanup_stale_jobs()
     with _jobs_lock:
@@ -637,6 +639,16 @@ async def optimize_stream(
                 grid = None
 
             if grid is not None:
+                # 未扫描参数固定为用户当前值 (base_params); overrides 让策略的 basic_filter/
+                # 信号/风控按用户当前配置参与, 保证优化的就是用户实际回测的策略。
+                try:
+                    base_params = json.loads(params) if params else {}
+                except (json.JSONDecodeError, TypeError):
+                    base_params = {}
+                try:
+                    ov = json.loads(overrides) if overrides else None
+                except (json.JSONDecodeError, TypeError):
+                    ov = None
                 ocfg = OptimizeConfig(
                     strategy_id=strategy_id,
                     symbols=[s.strip() for s in symbols.split(",") if s.strip()] if symbols else None,
@@ -646,6 +658,8 @@ async def optimize_stream(
                     objective=objective,
                     direction=direction,
                     max_workers=int(max_workers),
+                    base_params=base_params if isinstance(base_params, dict) else {},
+                    overrides=ov if isinstance(ov, dict) else None,
                     backtest_kwargs=bt_kwargs,
                 )
 

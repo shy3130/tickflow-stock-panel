@@ -44,6 +44,8 @@ export interface StartOptimizeParams {
   objective: string
   direction?: string
   max_workers?: number
+  params?: Record<string, any> | null       // 未扫描参数固定为用户当前值
+  overrides?: Record<string, any> | null     // 策略当前的 basic_filter/信号/风控覆盖
   symbols?: string[] | null
   start?: string | null
   end?: string | null
@@ -65,6 +67,9 @@ const listeners = new Set<() => void>()
 let taskSeq = 0
 let eventSource: EventSource | null = null
 let currentJobKey: string | null = null
+let cancelRequested = false      // stop 在拿到 job_key 前被点 -> 收到 job 事件立即补发 cancel
+let reconnectAttempts = 0        // 无 data 断线的连续重连计数, 超上限放弃
+const MAX_RECONNECT = 5
 
 const RECONNECT_KEY = 'optimizer_reconnect'
 const JOB_KEY_KEY = 'optimizer_job_key'
@@ -99,17 +104,28 @@ function connectSSE(url: string): void {
 
   // 首事件: 后端回吐 job_key, 存下供 cancel 直接引用 (无需前端重算)
   es.addEventListener('job', (e: MessageEvent) => {
+    reconnectAttempts = 0
     try {
       const key = JSON.parse(e.data)?.key
       if (key) {
         currentJobKey = key
         localStorage.setItem(JOB_KEY_KEY, key)
+        // 竞态修复: stop 在拿到 key 前被点过 -> 现在补发 cancel 真正停后端任务, 再收尾关闭。
+        if (cancelRequested) {
+          postCancel(key)
+          es.close()
+          eventSource = null
+          currentJobKey = null
+          localStorage.removeItem(RECONNECT_KEY)
+          localStorage.removeItem(JOB_KEY_KEY)
+        }
       }
     } catch { /* ignore */ }
   })
 
   es.addEventListener('progress', (e: MessageEvent) => {
     if (current?.id !== id) return
+    reconnectAttempts = 0
     try {
       const prog = JSON.parse(e.data) as OptimizeProgress
       current = { ...current, progress: prog }
@@ -147,10 +163,31 @@ function connectSSE(url: string): void {
       }
       es.close()
       eventSource = null
+      currentJobKey = null
       localStorage.removeItem(RECONNECT_KEY)
+      localStorage.removeItem(JOB_KEY_KEY)
+      return
     }
-    // 无 data: 连接异常断开, 自动重连
+    // 无 data: 连接异常断开。EventSource 会自动重连, 但设上限避免网络长断时无限 pending。
+    if (current?.id === id) {
+      reconnectAttempts += 1
+      if (reconnectAttempts > MAX_RECONNECT) {
+        es.close()
+        eventSource = null
+        current = { ...current, isPending: false, error: '连接中断, 重连多次失败' }
+        emit()
+      }
+    }
   })
+}
+
+/** 调后端 cancel (按回吐的 job_key)。 */
+function postCancel(jobKey: string): void {
+  fetch('/api/backtest/optimize/cancel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ job_key: jobKey }),
+  }).catch(() => {})
 }
 
 export function startOptimize(params: StartOptimizeParams): void {
@@ -159,6 +196,9 @@ export function startOptimize(params: StartOptimizeParams): void {
     eventSource = null
   }
 
+  cancelRequested = false
+  currentJobKey = null
+  reconnectAttempts = 0
   const id = ++taskSeq
   current = { id, isPending: true, result: null, progress: null, error: null }
   emit()
@@ -169,6 +209,8 @@ export function startOptimize(params: StartOptimizeParams): void {
     objective: params.objective,
     direction: params.direction,
     max_workers: params.max_workers,
+    params: params.params ? JSON.stringify(params.params) : undefined,
+    overrides: params.overrides ? JSON.stringify(params.overrides) : undefined,
     symbols: params.symbols?.join(','),
     start: params.start ?? undefined,
     end: params.end ?? undefined,
@@ -189,26 +231,27 @@ export function startOptimize(params: StartOptimizeParams): void {
   connectSSE(`/api/backtest/optimize/stream?${qs}`)
 }
 
-export async function stopOptimize(): Promise<void> {
+export function stopOptimize(): void {
+  // 竞态: 若刚点开始还没收到 job 事件, job_key 尚未到手。标记 cancelRequested ——
+  // 有 key 则立即取消并关闭; 无 key 则保持 SSE 打开, 等 job 事件到达时补发 cancel 再关
+  // (关闭 SSE 不会停后端 daemon 线程, 必须真正 POST cancel)。5s 兜底防 job 事件永不来。
+  cancelRequested = true
   const jobKey = currentJobKey ?? localStorage.getItem(JOB_KEY_KEY)
   if (jobKey) {
-    await fetch('/api/backtest/optimize/cancel', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ job_key: jobKey }),
-    }).catch(() => {})
-  }
-  if (eventSource) {
-    eventSource.close()
-    eventSource = null
+    postCancel(jobKey)
+    if (eventSource) { eventSource.close(); eventSource = null }
+    currentJobKey = null
+    localStorage.removeItem(RECONNECT_KEY)
+    localStorage.removeItem(JOB_KEY_KEY)
+  } else if (eventSource) {
+    // 保持连接等 job 事件; 兜底: 5s 后仍没 key 就强关
+    const es = eventSource
+    setTimeout(() => { if (es === eventSource) { es.close(); eventSource = null } }, 5000)
   }
   if (current?.isPending) {
     current = { ...current, isPending: false, error: '已取消' }
     emit()
   }
-  currentJobKey = null
-  localStorage.removeItem(RECONNECT_KEY)
-  localStorage.removeItem(JOB_KEY_KEY)
 }
 
 export function clearOptimize(): void {

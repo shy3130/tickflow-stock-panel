@@ -12,6 +12,7 @@ import {
   tryReconnectOptimize,
   useOptimizerTask,
 } from '@/lib/optimizerTask'
+import { buildDefaultOverrides } from '@/lib/strategyOverrides'
 
 const INPUT_CLS = 'w-full px-2.5 py-1.5 rounded-input bg-surface border border-border text-xs focus:outline-none focus:border-accent'
 
@@ -55,6 +56,23 @@ function candidateCount(p: StrategyParamDef, s: Sweep): number {
   return Math.round((hi - lo) / step) + 1
 }
 
+/** 校验某数值参数的 sweep 是否会被后端拒绝 (与后端 _candidates_for 同口径)。
+ * 后端按 lo+i*step 生成 (i=0..round((hi-lo)/step)), 任一值超出 [min,max] 即报错。 */
+function sweepError(p: StrategyParamDef, s: Sweep): string | null {
+  if (p.type === 'bool' || p.type === 'select') return null
+  const lo = Number(s.min), hi = Number(s.max), step = Number(s.step)
+  if (Number.isNaN(lo) || Number.isNaN(hi) || Number.isNaN(step)) return `${p.label}: 范围/步长非法`
+  if (!(step > 0)) return `${p.label}: 步长必须为正`
+  if (hi < lo) return `${p.label}: max < min`
+  if (p.min != null && lo < p.min - 1e-9) return `${p.label}: min 小于允许下限 ${p.min}`
+  if (p.max != null && hi > p.max + 1e-9) return `${p.label}: max 超出允许上限 ${p.max}`
+  // 后端生成的末值 lo + round((hi-lo)/step)*step 若 > max, 会被拒
+  const nSteps = Math.round((hi - lo) / step)
+  const last = lo + nSteps * step
+  if (last > hi + 1e-9) return `${p.label}: 步长 ${step} 不整除区间, 末值 ${last.toFixed(4)} 超出 max ${hi}`
+  return null
+}
+
 const TODAY = new Date().toISOString().slice(0, 10)
 const ONE_YEAR_AGO = new Date(Date.now() - 365 * 864e5).toISOString().slice(0, 10)
 
@@ -79,10 +97,11 @@ export function StrategyOptimizer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // 切策略时重置 sweep 配置, 并清除旧策略的结果 (避免右侧残留错配)
+  // 切策略: 若有任务在跑, 先真正取消 (关 SSE + 后端 cancel + 清 localStorage), 不能静默丢。
   const onSelectStrategy = (id: string) => {
+    if (task?.isPending) stopOptimize()
+    else clearOptimize()
     setStrategyId(id)
-    clearOptimize()
     const s = strategies.find(x => x.id === id)
     const init: Record<string, Sweep> = {}
     for (const p of s?.params ?? []) init[p.id] = defaultSweep(p)
@@ -99,6 +118,16 @@ export function StrategyOptimizer() {
     return enabled.reduce((acc, p) => acc * candidateCount(p, sweeps[p.id]), 1)
   }, [params, sweeps])
 
+  // 网格合法性 (与后端展开同口径): 步长不整除/越界会被后端拒, 前端提前拦。
+  const gridError = useMemo(() => {
+    for (const p of params) {
+      if (!sweeps[p.id]?.enabled) continue
+      const err = sweepError(p, sweeps[p.id])
+      if (err) return err
+    }
+    return null
+  }, [params, sweeps])
+
   const buildGrid = (): Record<string, any> => {
     const grid: Record<string, any> = {}
     for (const p of params) {
@@ -111,7 +140,7 @@ export function StrategyOptimizer() {
     return grid
   }
 
-  const canRun = strategyId && combos > 0 && combos <= 2000 && !task?.isPending
+  const canRun = strategyId && combos > 0 && combos <= 2000 && !gridError && !task?.isPending
 
   const onRun = () => {
     if (!canRun) return
@@ -120,6 +149,10 @@ export function StrategyOptimizer() {
       strategy_id: strategyId,
       param_grid: buildGrid(),
       objective,
+      // 未扫描参数固定为策略当前默认值; overrides 让 basic_filter/信号/风控按当前策略参与,
+      // 保证优化的就是用户实际回测的策略 (而非被剥离配置的裸策略)。
+      params: selected?.params_defaults,
+      overrides: selected ? buildDefaultOverrides(selected) : undefined,
       start,
       end,
       mode,
@@ -201,11 +234,14 @@ export function StrategyOptimizer() {
           </div>
         )}
 
-        {/* 组合数提示 */}
+        {/* 组合数 / 校验提示 */}
         {strategyId && (
-          <div className={`text-xs ${combos > 2000 ? 'text-red-400' : 'text-secondary'}`}>
-            {combos === 0 ? '请至少勾选一个参数' : `共 ${combos} 组参数组合`}
-            {combos > 2000 && ' — 超过上限 2000, 请增大 step 或缩小范围'}
+          <div className={`text-xs ${(combos > 2000 || gridError) ? 'text-red-400' : 'text-secondary'}`}>
+            {gridError
+              ? gridError
+              : combos === 0
+                ? '请至少勾选一个参数'
+                : `共 ${combos} 组参数组合${combos > 2000 ? ' — 超过上限 2000, 请增大 step 或缩小范围' : ''}`}
           </div>
         )}
 
@@ -239,7 +275,7 @@ export function StrategyOptimizer() {
         )}
 
         {!result && !task?.isPending && (
-          <EmptyState title="参数优化" description="选择策略、勾选要扫描的参数与优化目标，网格搜索会并行回测所有组合并按目标排序。" />
+          <EmptyState title="参数优化" hint="选择策略、勾选要扫描的参数与优化目标，网格搜索会并行回测所有组合并按目标排序。" />
         )}
 
         {result && (
