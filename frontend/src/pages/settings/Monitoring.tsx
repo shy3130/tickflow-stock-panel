@@ -75,10 +75,20 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const wecomWebhookUrl = prefs?.wecom_webhook_url ?? ''
   const [wecomDraft, setWecomDraft] = useState(wecomWebhookUrl)
   const [wecomError, setWecomError] = useState('')
+  // 企业微信智能机器人 (BotID + Secret, 长连接通道)
+  const wecomBotId = prefs?.wecom_bot_id ?? ''
+  const wecomBotSecret = prefs?.wecom_bot_secret ?? ''
+  const wecomBotEnabled = prefs?.wecom_bot_enabled ?? false
+  const [botIdDraft, setBotIdDraft] = useState(wecomBotId)
+  const [botSecretDraft, setBotSecretDraft] = useState(wecomBotSecret)
+  const [botError, setBotError] = useState('')
+  const [botStatus, setBotStatus] = useState<{connected: boolean; last_error: string} | null>(null)
   // 飞书渠道配置区展开态 (推送通知卡片内)
   const [channelOpen, setChannelOpen] = useState(false)
   // 企业微信渠道配置区展开态
   const [wecomOpen, setWecomOpen] = useState(false)
+  // 智能机器人配置区展开态
+  const [botOpen, setBotOpen] = useState(false)
   useEffect(() => {
     setFeishuDraft(feishuWebhookUrl)
     setFeishuSecretDraft(feishuWebhookSecret)
@@ -86,6 +96,10 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   useEffect(() => {
     setWecomDraft(wecomWebhookUrl)
   }, [wecomWebhookUrl])
+  useEffect(() => {
+    setBotIdDraft(wecomBotId)
+    setBotSecretDraft(wecomBotSecret)
+  }, [wecomBotId, wecomBotSecret])
   const watchlistSymbols = prefs?.realtime_watchlist_symbols ?? []
   const watchlist = useQuery({
     queryKey: QK.watchlist,
@@ -177,6 +191,25 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     }
     saveWecomWebhook.mutate(url)
   }, [wecomDraft, saveWecomWebhook])
+
+  // 智能机器人 (BotID + Secret) 保存 → 后端立即重建连接
+  const saveWecomBot = useMutation({
+    mutationFn: ({ botId, secret }: { botId: string; secret: string }) =>
+      api.updateWecomBot(botId, secret, true),
+    onSuccess: (data) => {
+      setBotError('')
+      toast('智能机器人凭证已保存, 正在连接…', 'success')
+      setBotStatus({
+        connected: data.wecom_bot_status?.connected ?? false,
+        last_error: data.wecom_bot_status?.last_error ?? '',
+      })
+      qc.invalidateQueries({ queryKey: QK.preferences })
+    },
+    onError: (err: any) => setBotError(String(err?.message ?? '保存失败')),
+  })
+  const submitBot = useCallback(() => {
+    saveWecomBot.mutate({ botId: botIdDraft.trim(), secret: botSecretDraft.trim() })
+  }, [botIdDraft, botSecretDraft, saveWecomBot])
 
   const runFix = useMutation({
     mutationFn: () => api.runLimitLadderFix(),
@@ -593,6 +626,87 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                       📖 官方文档:
                       <a href="https://developer.work.weixin.qq.com/document/path/91770" target="_blank" rel="noreferrer" className="text-accent hover:text-accent/80">
                         群推送 Webhook 使用指南 ↗
+                      </a>
+                    </p>
+                  </details>
+                </div>
+              )}
+            </div>
+
+            {/* 企业微信智能机器人 (BotID + Secret): 长连接通道, 与群推送 Webhook 并列 */}
+            <div className="rounded-btn border border-border/60 bg-base/40 overflow-hidden">
+              <div
+                onClick={() => setBotOpen(o => !o)}
+                className="flex items-center gap-2 px-2.5 py-2 cursor-pointer transition-colors hover:bg-base/60"
+              >
+                <span className="text-[11px] font-medium text-foreground">智能机器人</span>
+                <span className="text-[9px] text-muted">长连接</span>
+                <span className={`ml-auto text-[9px] ${wecomBotId ? (botStatus?.connected ? 'text-emerald-500' : 'text-warning') : 'text-muted'}`}>
+                  {wecomBotId ? (botStatus?.connected ? '已连接' : (wecomBotEnabled ? '连接中' : '已配置')) : '未配置'}
+                </span>
+                <ChevronDown className={`h-3 w-3 text-muted transition-transform ${botOpen ? 'rotate-180' : ''}`} />
+              </div>
+
+              {botOpen && (
+                <div className="border-t border-border/60 bg-base/30 p-3">
+                  <label className="block space-y-1.5">
+                    <span className="text-[11px] text-muted">BotID</span>
+                    <input
+                      value={botIdDraft}
+                      onChange={e => setBotIdDraft(e.target.value)}
+                      placeholder="智能机器人的唯一标识"
+                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                    />
+                  </label>
+
+                  <label className="block mt-2 space-y-1.5">
+                    <span className="text-[11px] text-muted">Secret (长连接专用密钥)</span>
+                    <input
+                      type="password"
+                      value={botSecretDraft}
+                      onChange={e => setBotSecretDraft(e.target.value)}
+                      placeholder="开启长连接 API 模式后获取的密钥"
+                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                    />
+                  </label>
+
+                  {botError && (
+                    <div className="mt-2 text-[11px] text-danger">{botError}</div>
+                  )}
+
+                  {botStatus?.last_error && !botError && (
+                    <div className="mt-2 text-[11px] text-warning">连接异常: {botStatus.last_error}</div>
+                  )}
+
+                  <div className="mt-2 flex items-center gap-2">
+                    <button
+                      onClick={submitBot}
+                      disabled={saveWecomBot.isPending || (botIdDraft.trim() === wecomBotId && botSecretDraft.trim() === wecomBotSecret)}
+                      className="px-3 py-1.5 rounded-btn bg-accent text-base text-xs font-medium disabled:opacity-50 cursor-pointer hover:bg-accent/90 transition-colors"
+                    >
+                      {saveWecomBot.isPending ? '保存中…' : '保存并连接'}
+                    </button>
+                    {wecomBotId && (
+                      <span className="text-[10px] text-emerald-500">● 已配置</span>
+                    )}
+                  </div>
+
+                  <details className="mt-3 text-[10px] text-muted">
+                    <summary className="cursor-pointer hover:text-secondary">如何获取 BotID 和 Secret?</summary>
+                    <ol className="mt-1.5 space-y-1 pl-4 list-decimal leading-relaxed">
+                      <li>登录<b>企业微信管理后台</b> → 应用管理 → <b>智能机器人</b> → 创建机器人</li>
+                      <li>填写名称、头像后进入机器人配置页</li>
+                      <li>开启「<b>API 模式</b>」→ 选择「<b>长连接</b>」方式(另一项"回调URL"需公网IP)</li>
+                      <li>页面显示 <b>BotID</b> 和 <b>Secret</b>, 复制填到上方输入框</li>
+                    </ol>
+                    <p className="mt-1.5 pl-4 text-muted/70">
+                      💡 智能机器人支持 @交互和流式回复, 与群推送 Webhook(单向推送)互补。
+                      保存后后端会自动建立 WebSocket 长连接保活。
+                    </p>
+                    <p className="mt-1.5 pl-4 text-muted/70">
+                      📖 官方文档:
+                      <a href="https://developer.work.weixin.qq.com/document/path/101463" target="_blank" rel="noreferrer" className="text-accent hover:text-accent/80">
+                        智能机器人长连接 ↗
                       </a>
                     </p>
                   </details>

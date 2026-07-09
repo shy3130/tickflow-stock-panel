@@ -399,6 +399,9 @@ def get_preferences() -> dict:
         "feishu_webhook_url": preferences.get_feishu_webhook_url(),
         "feishu_webhook_secret": preferences.get_feishu_webhook_secret(),
         "wecom_webhook_url": preferences.get_wecom_webhook_url(),
+        "wecom_bot_id": preferences.get_wecom_bot_id(),
+        "wecom_bot_secret": preferences.get_wecom_bot_secret(),
+        "wecom_bot_enabled": preferences.get_wecom_bot_enabled(),
         "webhook_enabled_default": preferences.get_webhook_enabled_default(),
         "webhook_default_channels": preferences.get_webhook_default_channels(),
         "sidebar_index_symbols": preferences.get_sidebar_index_symbols(),
@@ -849,6 +852,44 @@ def update_wecom_webhook(req: WecomWebhookPrefsIn) -> dict:
         )
     saved_url = preferences.set_wecom_webhook_url(url)
     return {"wecom_webhook_url": saved_url}
+
+
+class WecomBotPrefsIn(BaseModel):
+    bot_id: str
+    secret: str
+    enabled: bool = True
+
+
+@router.put("/preferences/wecom-bot")
+def update_wecom_bot(req: WecomBotPrefsIn, request: Request) -> dict:
+    """企业微信智能机器人(BotID + Secret)配置 — 长连接通道。
+
+    保存凭证后立即重建连接(stop→start), 因每机器人仅允许 1 条长连接。
+    - bot_id/secret 均传空串表示清空配置并断开连接。
+    - enabled 控制是否启用长连接(凭证齐全时生效)。
+    """
+    from app.services import preferences
+
+    bot_id = (req.bot_id or "").strip()
+    secret = (req.secret or "").strip()
+    preferences.set_wecom_bot_id(bot_id)
+    preferences.set_wecom_bot_secret(secret)
+    # 凭证不齐时强制关闭(避免 enabled=True 但连不上)
+    enabled = req.enabled and bool(bot_id) and bool(secret)
+    preferences.set_wecom_bot_enabled(enabled)
+
+    # 立即应用: 重建连接
+    bot_svc = getattr(request.app.state, "wecom_bot_service", None)
+    status: dict = {}
+    if bot_svc:
+        bot_svc.apply_credential_change()
+        status = bot_svc.status()
+    return {
+        "wecom_bot_id": preferences.get_wecom_bot_id(),
+        "wecom_bot_secret": preferences.get_wecom_bot_secret(),
+        "wecom_bot_enabled": preferences.get_wecom_bot_enabled(),
+        "wecom_bot_status": status,
+    }
 
 
 class WebhookEnabledDefaultIn(BaseModel):

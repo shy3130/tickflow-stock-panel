@@ -495,6 +495,43 @@ def set_wecom_webhook_url(url: str) -> str:
     return get_wecom_webhook_url()
 
 
+# ===== 企业微信智能机器人 (API 模式 / 长连接) =====
+
+
+def get_wecom_bot_id() -> str:
+    """企业微信智能机器人 BotID — 机器人的唯一标识。"""
+    return load().get("wecom_bot_id", "")
+
+
+def set_wecom_bot_id(bot_id: str) -> str:
+    """保存智能机器人 BotID。传入空串表示清空。"""
+    save({"wecom_bot_id": (bot_id or "").strip()})
+    return get_wecom_bot_id()
+
+
+def get_wecom_bot_secret() -> str:
+    """企业微信智能机器人 Secret — 长连接专用密钥。"""
+    return load().get("wecom_bot_secret", "")
+
+
+def set_wecom_bot_secret(secret: str) -> str:
+    """保存智能机器人 Secret。传入空串表示清空。"""
+    save({"wecom_bot_secret": (secret or "").strip()})
+    return get_wecom_bot_secret()
+
+
+def get_wecom_bot_enabled() -> bool:
+    """智能机器人长连接是否启用。默认 False(需用户配置凭证后手动开启)。"""
+    return load().get("wecom_bot_enabled", False)
+
+
+def set_wecom_bot_enabled(enabled: bool) -> bool:
+    """保存智能机器人启用状态。"""
+    save({"wecom_bot_enabled": bool(enabled)})
+    return get_wecom_bot_enabled()
+
+
+
 def get_webhook_enabled_default() -> bool:
     """新建监控规则时是否默认勾选推送 (老布尔, 已由 webhook_default_channels 取代)。
 

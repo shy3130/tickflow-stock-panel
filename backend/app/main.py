@@ -104,6 +104,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:  # noqa: BLE001
         logger.warning("depth_service init failed: %s", e)
 
+    # 企业微信智能机器人长连接(可选通道, 失败不阻断启动)
+    try:
+        from app.services.wecom_bot_service import WecomBotService
+        wecom_bot_service = WecomBotService()
+        wecom_bot_service.set_app_state(app.state)
+        app.state.wecom_bot_service = wecom_bot_service
+        wecom_bot_service.boot_check()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("wecom_bot_service init failed: %s", e)
+
     # 扩展数据定时拉取
     from app.services.ext_pull import pull_scheduler
     pull_scheduler.start(store.data_dir)
@@ -192,6 +202,9 @@ async def lifespan(app: FastAPI):
     dsvc = getattr(app.state, "depth_service", None)
     if dsvc:
         dsvc.stop_polling()
+    wbot = getattr(app.state, "wecom_bot_service", None)
+    if wbot:
+        wbot.stop()
     logger.info("shutdown")
 
 
