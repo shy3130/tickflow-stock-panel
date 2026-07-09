@@ -14,6 +14,7 @@ from datetime import date, timedelta
 
 import polars as pl
 
+from app.parquet import scan_enriched_parquet
 from app.tickflow.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
@@ -320,7 +321,7 @@ class ScreenerService:
 
         try:
             lf = (
-                pl.scan_parquet(str(enriched_dir / "**" / "*.parquet"))
+                scan_enriched_parquet(str(enriched_dir / "**" / "*.parquet"))
                 .filter(
                     (pl.col("date") >= start)
                     & (pl.col("date") <= target_date)
@@ -403,7 +404,7 @@ class ScreenerService:
 
         try:
             lf = (
-                pl.scan_parquet(str(enriched_dir / "**" / "*.parquet"))
+                scan_enriched_parquet(str(enriched_dir / "**" / "*.parquet"))
                 .filter((pl.col("date") >= start) & (pl.col("date") <= target_date))
                 .sort(["symbol", "date"])
             )

@@ -19,6 +19,7 @@ from typing import Literal
 import numpy as np
 import polars as pl
 
+from app.parquet import scan_enriched_parquet
 from app.tickflow.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
@@ -223,7 +224,7 @@ class BacktestEngine:
         enriched_glob = str(self.repo.store.data_dir / enriched_dirname(asset_type) / "**" / "*.parquet")
 
         try:
-            lf = pl.scan_parquet(enriched_glob)
+            lf = scan_enriched_parquet(enriched_glob)
             if symbols is not None:
                 lf = lf.filter(pl.col("symbol").is_in(symbols))
             if columns is not None:

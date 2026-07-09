@@ -33,6 +33,7 @@ from datetime import date, time as dt_time
 import polars as pl
 
 from app.market_time import cn_now, cn_today
+from app.parquet import scan_daily_parquet
 
 logger = logging.getLogger(__name__)
 
@@ -1231,9 +1232,9 @@ class QuoteService:
                 cutoff = today - timedelta(days=90)
                 table = "kline_etf_daily" if asset_type == "etf" else "kline_daily"
                 daily_glob = str(self._repo.store.data_dir / table / "**" / "*.parquet")
-                ohlcv_cols = ["symbol", "date", "open", "high", "low", "close", "volume", "amount"]
+                ohlcv_cols = ["symbol", "date", "open", "high", "low", "close", "volume", "amount", "quote_ts"]
                 hist_df = (
-                    pl.scan_parquet(daily_glob)
+                    scan_daily_parquet(daily_glob)
                     .filter(pl.col("date") >= cutoff)
                     .sort(["symbol", "date"])
                     .collect()

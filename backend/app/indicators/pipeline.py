@@ -22,6 +22,7 @@ from pathlib import Path
 import polars as pl
 
 from app.config import settings
+from app.parquet import scan_daily_parquet, scan_enriched_parquet, scan_parquet_compat
 
 logger = logging.getLogger(__name__)
 
@@ -938,7 +939,7 @@ def run_pipeline(data_dir: Path | None = None,
     # 加载 instruments (涨跌停+换手率需要)
     instruments = pl.DataFrame()
     try:
-        instruments = pl.scan_parquet(inst_glob, cast_options=_cast).collect()
+        instruments = scan_parquet_compat(inst_glob, cast_options=_cast).collect()
     except Exception as e:  # noqa: BLE001
         logger.warning("instruments 读取失败: %s", e)
 
@@ -963,9 +964,9 @@ def run_pipeline(data_dir: Path | None = None,
 
         # 2. 为新日期计算 enriched (所有标的)
         if new_date_dirs:
-            raw_new = pl.scan_parquet(new_date_dirs[0] / "*.parquet", cast_options=_cast)
+            raw_new = scan_daily_parquet(new_date_dirs[0] / "*.parquet", cast_options=_cast)
             for nd in new_date_dirs[1:]:
-                raw_new = pl.concat([raw_new, pl.scan_parquet(nd / "*.parquet", cast_options=_cast)], how="diagonal_relaxed")
+                raw_new = pl.concat([raw_new, scan_daily_parquet(nd / "*.parquet", cast_options=_cast)], how="diagonal_relaxed")
             raw_new = raw_new.sort(["symbol", "date"]).collect(streaming=True)
 
             # 增量模式: 只算新日期, 但指标需要历史窗口
@@ -1013,7 +1014,7 @@ def run_pipeline(data_dir: Path | None = None,
         # 3. 受除权因子影响的个股: 重算全部已有日期 (累积因子链变了)
         if symbols:
             sym_set = set(symbols)
-            raw_sym = pl.scan_parquet(daily_glob, cast_options=_cast).sort(["symbol", "date"])
+            raw_sym = scan_daily_parquet(daily_glob, cast_options=_cast).sort(["symbol", "date"])
             raw_sym = raw_sym.filter(pl.col("symbol").is_in(list(sym_set)))
             raw_sym = raw_sym.collect(streaming=True)
             if not raw_sym.is_empty():
@@ -1053,7 +1054,7 @@ def run_pipeline(data_dir: Path | None = None,
 
     # ── 按 symbol 分批处理: 每只股只有 ~244 行, 无冗余计算 ──
     # 先获取全部 symbol 列表
-    lf_all = pl.scan_parquet(daily_glob, cast_options=_cast)
+    lf_all = scan_daily_parquet(daily_glob, cast_options=_cast)
     if symbols:
         sym_set = set(symbols)
         lf_all = lf_all.filter(pl.col("symbol").is_in(list(sym_set)))
@@ -1090,7 +1091,7 @@ def run_pipeline(data_dir: Path | None = None,
         batch_syms = all_symbols[batch_start:batch_end]
 
         # 只读取本批 symbol 的数据
-        lf_batch = pl.scan_parquet(daily_glob, cast_options=_cast)
+        lf_batch = scan_daily_parquet(daily_glob, cast_options=_cast)
         lf_batch = lf_batch.filter(pl.col("symbol").is_in(batch_syms))
         raw = lf_batch.sort(["symbol", "date"]).collect(streaming=True)
 
@@ -1190,7 +1191,7 @@ def _load_recent_history(enriched_base: Path, symbols: list[str], days: int) -> 
 
     try:
         lf = (
-            pl.scan_parquet(str(enriched_base / "**" / "*.parquet"), cast_options=_cast)
+            scan_enriched_parquet(str(enriched_base / "**" / "*.parquet"), cast_options=_cast)
             .filter(
                 (pl.col("symbol").is_in(symbols))
                 & (pl.col("date") >= cutoff)

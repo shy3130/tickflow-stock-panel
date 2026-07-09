@@ -15,6 +15,7 @@ import pandas as pd
 import polars as pl
 
 from app.config import settings
+from app.parquet import scan_enriched_parquet
 from app.tickflow.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
@@ -137,7 +138,7 @@ class BacktestService:
             from app.tickflow.repository import enriched_dirname
             enriched_glob = str(self.repo.store.data_dir / enriched_dirname(asset_type) / "**" / "*.parquet")
             df = (
-                pl.scan_parquet(enriched_glob)
+                scan_enriched_parquet(enriched_glob)
                 .filter(
                     (pl.col("symbol").is_in(symbols))
                     & (pl.col("date") >= start)
