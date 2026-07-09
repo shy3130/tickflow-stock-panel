@@ -428,9 +428,15 @@ class ScreenerService:
             if "name" not in df_full.columns:
                 df_full = df_full.join(instruments.select(inst_cols), on="symbol", how="left")
 
-        # 裁剪掉 warmup 部分, 只保留 lookback 范围 (减少 group_by 开销)
-        lookback_start = target_date - timedelta(days=lookback_days)
+        # 裁剪掉 warmup 部分, 只保留 lookback 范围 (减少 group_by 开销)。
+        # 按交易日计数: 从数据里实际存在的交易日序列取最后 lookback_days 个交易日,
+        # 不能用 timedelta(days=N) (自然日), 否则周末/节假日会让窗口偏少, 与回测不一致。
         if "date" in df_full.columns:
+            trading_dates = df_full["date"].unique().sort()
+            if len(trading_dates) > lookback_days:
+                lookback_start = trading_dates[-(lookback_days + 1)]
+            else:
+                lookback_start = trading_dates[0]
             df_full = df_full.filter(pl.col("date") >= lookback_start)
 
         df_full = df_full.sort(["symbol", "date"])
