@@ -344,6 +344,8 @@ export function Layout() {
   const toggleQuote = useToggleRealtimeQuotes()
   const isRunning = quoteStatus?.running ?? false
   const isTrading = quoteStatus?.is_trading_hours ?? false
+  // 管道/数据修正运行期间实时行情被临时暂停 — 此时禁止开启
+  const isPaused = quoteStatus?.paused ?? false
   const tier = tierRank(caps?.label ?? '')
   const isNoneTier = tier < 0
   const isWatchlistMode = tier === 0
@@ -589,12 +591,13 @@ export function Layout() {
               </div>
               <button
                 onClick={() => handleToggle(!realtimeEnabled)}
-                disabled={toggleQuote.isPending}
+                disabled={toggleQuote.isPending || isPaused}
+                title={isPaused ? '数据同步运行中，实时行情已临时暂停' : undefined}
                 className={`relative inline-flex h-4 w-7 items-center rounded-full shrink-0 transition-colors duration-200 ${
                   realtimeEnabled
                     ? 'bg-accent shadow-[0_0_6px_rgba(59,130,246,0.3)]'
                     : 'bg-elevated'
-                } ${toggleQuote.isPending ? 'opacity-50' : 'cursor-pointer'}`}
+                } ${toggleQuote.isPending || isPaused ? 'opacity-50' : 'cursor-pointer'}`}
               >
                 <span className={`inline-block h-3 w-3 rounded-full bg-white shadow-sm transition-transform duration-200 ${
                   realtimeEnabled ? 'translate-x-[14px]' : 'translate-x-0.5'
@@ -618,7 +621,9 @@ export function Layout() {
                   </button>
                 </div>
               )}
-              {isRunning && isTrading ? (
+              {isPaused ? (
+                <div className="text-warning/80">数据同步运行中，实时行情已临时暂停</div>
+              ) : isRunning && isTrading ? (
                 <div className="text-accent">行情运行中</div>
               ) : realtimeEnabled && !isTrading ? (
                 <div className="text-warning/70">非交易时段，将在交易时间自动开启</div>

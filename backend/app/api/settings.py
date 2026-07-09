@@ -662,6 +662,9 @@ def update_realtime_quotes(req: RealtimeQuotesPrefs, request: Request) -> dict:
         if qs:
             qs.disable()
         return {"realtime_quotes_enabled": False, "realtime_allowed": False}
+    if req.realtime_quotes_enabled and qs and qs.is_paused():
+        # 管道/数据修正运行期间禁止开启实时行情 — 防止写盘竞态
+        raise HTTPException(status_code=409, detail="数据同步运行中，实时行情已临时暂停，请稍后再开启")
     if req.realtime_quotes_enabled and qs and qs.realtime_mode() == "watchlist" and not preferences.get_realtime_watchlist_symbols():
         preferences.save({"realtime_quotes_enabled": False})
         return {"realtime_quotes_enabled": False, "realtime_allowed": True, "mode": "watchlist", "error": "watchlist_empty"}

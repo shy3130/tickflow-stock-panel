@@ -717,6 +717,90 @@ async def extend_history(request: Request):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+@router.post("/repair_daily")
+async def repair_daily(request: Request):
+    """修正 / 补全日K数据 — 从指定起始日期重拉到今天。
+
+    典型场景: 昨天没看盘 / 服务挂了,本地日K缺了若干天。
+    用户选起始日期,复用盘后管道全流程重拉 [start_date ~ 今天]。
+
+    body: { "start_date": "YYYY-MM-DD" }
+    返回 job_id,可轮询 /api/pipeline/jobs 查看进度。
+    """
+    import asyncio
+    import traceback as _tb
+    from datetime import date as _date
+    try:
+        body = await request.json()
+        raw = body.get("start_date")
+        if not raw:
+            raise HTTPException(status_code=400, detail="start_date 必填 (YYYY-MM-DD)")
+        try:
+            start_date = _date.fromisoformat(str(raw))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="start_date 格式错误 (应为 YYYY-MM-DD)")
+
+        if start_date > _date.today():
+            raise HTTPException(status_code=400, detail="起始日期不能晚于今天")
+
+        repo = request.app.state.repo
+        capset = request.app.state.capabilities
+
+        from app.tickflow.capabilities import Cap
+        if not capset.has(Cap.KLINE_DAILY_BATCH):
+            raise HTTPException(status_code=403, detail="需要 Pro+ 权限 (batch K-line)")
+
+        from app.services.repair_daily import run_repair_daily
+        from app.services.pipeline_jobs import job_store, release_run_slot, try_acquire_run_slot
+        from app.api.data import invalidate_storage_cache
+
+        job_id, is_new = job_store.create()
+        if not is_new:
+            return {"status": "reused", "job_id": job_id}
+
+        async def task() -> None:
+            if not try_acquire_run_slot():
+                job_store.fail(job_id, "已有数据任务在运行(或上一次任务卡死未结束),请稍后再试")
+                return
+            loop = asyncio.get_event_loop()
+            qs = getattr(request.app.state, "quote_service", None)
+
+            def progress(stage: str, pct: int, msg: str,
+                         stage_pct: int | None = None, skip_log: bool = False) -> None:
+                job_store.progress(job_id, stage, pct, msg,
+                                   stage_pct=stage_pct, skip_log=skip_log)
+
+            def _run() -> dict:
+                # 修正运行期间暂停实时行情, 防止覆写同一批 parquet 竞态
+                if qs:
+                    with qs.paused():
+                        return run_repair_daily(repo, capset, start_date, on_progress=progress)
+                return run_repair_daily(repo, capset, start_date, on_progress=progress)
+
+            try:
+                job_store.start(job_id)
+                result = await loop.run_in_executor(_long_task_executor, _run)
+                if "error" in result:
+                    job_store.fail(job_id, result["error"])
+                else:
+                    job_store.succeed(job_id, result)
+                invalidate_storage_cache()
+            except Exception as e:
+                logger.exception("repair_daily failed: job_id=%s", job_id)
+                job_store.fail(job_id, str(e))
+                invalidate_storage_cache()
+            finally:
+                release_run_slot()
+
+        asyncio.create_task(task())
+        return {"status": "started", "job_id": job_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("repair_daily error: %s\n%s", e, _tb.format_exc())
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @router.post("/rebuild_enriched")
 async def rebuild_enriched(request: Request):
     """全量重算 enriched 表 — 不获取任何数据,仅基于已有 kline_daily + adj_factor 重算复权+指标。

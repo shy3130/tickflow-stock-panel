@@ -60,6 +60,8 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const indicesPinned = prefs?.indices_nav_pinned ?? true
   const isRunning = quoteStatus?.running ?? false
   const isTrading = quoteStatus?.is_trading_hours ?? false
+  // 管道/数据修正运行期间实时行情被临时暂停 — 此时禁止开启
+  const isPaused = quoteStatus?.paused ?? false
   const interval = intervalData?.interval ?? 10
   const minInterval = intervalData?.min_interval ?? 5
   const maxInterval = intervalData?.max_interval ?? 60
@@ -244,9 +246,15 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         <Card icon={Activity} title="行情轮询">
           <ToggleRow
             label="实时行情"
-            desc={isRunning && isTrading ? '运行中' : isRunning ? '运行中 (非交易时段)' : '已关闭'}
+            desc={
+              isPaused ? '数据同步运行中，已临时暂停'
+              : isRunning && isTrading ? '运行中'
+              : isRunning ? '运行中 (非交易时段)'
+              : '已关闭'
+            }
             checked={realtimeEnabled}
             onChange={handleToggleQuote}
+            disabled={isPaused}
           />
 
           <div className="mt-3 pt-3 border-t border-border">
@@ -623,12 +631,14 @@ function ToggleRow({
   checked,
   onChange,
   icon: Icon,
+  disabled,
 }: {
   label: string
   desc: string
   checked: boolean
   onChange: (v: boolean) => void
   icon?: React.ComponentType<{ className?: string }>
+  disabled?: boolean
 }) {
   return (
     <div className="flex items-center justify-between gap-4 py-2">
@@ -640,10 +650,11 @@ function ToggleRow({
         </div>
       </div>
       <button
-        onClick={() => onChange(!checked)}
+        onClick={() => !disabled && onChange(!checked)}
+        disabled={disabled}
         className={`relative inline-flex h-5 w-9 items-center rounded-full shrink-0 transition-colors duration-200 ${
           checked ? 'bg-accent' : 'bg-elevated'
-        }`}
+        } ${disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}
       >
         <span
           className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform duration-200 ${

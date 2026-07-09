@@ -44,6 +44,8 @@ async def run_now(request: Request) -> dict:
         if not try_acquire_run_slot():
             job_store.fail(job_id, "已有数据任务在运行(或上一次任务卡死未结束),请稍后再试")
             return
+        # 管道运行期间暂停实时行情取数, 防止覆写同一批 parquet 竞态
+        qs = getattr(request.app.state, "quote_service", None)
         try:
             job_store.start(job_id)
             loop = asyncio.get_event_loop()
@@ -52,10 +54,13 @@ async def run_now(request: Request) -> dict:
                          skip_log: bool = False) -> None:
                 job_store.progress(job_id, stage, pct, msg, stage_pct=stage_pct, skip_log=skip_log)
 
-            result = await loop.run_in_executor(
-                _long_task_executor,
-                lambda: daily_pipeline.run_now(repo, capset, on_progress=progress),
-            )
+            def _run() -> dict:
+                if qs:
+                    with qs.paused():
+                        return daily_pipeline.run_now(repo, capset, on_progress=progress)
+                return daily_pipeline.run_now(repo, capset, on_progress=progress)
+
+            result = await loop.run_in_executor(_long_task_executor, _run)
             job_store.succeed(job_id, result)
             invalidate_storage_cache()
             repo.refresh_cache()  # 刷新 Polars 缓存

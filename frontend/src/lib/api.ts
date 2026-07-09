@@ -957,6 +957,7 @@ export const api = {
     request<{
       enabled: boolean
       running: boolean
+      paused?: boolean
       mode?: 'none' | 'watchlist' | 'full_market'
       realtime_allowed?: boolean
       interval_s: number
@@ -1204,6 +1205,11 @@ export const api = {
     request<{ status: string; job_id: string }>('/api/kline/extend_history', {
       method: 'POST',
       body: JSON.stringify({ value, unit }),
+    }),
+  repairDaily: (startDate: string) =>
+    request<{ status: string; job_id: string }>('/api/kline/repair_daily', {
+      method: 'POST',
+      body: JSON.stringify({ start_date: startDate }),
     }),
   extendMinuteHistory: (value: number, unit: 'day' | 'month') =>
     request<{ status: string; job_id: string }>('/api/kline/extend_minute_history', {

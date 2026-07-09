@@ -102,11 +102,15 @@ def run_now(
     repo: KlineRepository,
     capset: CapabilitySet,
     on_progress: ProgressCb | None = None,
+    override_start_date: _date | None = None,
 ) -> dict:
     """立即执行一次盘后管道,支持进度回调。
 
     跳过的 stage **不 emit**,避免前端把"无 capability"的卡片错误标记为 active/done。
     result 里带 skipped_stages 列表供前端展示。
+
+    override_start_date: 传入时强制走 batch 拉取分支,用该日期作为日K/除权/指数的
+        拉取起点(到今天),用于「数据修正/补数据」场景。None 时走原有自动判定逻辑。
     """
     emit = on_progress or _noop
     skipped: list[str] = []
@@ -127,6 +131,7 @@ def run_now(
     emit("resolve_universe", 10, f"标的池规模:{len(universe)} 只")
 
     # Step 1: 日 K 同步
+    #   override_start_date 传入 → 强制 batch 拉取 [override_start_date ~ today] (数据修正)
     #   付费档 + 今天有数据 → 实时行情接口拉一次覆写（1请求全市场）
     #   有历史数据 → batch K-line API 补齐缺口
     #   无任何数据 → batch K-line API 拉首次 1 年
@@ -135,15 +140,36 @@ def run_now(
     today = _date.today()
     today_exists = latest_daily and latest_daily >= today
     new_daily_days = 0
-    # 日K范围拉取的起点(分支3补缺口/分支4首次); 实时增量/跳过时为 None。
+    # 日K范围拉取的起点(分支3补缺口/分支4首次/数据修正); 实时增量/跳过时为 None。
     # 供 Step 1.5 除权因子回溯范围对齐: 范围拉取→用日K范围, 非范围→最近N天兜底。
     daily_range_start: _date | None = None
 
-    # A 股日K拉取开关(默认开);关闭时跳过日K同步,保留已有数据
+    # A 股日K拉取开关(默认开);关闭时跳过日K同步,保留已有数据。
+    # 数据修正(override_start_date)时即使关闭开关也强制拉取 — 修正就是来补数据的。
     pull_a_share = _prefs.get_pipeline_pull_a_share()
-    if not pull_a_share:
+    if not pull_a_share and not override_start_date:
         emit("sync_daily", 45, "已跳过 A 股日K同步(拉取内容未勾选)")
         logger.info("sync_daily: skipped (pipeline_pull_a_share=False)")
+    elif override_start_date:
+        # 数据修正: 强制用传入日期作起点 batch 拉取, 忽略实时行情覆写分支。
+        start_date = override_start_date
+        daily_range_start = start_date
+        emit("sync_daily", 12, f"获取日K [{start_date} ~ {today}]…")
+        logger.info("sync_daily: [%s ~ %s] repair/override", start_date, today)
+
+        def _daily_chunk_progress(cur: int, tot: int) -> None:
+            emit("sync_daily", 12 + int(33 * cur / tot),
+                 f"日K 批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True)
+        written_daily = kline_sync.sync_and_persist_daily_batch(
+            universe, repo, capset,
+            start_date=_dt.combine(start_date, _dt.min.time()),
+            end_date=_dt.combine(today, _dt.min.time()),
+            on_chunk_done=_daily_chunk_progress,
+        )
+        gap_days = (today - start_date).days
+        new_daily_days = gap_days
+        emit("sync_daily", 45, f"日K 完成,覆盖 {gap_days} 天")
+        logger.info("sync_daily: [%s ~ %s] done, %d days", start_date, today, gap_days)
     elif today_exists and capset.has(Cap.QUOTE_POOL) and _prefs.get_daily_data_provider() == "tickflow":
         # 付费档:今天有数据(QuoteService 已落盘)→ 实时行情覆写,确保最新。
         # free/none 档无 quote.pool 能力,即便今天已有数据(如从 expert 降级),
@@ -358,7 +384,11 @@ def run_now(
                     d.name[5:] for d in index_dir.glob("date=*")
                     if d.is_dir() and d.name.startswith("date=")
                 ) if index_dir.exists() else []
-                index_start = _date.fromisoformat(index_dates[-1]) if index_dates else today - _td(days=365)
+                # 数据修正模式下用传入起点; 否则用本地指数最新日期补到今天
+                if override_start_date:
+                    index_start = override_start_date
+                else:
+                    index_start = _date.fromisoformat(index_dates[-1]) if index_dates else today - _td(days=365)
 
                 def _index_chunk(cur: int, tot: int) -> None:
                     emit("sync_index", 88, f"指数日K批次 {cur}/{tot}",
@@ -835,8 +865,14 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
         # 旧 capset —— 否则 Key 中途过期/续费后, 调度管道仍按旧档位打端点。
         app_state = _get_app_state()
         capset_live = getattr(app_state, "capabilities", None) or capset
+        # 管道运行期间暂停实时行情取数, 防止覆写同一批 parquet 竞态
+        qs = getattr(app_state, "quote_service", None)
         try:
-            result = run_now(repo, capset_live, on_progress=on_progress)
+            if qs:
+                with qs.paused():
+                    result = run_now(repo, capset_live, on_progress=on_progress)
+            else:
+                result = run_now(repo, capset_live, on_progress=on_progress)
         finally:
             # 即便有阶段软失败(run_now 末尾抛 PipelineStageError), 已落盘的日K/enriched
             # 仍需刷进内存缓存, 否则 live_agg 基准列停留在旧交易日。放 finally 保证部分

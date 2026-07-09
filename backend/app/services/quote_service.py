@@ -27,6 +27,7 @@ import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import date, time as dt_time
 
 import polars as pl
@@ -136,6 +137,10 @@ class QuoteService:
         self._fetch_lock = threading.Lock()
         self._running = False
         self._enabled = False      # 全局开关 (持久化到 preferences)
+        # 暂停态: 盘后管道/数据修正运行期间临时暂停取数, 防止与管道写同一批 parquet 竞态。
+        # 与 _enabled 不同 — pause 不改 preferences、不 stop 线程, 仅让轮询循环跳过取数;
+        # 进程重启后 _paused 归零, 从 preferences 恢复真实开关态, 无"假关闭"副作用。
+        self._paused = False
         self._interval = self.DEFAULT_INTERVAL
         self._thread: threading.Thread | None = None
         self._repo = None          # 延迟注入, 避免循环导入
@@ -209,6 +214,44 @@ class QuoteService:
         """关闭自动行情。"""
         self.stop()
         logger.info("行情服务已关闭")
+
+    # ================================================================
+    # 临时暂停 (盘后管道/数据修正期间, 防止写盘竞态)
+    # ================================================================
+
+    def pause(self) -> None:
+        """临时暂停行情轮询取数 (不关闭线程、不改 preferences)。
+
+        用于盘后管道/数据修正运行期间, 防止实时行情覆写管道正在写的 parquet。
+        与 stop() 的区别: 线程继续存活但跳过 _fetch_quotes; preferences 开关态不变,
+        管道结束调用 resume() 即恢复。线程级检查, 即时生效, 无 join 等待。
+        """
+        self._paused = True
+        logger.info("行情轮询已临时暂停 (管道/修正运行中)")
+
+    def resume(self) -> None:
+        """恢复暂停的行情轮询取数 (对应 pause)。"""
+        self._paused = False
+        logger.info("行情轮询已恢复")
+
+    def is_paused(self) -> bool:
+        """是否处于临时暂停态 (管道运行期间)。"""
+        return self._paused
+
+    @contextmanager
+    def paused(self):
+        """上下文管理器: 进入时暂停轮询取数, 退出时(含异常)自动恢复。
+
+        供盘后管道/数据修正复用:
+            with quote_service.paused():
+                run_pipeline(...)
+        无论正常结束还是异常/crash, finally 都会 resume (除非进程直接被 kill)。
+        """
+        self.pause()
+        try:
+            yield
+        finally:
+            self.resume()
 
     def boot_check(self) -> None:
         """启动时检查 preferences，若 enabled 则自动启动。
@@ -391,6 +434,7 @@ class QuoteService:
         return {
             "enabled": self._enabled,
             "running": self._running,
+            "paused": self._paused,
             "mode": mode,
             "realtime_allowed": mode != "none",
             "watchlist_symbol_count": len(preferences.get_realtime_watchlist_symbols()),
@@ -420,21 +464,24 @@ class QuoteService:
     def _poll_loop(self) -> None:
         while self._running and self._enabled:
             try:
-                phase = self._market_phase()
-                if self._should_fetch_for_phase(phase):
-                    is_final = phase in {"morning_final", "close_final"}
-                    ok = self._fetch_quotes(final=is_final)
-                    if is_final:
-                        key = self._final_sync_key(phase)
-                        if key and ok:
-                            self._final_sync_done.add(key)
-                            self._final_sync_failed.pop(key, None)
-                            logger.info("%s 最终行情同步完成, 进入休盘态", "午休" if phase == "morning_final" else "收盘")
-                        elif key:
-                            self._final_sync_failed[key] = "fetch_failed"
-                            logger.warning("%s 最终行情同步失败, 将继续重试", "午休" if phase == "morning_final" else "收盘")
-                else:
-                    logger.debug("非轮询阶段(%s), 跳过行情轮询", phase)
+                # 管道/数据修正运行期间临时暂停取数, 防止与管道写同一批 parquet 竞态。
+                # 线程继续存活 + 分片 sleep, resume() 后即时恢复, 无需重启线程。
+                if not self._paused:
+                    phase = self._market_phase()
+                    if self._should_fetch_for_phase(phase):
+                        is_final = phase in {"morning_final", "close_final"}
+                        ok = self._fetch_quotes(final=is_final)
+                        if is_final:
+                            key = self._final_sync_key(phase)
+                            if key and ok:
+                                self._final_sync_done.add(key)
+                                self._final_sync_failed.pop(key, None)
+                                logger.info("%s 最终行情同步完成, 进入休盘态", "午休" if phase == "morning_final" else "收盘")
+                            elif key:
+                                self._final_sync_failed[key] = "fetch_failed"
+                                logger.warning("%s 最终行情同步失败, 将继续重试", "午休" if phase == "morning_final" else "收盘")
+                    else:
+                        logger.debug("非轮询阶段(%s), 跳过行情轮询", phase)
             except Exception as e:  # noqa: BLE001
                 logger.warning("行情轮询异常: %s", e)
 
