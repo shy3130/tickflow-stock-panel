@@ -227,14 +227,16 @@ class WecomBotService:
             await self._sleep_interruptible(delay)
 
     async def _maintain_connection(self, ws) -> None:
-        """连接保持阶段: 每 30s 发 ping, 同时接收服务端推送(本阶段只记日志)。"""
+        """连接保持阶段: 每 30s 发 ping, 同时接收服务端推送。
+
+        本阶段收到消息解析并记 INFO 日志(验证接收能力), 后续消息处理在此扩展。
+        """
         while self._running:
             try:
                 # 用 wait_for 同时实现"心跳定时"和"接收消息", 哪个先到都行
                 try:
                     raw = await asyncio.wait_for(ws.recv(), timeout=_HEARTBEAT_INTERVAL)
-                    # 本阶段收到消息只记 DEBUG(后续扩展消息处理在此分支)
-                    logger.debug("智能机器人收到消息: %s", str(raw)[:200])
+                    self._log_incoming(raw)
                     continue
                 except asyncio.TimeoutError:
                     pass  # 接收超时 → 到了心跳时间
@@ -242,6 +244,31 @@ class WecomBotService:
                 await ws.send(json.dumps({"cmd": "ping"}))
             except Exception as e:  # noqa: BLE001 — 连接断开, 抛给上层重连
                 raise
+
+    def _log_incoming(self, raw) -> None:
+        """解析并记录收到的消息帧(供测试接收能力)。"""
+        try:
+            frame = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            logger.info("智能机器人收到非 JSON 消息: %s", str(raw)[:200])
+            return
+        cmd = frame.get("cmd", "?")
+        body = frame.get("body", {})
+        # 用户消息: aibot_msg_callback (用户 @机器人 / 单聊发消息)
+        if cmd == "aibot_msg_callback":
+            userid = body.get("from", {}).get("userid", "?")
+            chattype = body.get("chattype", "?")
+            msgtype = body.get("msgtype", "?")
+            # 文本消息内容在 body.text.content 或 body.content
+            content = body.get("text", {}).get("content") or body.get("content", "")
+            logger.info("智能机器人收到用户消息 [%s/%s] %s: %s",
+                        chattype, msgtype, userid, str(content)[:100])
+        # 事件回调: 进入会话 / 卡片点击 / 连接被踢等
+        elif cmd == "aibot_event_callback":
+            eventtype = body.get("event", {}).get("eventtype", "?")
+            logger.info("智能机器人收到事件回调: %s", eventtype)
+        else:
+            logger.info("智能机器人收到帧 cmd=%s: %s", cmd, str(raw)[:200])
 
     async def _sleep_interruptible(self, seconds: float) -> None:
         """可被 stop() 中断的 sleep(通过检查 _running)。"""
