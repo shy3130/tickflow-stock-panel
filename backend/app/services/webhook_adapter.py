@@ -28,6 +28,13 @@ _MAX_LEN = 500
 # 卡片消息正文最长字符 (飞书 interactive 卡片上限 30KB, 保守留余量给标题/结构)
 _CARD_MAX_LEN = 28000
 
+# 企业微信群机器人 markdown 消息上限 4096 字节 (非字符; 中文每字 3 字节),
+# 留余量给标题、格式符及截断提示行。
+_WECOM_MD_MAX_BYTES = 4000
+
+# 截断提示行: 正文超长被截断时追加, 引导用户回应用内查看完整内容。
+_WECOM_TRUNCATED_HINT = "\n\n…内容较长已截断，更多详情请回到 TickFlow 应用内查看。"
+
 # 飞书自定义机器人 Webhook 前缀 (用于 URL 合法性校验)
 FEISHU_HOOK_PREFIX = "https://open.feishu.cn/open-apis/bot/v2/hook/"
 
@@ -61,6 +68,26 @@ def _truncate_card(text: str) -> str:
     """截断卡片正文 (留余量给标题与卡片结构)。"""
     text = (text or "").strip()
     return text[:_CARD_MAX_LEN] + ("…" if len(text) > _CARD_MAX_LEN else "")
+
+
+def _truncate_to_bytes(text: str, max_bytes: int, suffix: str = "…") -> str:
+    """按 UTF-8 字节数安全截断 (不截断在多字节字符中间, 末尾补 suffix)。
+
+    企业微信 markdown 按**字节**计长 (上限 4096), 中文每字 3 字节,
+    不能用字符数截断 (len(str) 算的是字符数, 会超字节上限)。
+
+    Args:
+        max_bytes: 含 suffix 在内的总字节上限。
+        suffix:    被截断时追加的结尾 (如省略号或提示行)。
+    """
+    text = (text or "").strip()
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    suffix_bytes = suffix.encode("utf-8")
+    # 为 suffix 留出字节, 再用 errors='ignore' 丢弃被截断的尾字节, 避免半个字符
+    cut = encoded[:max_bytes - len(suffix_bytes)]
+    return cut.decode("utf-8", errors="ignore") + suffix
 
 
 _FEISHU_MAX_ATTEMPTS = 3
@@ -195,7 +222,7 @@ def send_feishu_card(webhook_url: str, title: str, subtitle: str, body_md: str, 
 # 关键差异:
 #   1. Webhook 形态: https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx
 #   2. 无需签名校验 (key 本身即凭证; 企业微信群机器人可选"签名校验"但极少用)
-#   3. Markdown 原生支持 (msg_type=markdown), 不必像飞书那样包进 interactive 卡片
+#   3. Markdown 原生支持 (msgtype=markdown), 不必像飞书那样包进 interactive 卡片
 #   4. 成功响应: {"errcode":0,"errmsg":"ok"}
 #
 # 限制: 每个机器人每分钟最多 20 条消息 (超出会被限流 460min 内不可用),
@@ -250,14 +277,14 @@ def _post_wecom(webhook_url: str, payload: dict) -> bool:
                     # errcode=0 表示成功; 45009=频率限制, 其它非零=业务失败
                     if data.get("errcode") == 0:
                         return True
-                    logger.debug("企业微信推送业务失败: %s", data)
+                    logger.warning("企业微信推送业务失败: %s", data)
                     return False
             except ValueError:
                 return True
-        logger.debug("企业微信推送 HTTP %s: %s", resp.status_code, resp.text[:200])
+        logger.warning("企业微信推送 HTTP %s: %s", resp.status_code, resp.text[:200])
         return False
     except Exception as e:  # noqa: BLE001
-        logger.debug("企业微信 Webhook 推送失败: %s", e)
+        logger.warning("企业微信 Webhook 推送失败: %s", e)
         return False
 
 
@@ -281,7 +308,7 @@ def send_wecom(webhook_url: str, title: str, body: str) -> bool:
     if not text:
         return False
 
-    payload: dict = {"msg_type": "text", "text": {"content": text}}
+    payload: dict = {"msgtype": "text", "text": {"content": text}}
     return _post_wecom(webhook_url, payload)
 
 
@@ -303,10 +330,13 @@ def send_wecom_markdown(webhook_url: str, title: str, body_md: str) -> bool:
     if not is_valid_wecom_url(webhook_url):
         return False
 
-    content = f"## {title}\n\n{_truncate_card(body_md)}"
+    # 企业微信 markdown 上限 4096 字节 (含标题), 用按字节截断避免超限被拒。
+    # 超长时追加提示行, 引导用户回应用内查看完整报告。
+    raw = f"## {title}\n\n{body_md}".strip()
+    content = _truncate_to_bytes(raw, _WECOM_MD_MAX_BYTES, suffix=_WECOM_TRUNCATED_HINT)
     if not content.strip():
         return False
 
-    payload: dict = {"msg_type": "markdown", "markdown": {"content": content}}
+    payload: dict = {"msgtype": "markdown", "markdown": {"content": content}}
     return _post_wecom(webhook_url, payload)
 
