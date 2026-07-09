@@ -50,10 +50,12 @@ WORKDIR /app
 # bookworm 自带 nodejs 18.19, 满足插件 engines>=18; --no-install-recommends 精简,
 # 自带 libnode/libc-ares 等全部动态依赖, 无需手动补库。
 # 国内构建走 apt mirror 已在 debian 镜像sources.list 配好, 无需额外换源。
+# nodejs: stock-sdk 插件; tesseract-ocr: 自选截图导入
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nodejs \
+    && apt-get install -y --no-install-recommends nodejs tesseract-ocr tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/* \
-    && node --version
+    && node --version \
+    && tesseract --version
 
 # 安装 uv(快) —— 国内镜像下三重兜底:主源 → 备用源 → 官方源,
 # 任一成功即可,避免单一镜像同步延迟/故障导致构建失败。
