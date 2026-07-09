@@ -310,6 +310,13 @@ class QuoteService:
             return list(self._subscribers)
 
     def _broadcast_quote_updated(self) -> None:
+        # 实时行情刷新后清空总览聚合缓存, 使看板 (overview-market) 在 SSE 触发的
+        # 重取中拿到最新指数/聚合值。与 _broadcast 同时进行, 与侧栏 /intraday/indices
+        # (无缓存, 直读实时缓存) 行为对齐, 避免看板落后于侧栏。
+        # 延迟导入规避 services <-> api 层循环依赖。
+        from app.api.overview import invalidate_overview_cache
+
+        invalidate_overview_cache()
         for sub in self._snapshot_subscribers():
             sub.notify_quote()
 
