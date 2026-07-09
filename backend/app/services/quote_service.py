@@ -766,7 +766,7 @@ class QuoteService:
 
     @staticmethod
     def _build_daily(records: list[dict]) -> pl.DataFrame:
-        """将 API records 转为日K格式 DataFrame (只有 OHLCV, 写 kline_daily 用)。"""
+        """将 API records 转为日K格式 DataFrame (OHLCV + quote_ts, 写 kline_daily 用)。"""
         if not records:
             return pl.DataFrame()
         df = pl.DataFrame(records)
@@ -778,11 +778,13 @@ class QuoteService:
             "low": "low",
             "volume": "volume",
             "amount": "amount",
+            "timestamp": "quote_ts",
         }
         select_exprs = []
         for src, dst in cols_map.items():
             if src in df.columns:
-                select_exprs.append(pl.col(src).alias(dst))
+                select_exprs.append(pl.col(src).cast(pl.Int64, strict=False).alias(dst)
+                                     if dst == "quote_ts" else pl.col(src).alias(dst))
         if not select_exprs:
             return pl.DataFrame()
         result = df.select(select_exprs).with_columns(
@@ -1193,16 +1195,26 @@ class QuoteService:
 
             if use_incremental:
                 from app.indicators.pipeline import compute_enriched_today
+                from app.market_time import trading_minutes_elapsed_from_ts, trading_minutes_elapsed
                 instruments = self._repo.get_instruments()
                 # 将 API 直接提供的补充字段 JOIN 到 daily_df
                 today_ohlcv = daily_df
                 if quote_extra is not None and not quote_extra.is_empty():
                     today_ohlcv = daily_df.join(quote_extra, on="symbol", how="left")
+                # 量比时间折算: 优先用行情 quote_ts (真实成交时间), 缺失则兜底服务端时间
+                elapsed_minutes: float | None = None
+                if "quote_ts" in daily_df.columns and not daily_df.is_empty():
+                    valid_ts = daily_df["quote_ts"].drop_nulls()
+                    if not valid_ts.is_empty():
+                        elapsed_minutes = trading_minutes_elapsed_from_ts(valid_ts.median())
+                if elapsed_minutes is None:
+                    elapsed_minutes = trading_minutes_elapsed()
                 enriched_today = compute_enriched_today(
                     live_agg=live_agg,
                     prev_enriched=prev_enriched,
                     today_ohlcv=today_ohlcv,
                     instruments=instruments,
+                    elapsed_minutes=elapsed_minutes,
                 )
                 if enriched_today.is_empty():
                     logger.warning("增量计算结果为空, 回退到全量计算")
