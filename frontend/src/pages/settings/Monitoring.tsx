@@ -584,7 +584,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                     <summary className="cursor-pointer hover:text-secondary">如何获取企业微信 Webhook 地址?</summary>
                     <ol className="mt-1.5 space-y-1 pl-4 list-decimal leading-relaxed">
                       <li>打开企业微信,进入目标群聊 → 右上角「...」→ <b>群推送 Webhook</b></li>
-                      <li>点击「添加」→ 选择「<b>自定义机器人</b>」→ 填写名字</li>
+                      <li>点击「添加」→ 选择「<b>消息推送</b>」→ 填写名字</li>
                       <li>复制生成的 <b>Webhook 地址</b>(含 key 参数),粘贴到上方输入框</li>
                       <li>也可只复制 key 参数部分(= 后面的内容)填入</li>
                       <li>企业微信群的消息可同步到绑定的个人微信,实现"微信推送"</li>
