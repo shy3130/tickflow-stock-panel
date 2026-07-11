@@ -144,8 +144,14 @@ class PanelCache:
         # 用实例锁守护所有 OrderedDict 变更; compute_fn (重扫盘) 放锁外避免串行化。
         self._lock = threading.Lock()
         # single-flight: 同 key 只让一个线程 compute, 其余等其结果复用。
-        # 否则优化器等场景下 max_workers 个线程冷启动同时 miss, 会并行加载 N 份同一面板。
+        # 否则优化器/walk-forward 的 max_workers 个线程冷启动同时 miss, 会并行加载 N 份同一面板。
         self._inflight: dict[str, _InFlight] = {}
+        # 轻量遥测: 累加真实扫盘耗时与命中/复用次数, 用于量化 IO 占比 (是否值得进一步优化)。
+        # compute_seconds 只计 leader 的实际 compute_fn 耗时, follower 复用不计 —— 反映真实 IO。
+        self._compute_seconds = 0.0
+        self._compute_count = 0   # 实际扫盘次数
+        self._hit_count = 0       # 缓存命中 (未扫盘) 次数
+        self._reuse_count = 0     # single-flight 跟随者复用次数
 
     def get_or_compute(
         self,
@@ -164,6 +170,7 @@ class PanelCache:
             if entry is not None:
                 if now - entry.ts < self._ttl:
                     self._cache.move_to_end(key)
+                    self._hit_count += 1
                     return entry.df
                 del self._cache[key]  # 过期, 丢弃后重算
             # single-flight: 同 key 若已有线程在算, 登记为跟随者; 否则本线程当 leader。
@@ -176,21 +183,28 @@ class PanelCache:
         if not leader:
             # 跟随者: 等 leader 算完直接复用, 不重复 compute (消除缓存踩踏)。
             flight.done.wait()
+            with self._lock:
+                self._reuse_count += 1
             if flight.error is not None:
                 raise flight.error
             return flight.df
 
         # leader: compute 放锁外 (不同 key 仍可并发, 保留原设计优点)。
+        t_compute = time.perf_counter()
         try:
             df = compute_fn(symbols, start, end, columns, asset_type)
         except BaseException as e:
             # 失败不缓存: 摘除 inflight 让后续线程重试, 并把异常透传给已在等的跟随者。
             with self._lock:
+                self._compute_seconds += time.perf_counter() - t_compute  # 失败也花了 IO, 计入
+                self._compute_count += 1
                 self._inflight.pop(key, None)
             flight.error = e
             flight.done.set()
             raise
         with self._lock:
+            self._compute_seconds += time.perf_counter() - t_compute
+            self._compute_count += 1
             self._cache[key] = _CacheEntry(df=df, ts=now)
             if len(self._cache) > self._max_size:
                 self._cache.popitem(last=False)
@@ -198,6 +212,16 @@ class PanelCache:
         flight.df = df
         flight.done.set()
         return df
+
+    def stats(self) -> dict:
+        """遥测快照: 累计扫盘耗时/次数与命中/复用次数。首尾快照取差即区间内 IO 开销。"""
+        with self._lock:
+            return {
+                "compute_seconds": round(self._compute_seconds, 4),
+                "compute_count": self._compute_count,
+                "hit_count": self._hit_count,
+                "reuse_count": self._reuse_count,
+            }
 
     def invalidate(self) -> None:
         with self._lock:
@@ -236,6 +260,10 @@ class BacktestEngine:
     ) -> pl.DataFrame:
         """加载 enriched 数据面板，带缓存。asset_type='etf' 时读 ETF enriched。"""
         return self._cache.get_or_compute(symbols, start, end, columns, self._load_panel_inner, asset_type=asset_type)
+
+    def cache_stats(self) -> dict:
+        """暴露 PanelCache 遥测快照 (扫盘耗时/次数/命中/复用), 供上层量化 IO 占比。"""
+        return self._cache.stats()
 
     def _load_panel_inner(
         self,

@@ -160,6 +160,9 @@ class WalkForwardService:
         folds = generate_folds(cfg.start, cfg.end, cfg.train_days, cfg.test_days, cfg.step_days)
         n_total = len(folds)
 
+        # 遥测: 首尾快照 PanelCache, 量化跨折重叠区间重复扫盘的 IO 占比 (是否值得进一步优化)。
+        cache_before = self.service.engine.cache_stats()
+
         valid_records: list[dict] = []   # IS 与 OOS 都成功, 计入聚合
         skipped: list[dict] = []          # 无优化结果 或 OOS 失败, 不计入聚合 (避免伪装成有效折)
         done = 0
@@ -240,6 +243,25 @@ class WalkForwardService:
                 progress_cb({"type": "walkforward_progress", "done": done, "total": n_total, "fold": f.index})
 
         summary = aggregate_oos(valid_records, cfg.objective, direction)
+
+        # 遥测收尾: 本次 WF 累计扫盘耗时 / 命中 / 复用, 与总耗时对比得出 load_panel 占比。
+        cache_after = self.service.engine.cache_stats()
+        elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
+        io_seconds = round(cache_after["compute_seconds"] - cache_before["compute_seconds"], 4)
+        io_pct = round(io_seconds * 1000 / elapsed_ms * 100, 1) if elapsed_ms > 0 else 0.0
+        cache_telemetry = {
+            "load_panel_seconds": io_seconds,
+            "load_panel_pct": io_pct,  # 扫盘耗时 / WF 总耗时
+            "scans": cache_after["compute_count"] - cache_before["compute_count"],
+            "hits": cache_after["hit_count"] - cache_before["hit_count"],
+            "single_flight_reuses": cache_after["reuse_count"] - cache_before["reuse_count"],
+        }
+        logger.info(
+            "walk-forward IO 占比: load_panel %.3fs (%.1f%% of %.1fms) | 扫盘 %d 次 命中 %d 复用 %d",
+            io_seconds, io_pct, elapsed_ms,
+            cache_telemetry["scans"], cache_telemetry["hits"], cache_telemetry["single_flight_reuses"],
+        )
+
         return {
             "objective": cfg.objective,
             "direction": direction,
@@ -249,5 +271,6 @@ class WalkForwardService:
             "folds": valid_records,
             "skipped": skipped,
             "summary": summary,
-            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
+            "cache_telemetry": cache_telemetry,
+            "elapsed_ms": elapsed_ms,
         }

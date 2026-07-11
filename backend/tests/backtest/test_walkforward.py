@@ -136,10 +136,20 @@ class _FakeOptimizer:
         return {"best_params": {"p": cfg.start.month}, "best_score": 2.0, "results": [], "n_completed": 1}
 
 
+_ZERO_CACHE_STATS = {"compute_seconds": 0.0, "compute_count": 0, "hit_count": 0, "reuse_count": 0}
+
+
+class _FakeEngine:
+    """最小引擎桩: 仅提供 WF 遥测所需的 cache_stats。"""
+    def cache_stats(self):
+        return dict(_ZERO_CACHE_STATS)
+
+
 class _FakeService:
     """run 返回受控 OOS stats, 记录测试区间 + 收到的 params。"""
     def __init__(self):
         self.calls = []
+        self.engine = _FakeEngine()
 
     def run(self, config, progress_cb=None, cancel_event=None):
         self.calls.append({"start": config.start, "end": config.end, "params": dict(config.params or {})})

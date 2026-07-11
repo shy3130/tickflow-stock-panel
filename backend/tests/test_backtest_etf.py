@@ -150,6 +150,47 @@ def test_panel_cache_single_flight_error_propagates_and_retries():
     assert got is df
 
 
+def test_panel_cache_stats_counts_scans_hits_reuses():
+    """遥测计数: 首次 miss 计扫盘, 二次同 key 计命中, 并发同 key 跟随者计复用。"""
+    import threading
+
+    cache = PanelCache()
+    df = pl.DataFrame({"symbol": ["510300"]})
+    args = (["510300"], date(2026, 1, 1), date(2026, 1, 2), None)
+
+    # 1) 首次: 冷 miss -> 扫盘 1 次
+    cache.get_or_compute(*args, lambda *a: df, "stock")
+    s = cache.stats()
+    assert s["compute_count"] == 1 and s["hit_count"] == 0
+
+    # 2) 二次同 key: 命中缓存, 不扫盘
+    cache.get_or_compute(*args, lambda *a: df, "stock")
+    s = cache.stats()
+    assert s["compute_count"] == 1 and s["hit_count"] == 1
+
+    # 3) 新 key 并发踩踏: 1 次扫盘 + N-1 次 single-flight 复用
+    barrier = threading.Barrier(5)
+    args2 = (["600000"], date(2026, 2, 1), date(2026, 2, 2), None)
+
+    def slow(*a):
+        time.sleep(0.04)
+        return df
+
+    def worker():
+        barrier.wait()
+        cache.get_or_compute(*args2, slow, "stock")
+
+    threads = [threading.Thread(target=worker) for _ in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    s = cache.stats()
+    assert s["compute_count"] == 2, "并发同 key 应只扫盘 1 次"
+    assert s["reuse_count"] == 4, "其余 4 个跟随者应计为复用"
+
+
 def test_job_key_includes_asset_type_and_is_consistent():
     """stream 与 cancel 必须用同一 job_key: asset_type 进 key 且相同入参产出相同 key。"""
     from app.api.backtest import _make_job_key
