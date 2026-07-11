@@ -284,7 +284,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   }
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-6 max-w-5xl">
+    <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-6 max-w-5xl">
       {/* ========== 左列 ========== */}
       <div className="space-y-6">
         {/* 行情状态 — 开关 + 间隔 */}
