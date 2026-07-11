@@ -6,7 +6,9 @@
   - 「已存在则跳过」: 绝不覆盖用户已有数据, 老用户零影响
   - 拉取失败只记 warning, 不阻断启动 (保持「没数据也能跑」)
 
-种子数据来源: https://files.688798.xyz/ths/{concepts,industries}.json
+种子数据来源 (概念/行业各自独立配置):
+  - 概念: https://shy313.com/api/plugins/market_flow/exports/ths-concepts
+  - 行业: https://shy313.com/api/plugins/market_flow/exports/ths-industries
 作者更新数据只需改接口上的 JSON, 用户下次拉取自动同步, 无需发版。
 
 接入点: app.main.lifespan → ensure_builtin_presets(store.data_dir)
@@ -26,8 +28,9 @@ from app.services.ext_data import (
 
 logger = logging.getLogger(__name__)
 
-# 种子数据源 (作者维护, 改这里即对所有用户生效)
-_THS_BASE = "https://files.688798.xyz/ths"
+# 种子数据源 (概念/行业各自独立配置, 作者维护)
+_CONCEPT_DATA_URL = "https://shy313.com/api/plugins/market_flow/exports/ths-concepts"
+_INDUSTRY_DATA_URL = "https://shy313.com/api/plugins/market_flow/exports/ths-industries"
 
 
 # ---------------------------------------------------------------------------
@@ -55,10 +58,10 @@ def _concept_preset() -> ExtConfig:
         symbol_map={"type": "mapped", "col": "股票代码"},
         code_map={"type": "computed", "from": "symbol", "method": "strip_exchange"},
         pull=PullConfig(
-            url=f"{_THS_BASE}/concepts.json",
+            url=_CONCEPT_DATA_URL,
             method="GET",
             schedule_minutes=1440,
-            enabled=False,
+            enabled=True,
         ),
     )
 
@@ -84,10 +87,10 @@ def _industry_preset() -> ExtConfig:
         symbol_map={"type": "mapped", "col": "股票代码"},
         code_map={"type": "computed", "from": "symbol", "method": "strip_exchange"},
         pull=PullConfig(
-            url=f"{_THS_BASE}/industries.json",
+            url=_INDUSTRY_DATA_URL,
             method="GET",
             schedule_minutes=1440,
-            enabled=False,
+            enabled=True,
         ),
     )
 
@@ -209,7 +212,7 @@ async def ensure_builtin_presets(data_dir: Path) -> None:
         try:
             store.upsert(config)
             logger.info("内置扩展表 %s 配置已就绪 (待用户手动获取数据)", config.id)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("内置扩展表 %s 配置写入失败 (不影响启动): %s", config.id, e)
 
 
