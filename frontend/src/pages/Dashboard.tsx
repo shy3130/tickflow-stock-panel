@@ -71,6 +71,7 @@ function SectionTitle({ icon: Icon, title, hint }: { icon: typeof Activity; titl
   return (
     <div className="mb-2 flex items-center justify-between gap-2">
       <div className="flex items-center gap-1.5">
+        <span className="h-3 w-0.5 rounded-full bg-gradient-to-b from-accent to-accent/30" />
         <Icon className="h-3.5 w-3.5 text-accent" />
         <h2 className="text-xs font-semibold text-foreground">{title}</h2>
       </div>
@@ -218,7 +219,7 @@ function KpiCell({ label, value, sub, tone = 'neutral' }: { label: ReactNode; va
   const isPlain = typeof value === 'string' || typeof value === 'number'
   const color = tone === 'bull' ? 'text-bull' : tone === 'bear' ? 'text-bear' : tone === 'accent' ? 'text-accent' : 'text-foreground'
   return (
-    <div className="min-w-0 rounded-lg border border-border bg-surface/80 px-3 py-2">
+    <div className="min-w-0 overflow-hidden rounded-lg border border-border bg-surface/80 px-2 py-1 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-all hover:border-accent/30 hover:shadow-[0_2px_8px_hsl(var(--accent)/0.15)]">
       <div className="flex items-center gap-1 text-[11px] text-muted">{label}</div>
       <div className={`mt-1 truncate font-mono text-lg font-semibold leading-none tabular-nums ${isPlain ? color : 'text-foreground'}`}>{value}</div>
       {sub && <div className="mt-1 truncate text-[10px] text-muted">{sub}</div>}
@@ -232,7 +233,7 @@ function IndexTicker({ item }: { item: OverviewMarket['indices'][number] }) {
   return (
     <Link
       to={`/indices?symbol=${encodeURIComponent(item.symbol)}`}
-      className="grid min-w-0 grid-cols-[1fr_auto] items-center gap-x-2 gap-y-0.5 rounded-lg border border-border bg-elevated/45 px-2.5 py-1.5 transition-colors hover:border-accent/40 hover:bg-elevated"
+      className="grid min-w-0 grid-cols-[1fr_auto] items-center gap-x-2 gap-y-0.5 rounded-lg border border-border bg-elevated/45 px-1.5 py-1 shadow-[0_1px_1px_hsl(var(--border)/0.3)] backdrop-blur-sm transition-all hover:border-accent/40 hover:bg-elevated hover:shadow-[0_2px_6px_hsl(var(--accent)/0.15)]"
     >
       <div className="truncate text-xs font-medium text-foreground">{item.name || item.symbol}</div>
       <div className={`font-mono text-xs font-semibold ${pctClass(pct)}`}>{fmtIndexPct(pct)}</div>
@@ -363,22 +364,37 @@ function LadderMini({ limit }: { limit: OverviewMarket['limit'] }) {
         <span className="font-mono text-accent">{(limit.seal_rate ?? 0).toFixed(0)}%</span>
       </div>
       {tiers.length === 0 && <div className="rounded border border-dashed border-border py-5 text-center text-xs text-muted">暂无 2 板以上</div>}
-      {tiers.map(t => (
-        <div key={t.boards} className="grid grid-cols-[42px_1fr_auto] items-center gap-2 rounded bg-elevated/35 px-2 py-1.5">
-          <span className={`font-mono text-sm font-bold ${t.boards >= 5 ? 'text-bull' : t.boards >= 3 ? 'text-accent' : 'text-secondary'}`}>{t.boards}板</span>
-          <div className="h-1.5 overflow-hidden rounded-full bg-base">
-            <div className="h-full rounded-full bg-bull/70" style={{ width: `${Math.min(100, t.count * 12)}%` }} />
+      {tiers.map(t => {
+        const stocks = t.stocks ?? []
+        const showStocks = stocks.length > 0 && stocks.length <= 3
+        return (
+          <div key={t.boards} className="rounded bg-elevated/35 px-2 py-1.5">
+            <div className="grid grid-cols-[42px_1fr_auto] items-center gap-2">
+              <span className={`font-mono text-sm font-bold ${t.boards >= 5 ? 'text-bull' : t.boards >= 3 ? 'text-accent' : 'text-secondary'}`}>{t.boards}板</span>
+              <div className="h-1.5 overflow-hidden rounded-full bg-base">
+                <div className="h-full rounded-full bg-bull/70" style={{ width: `${Math.min(100, t.count * 12)}%` }} />
+              </div>
+              <span className="font-mono text-xs text-foreground">{t.count}</span>
+            </div>
+            {showStocks && (
+              <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 pl-[50px]">
+                {stocks.map(s => (
+                  <span key={s.symbol} className="inline-flex items-center gap-0.5 text-[9px] text-secondary">
+                    {s.name || s.symbol}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
-          <span className="font-mono text-xs text-foreground">{t.count}</span>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
 
 function MiniMetric({ label, value, cls = 'text-foreground' }: { label: string; value: string; cls?: string }) {
   return (
-    <div className="rounded bg-elevated/45 px-2 py-1.5">
+    <div className="rounded-md bg-elevated/45 px-2 py-1.5 border border-border/40">
       <div className="text-[10px] text-muted">{label}</div>
       <div className={`mt-0.5 font-mono text-xs font-semibold ${cls}`}>{value}</div>
     </div>
@@ -390,8 +406,8 @@ function StockList({ title, rows, mode, onStockClick }: {
   onStockClick?: (symbol: string, name?: string) => void;
 }) {
   return (
-    <div className="rounded-card border border-border bg-surface/80 p-2.5">
-      <div className="mb-1.5 flex items-center justify-between">
+    <div className="rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
+      <div className="mb-1 flex items-center justify-between">
         <h3 className="text-xs font-semibold text-foreground">{title}</h3>
         <span className="text-[9px] text-muted">TOP {Math.min(rows.length, 8)}</span>
       </div>
@@ -399,13 +415,23 @@ function StockList({ title, rows, mode, onStockClick }: {
         {rows.slice(0, 8).map((r, idx) => (
           <div
             key={`${r.symbol}-${idx}`}
-            className="grid grid-cols-[18px_1fr_auto] items-center gap-1.5 rounded bg-elevated/40 px-1.5 py-1 cursor-pointer hover:bg-elevated hover:brightness-110 transition-colors"
+            className="grid grid-cols-[18px_1fr_auto] items-center gap-1.5 rounded-md bg-elevated/40 px-1.5 py-1 cursor-pointer hover:bg-elevated hover:brightness-110 transition-colors border border-transparent hover:border-border/60"
             onClick={() => onStockClick?.(r.symbol, r.name ?? undefined)}
           >
             <span className="text-center font-mono text-[10px] text-muted">{idx + 1}</span>
             <div className="min-w-0">
-              <div className="truncate text-[11px] text-foreground">{r.name || r.symbol}</div>
-              <div className="font-mono text-[9px] text-muted">{r.symbol}</div>
+              <div className="flex items-center gap-1">
+                <span className="truncate text-[11px] text-foreground">{r.name || r.symbol}</span>
+                {(() => {
+                  const board = boardTag(r.symbol)
+                  return board ? (
+                    <span className={`shrink-0 inline-flex items-center justify-center h-3 px-1 rounded text-[8px] font-bold leading-none border ${board.color}`}>
+                      {board.label}
+                    </span>
+                  ) : null
+                })()}
+              </div>
+              <span className="font-mono text-[9px] text-muted">{r.symbol}</span>
             </div>
             <div className="text-right">
               {mode === 'amount' ? (
@@ -441,18 +467,30 @@ function RankColumn({ title, rows, tone, onStockClick }: {
     <div className="min-w-0 space-y-1">
       <div className={`text-[10px] font-medium ${tone === 'bull' ? 'text-bull' : 'text-bear'}`}>{title}</div>
       {rows.slice(0, 5).map((r, idx) => (
-        <div key={`${title}-${r.name}-${idx}`} className="grid grid-cols-[14px_1fr_auto] items-center gap-1 rounded bg-elevated/40 px-1.5 py-1">
+        <div key={`${title}-${r.name}-${idx}`} className="grid grid-cols-[14px_1fr_auto] items-center gap-1 rounded-md bg-elevated/40 px-1.5 py-1 border border-transparent hover:border-border/60 transition-colors">
           <span className="text-center font-mono text-[9px] text-muted">{idx + 1}</span>
           <div className="min-w-0">
             <div className="truncate text-[11px] text-foreground" title={r.name}>{r.name}</div>
-            <div className="truncate text-[9px] text-muted">
-              {r.count}只 · {r.leader?.symbol ? (
+            <div className="mt-0.5 flex items-center gap-1">
+              <span className="shrink-0 font-mono text-[9px] text-muted">{r.count}只</span>
+              <span className="text-muted">·</span>
+              {r.leader?.symbol ? (
                 <button
                   onClick={(e) => { e.stopPropagation(); onStockClick?.(r.leader!.symbol!, r.leader!.name ?? undefined) }}
-                  className="hover:text-accent cursor-pointer"
+                  className="truncate text-[10px] font-medium text-secondary hover:text-accent cursor-pointer transition-colors"
                   title={r.leader?.symbol ?? undefined}
                 >{r.leader?.name ?? '—'}</button>
-              ) : r.leader?.name ?? '—'}
+              ) : (
+                <span className="truncate text-[10px] text-muted">{r.leader?.name ?? '—'}</span>
+              )}
+              {r.leader?.symbol && (() => {
+                const board = boardTag(r.leader!.symbol!)
+                return board ? (
+                  <span className={`shrink-0 inline-flex items-center justify-center h-3 px-1 rounded text-[8px] font-bold leading-none border ${board.color}`}>
+                    {board.label}
+                  </span>
+                ) : null
+              })()}
             </div>
           </div>
           <div className={`font-mono text-[10px] font-semibold ${pctClass(r.avg_pct)}`}>{fmtStockPct(r.avg_pct)}</div>
@@ -469,7 +507,7 @@ function HotRankCard({ title, rank, configUrl, onStockClick }: {
 }) {
   const hasData = (rank?.leading?.length ?? 0) > 0 || (rank?.lagging?.length ?? 0) > 0
   return (
-    <section className="rounded-card border border-border bg-surface/80 p-2.5">
+    <section className="rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
       <SectionTitle icon={Flame} title={title} hint="领涨/领跌" />
       {hasData ? (
         <div className="grid grid-cols-2 gap-2">
@@ -614,7 +652,7 @@ export function Dashboard() {
   const quoteMode = data.quote_status?.mode as ('none' | 'watchlist' | 'full_market') | undefined
 
   return (
-    <div className="min-h-full bg-base p-3">
+    <div className="min-h-full bg-base p-1.5">
       {/* 无本地数据常驻引导卡片 —— 一键触发盘后管道获取数据(无 Key 也可) */}
       {hasNoData && (
         <FetchDataCard
@@ -640,7 +678,8 @@ export function Dashboard() {
           />
         )}
       </AnimatePresence>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-card border border-border bg-surface/85 px-3 py-2">
+      <div className="relative mb-1.5 flex flex-wrap items-center justify-between gap-2 overflow-hidden rounded-card border border-border bg-gradient-to-r from-surface/90 to-surface/70 px-3 py-1.5 shadow-[0_1px_3px_hsl(var(--border)/0.4)] backdrop-blur-sm">
+        <div className="pointer-events-none absolute left-0 top-0 h-full w-1 bg-gradient-to-b from-accent to-accent/20" aria-hidden />
         <div className="flex items-center gap-2">
           <Gauge className="h-4 w-4 text-accent" />
           <h1 className="text-base font-semibold text-foreground">市场看板</h1>
@@ -681,7 +720,7 @@ export function Dashboard() {
 
       {/* Free 档提示: 大盘看板为盘后数据, 仅自选股实时。避免用户误读为全市场实时。 */}
       {quoteMode === 'watchlist' && (
-        <div className="mb-3 flex items-start gap-2 rounded-card border border-amber-500/30 bg-amber-500/8 px-3 py-2 text-[11px] leading-relaxed">
+        <div className="mb-1.5 flex items-start gap-2 rounded-card border border-amber-500/30 bg-amber-500/8 px-3 py-1.5 text-[11px] leading-relaxed">
           <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
           <div className="min-w-0 flex-1 text-secondary">
             当前为「自选实时」模式,看板展示的大盘数据为<strong className="text-foreground">盘后快照</strong>(最新有数据日),并非盘中实时;
@@ -691,23 +730,28 @@ export function Dashboard() {
         </div>
       )}
 
-      <div className="mb-3 grid grid-cols-4 gap-2">
+      <div className="mb-1.5 grid grid-cols-4 gap-1">
         {data.indices.map(item => <IndexTicker key={item.symbol} item={item} />)}
       </div>
 
-      <div className="mb-3 grid grid-cols-6 gap-2">
+      <div className="mb-1.5 grid grid-cols-6 gap-1">
         <KpiCell label="个股涨 / 平 / 跌" value={<><span className="text-bull">{data.breadth.up}</span><span className="text-muted">/</span><span className="text-muted">{data.breadth.flat}</span><span className="text-muted">/</span><span className="text-bear">{data.breadth.down}</span></>} sub={`上涨率 ${data.breadth.up_pct.toFixed(1)}%`} />
         <KpiCell label="强势 / 弱势" value={<><span className="text-bull">{strongUp}</span><span className="text-muted">/</span><span className="text-bear">{strongDown}</span></>} sub="涨跌 ≥3%" />
         <KpiCell label={<span className="inline-flex items-center gap-1">涨停 / 跌停<SealedBadge degraded={isSealedDegrade} hasDepth={hasDepth} isHistorical={false} sealedReady={sealedReady} sealedCountsUp={{ real: data.limit.limit_up, fake: data.limit.fake_up ?? 0, pending: 0 }} sealedCountsDown={{ real: data.limit.limit_down, fake: data.limit.fake_down ?? 0, pending: 0 }} rawUp={data.limit.limit_up + (data.limit.fake_up ?? 0)} rawDown={data.limit.limit_down + (data.limit.fake_down ?? 0)} invalidateKeys={['overview-market', 'limit-ladder']} /></span>} value={<><span className="text-bull">{data.limit.limit_up}</span><span className="text-muted">/</span><span className="text-bear">{data.limit.limit_down}</span></>} sub={`封板率 ${(data.limit.seal_rate ?? 0).toFixed(0)}%`} />
-        <KpiCell label="最高连板" value={`${data.limit.max_boards || 0}板`} sub={`梯队 ${data.limit.tiers.length}`} tone="accent" />
+        <KpiCell label="最高连板" value={`${data.limit.max_boards || 0}板`} sub={(() => {
+          const top = data.limit.tiers.find(t => t.boards === data.limit.max_boards)
+          const stocks = top?.stocks ?? []
+          if (stocks.length > 0 && stocks.length <= 3) return stocks.map(s => s.name || s.symbol).join(' · ')
+          return `梯队 ${data.limit.tiers.length}`
+        })()} tone="accent" />
         <KpiCell label="成交额" value={fmtBigNum(data.amount.total)} sub={`均额 ${fmtBigNum(data.amount.avg)}`} />
         <KpiCell label="换手 / 量比" value={`${fmtPrice(data.activity.avg_turnover, 1)}% / ${fmtPrice(data.activity.vol_ratio, 2)}`} sub={`高换手 ${data.activity.high_turnover} · 放量占比 ${fmtPrice(data.activity.high_vol_ratio, 1)}%`} tone="accent" />
       </div>
 
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_20rem]">
-        <main className="min-w-0 space-y-3">
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-            <section className="rounded-card border border-border bg-surface/80 p-2.5">
+      <div className="grid grid-cols-1 gap-1.5 xl:grid-cols-[minmax(0,1fr)_20rem]">
+        <main className="min-w-0 space-y-1.5">
+          <div className="grid grid-cols-1 gap-1.5 lg:grid-cols-3">
+            <section className="rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
               <SectionTitle icon={BarChart3} title="涨跌分布 / 广度" hint={`${data.breadth.total}只`} />
               <DistributionBars rows={data.distribution} />
               <div className="mt-2">
@@ -720,14 +764,14 @@ export function Dashboard() {
             </section>
 
             <section
-              className="rounded-card border bg-surface/80 p-2.5"
+              className="rounded-card border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]"
               style={{ borderColor: `${scoreColor(score)}40` }}
             >
               <SectionTitle icon={Sparkles} title="情绪雷达" hint={`情绪评分 ${score}`} />
               <EmotionRadar radar={data.radar} score={score} />
             </section>
 
-            <section className="flex flex-col rounded-card border border-border bg-surface/80 p-2.5">
+            <section className="flex flex-col rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
               <div>
                 <SectionTitle icon={LineChart} title="趋势强度" hint="均线/新高低" />
                 <div className="grid grid-cols-3 gap-1.5">
@@ -739,7 +783,7 @@ export function Dashboard() {
                   <MiniMetric label="高低比" value={`${data.trend.new_high + data.trend.new_low > 0 ? Math.round(data.trend.new_high / (data.trend.new_high + data.trend.new_low) * 100) : 50}%`} cls={data.trend.new_high >= data.trend.new_low ? 'text-bull' : 'text-bear'} />
                 </div>
               </div>
-              <div className="mt-3 border-t border-border pt-2.5">
+              <div className="mt-1.5 border-t border-border pt-1.5">
                 <SectionTitle icon={Target} title="实用监控" hint="盘中观察" />
                 <div className="grid grid-cols-3 gap-1.5">
                   <MiniMetric label="炸板" value={`${data.limit.broken ?? 0}`} cls="text-warning" />
@@ -753,12 +797,12 @@ export function Dashboard() {
             </section>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-1.5 md:grid-cols-2">
             <HotRankCard title="概念热度" rank={data.concept_rank} configUrl="/concept-analysis" onStockClick={(symbol, name) => setPreviewStock({symbol, name})} />
             <HotRankCard title="行业热度" rank={data.industry_rank} configUrl="/industry-analysis" onStockClick={(symbol, name) => setPreviewStock({symbol, name})} />
           </div>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 xl:grid-cols-4">
             <StockList title="涨幅榜" rows={data.top_gainers} mode="gain" onStockClick={(symbol, name) => setPreviewStock({symbol, name})} />
             <StockList title="跌幅榜" rows={data.top_losers} mode="loss" onStockClick={(symbol, name) => setPreviewStock({symbol, name})} />
             <StockList title="成交额榜" rows={data.turnover_leaders} mode="amount" onStockClick={(symbol, name) => setPreviewStock({symbol, name})} />
@@ -766,12 +810,12 @@ export function Dashboard() {
           </div>
         </main>
 
-        <aside className="min-w-0 space-y-3">
-          <section className="rounded-card border border-border bg-surface/80 p-3">
+        <aside className="min-w-0 space-y-1.5">
+          <section className="rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
             <SectionTitle icon={Flame} title="涨停梯队" hint={<span className="inline-flex items-center gap-1">{`涨停 ${data.limit.limit_up}`}{isSealedDegrade && <span className="text-[9px] px-1 rounded bg-yellow-500/10 text-yellow-600 dark:text-yellow-500">{hasDepth ? '未修正' : '降级'}</span>}</span>} />
             <LadderMini limit={data.limit} />
           </section>
-          <section className="rounded-card border border-border bg-surface/80 p-3">
+          <section className="rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
             <div className="mb-2 flex items-center justify-between gap-2">
               <div className="flex items-center gap-1.5">
                 <BellRing className="h-3.5 w-3.5 text-accent" />
