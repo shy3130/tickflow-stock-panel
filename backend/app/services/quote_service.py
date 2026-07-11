@@ -137,11 +137,11 @@ class QuoteService:
     # 档位 → 最小轮询间隔 (秒)
     TIER_MIN_INTERVAL = {
         "expert": 1.0,
-        "pro": 2.0,
-        "starter": 3.0,
+        "pro": 3.0,
+        "starter": 6.0,
         "free": 6.0,
     }
-    DEFAULT_INTERVAL = 10.0
+    DEFAULT_INTERVAL = 6.0
     MAX_INTERVAL = 60.0
 
     def __init__(self) -> None:

@@ -62,8 +62,8 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const isTrading = quoteStatus?.is_trading_hours ?? false
   // 管道/数据修正运行期间实时行情被临时暂停 — 此时禁止开启
   const isPaused = quoteStatus?.paused ?? false
-  const interval = intervalData?.interval ?? 10
-  const minInterval = intervalData?.min_interval ?? 5
+  const interval = intervalData?.interval ?? 6
+  const minInterval = intervalData?.min_interval ?? 6
   const maxInterval = intervalData?.max_interval ?? 60
   const [intervalDraft, setIntervalDraft] = useState(interval)
   const feishuWebhookUrl = prefs?.feishu_webhook_url ?? ''

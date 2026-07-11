@@ -50,7 +50,7 @@ def get_indices_nav_pinned() -> bool:
 
 
 def get_realtime_quote_interval() -> float:
-    return load().get("realtime_quote_interval", 10.0)
+    return load().get("realtime_quote_interval", 6.0)
 
 
 def get_realtime_watchlist_symbols() -> list[str]:
@@ -253,8 +253,8 @@ def get_limit_ladder_monitor_enabled() -> bool:
 
 
 def get_depth_polling_interval() -> float:
-    """depth 盘中轮询间隔(秒)。默认 20(Pro/Expert 都适用)。"""
-    return float(load().get("depth_polling_interval", 20.0))
+    """depth 盘中轮询间隔(秒)。默认 10(Pro/Expert 都适用)。"""
+    return float(load().get("depth_polling_interval", 10.0))
 
 
 def set_depth_polling_interval(interval: float) -> float:
