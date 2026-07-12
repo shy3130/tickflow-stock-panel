@@ -81,12 +81,15 @@ def ocr_status():
 @router.post("/import-image")
 async def import_from_image(request: Request, file: UploadFile = File(...)):
     """从自选截图识别股票代码，返回候选列表（不自动写入自选）。"""
+    import anyio
+
     content_type = (file.content_type or "").split(";")[0].strip().lower()
     filename = (file.filename or "").lower()
-    ok_type = content_type in _IMPORT_IMAGE_TYPES or content_type.startswith("image/")
+    # 严格白名单：不接受任意 image/*（如 image/svg+xml）
+    ok_type = content_type in _IMPORT_IMAGE_TYPES
     ok_ext = filename.endswith((".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"))
     if not ok_type and not ok_ext:
-        raise HTTPException(400, "仅支持 JPG / PNG / WebP 等图片")
+        raise HTTPException(400, "仅支持 JPG / PNG / WebP / BMP / GIF 图片")
 
     data = await file.read()
     if not data:
@@ -97,7 +100,12 @@ async def import_from_image(request: Request, file: UploadFile = File(...)):
     existing = {r["symbol"] for r in watchlist.list_symbols()}
     data_dir = request.app.state.repo.store.data_dir
     try:
-        result = import_watchlist_image(data, data_dir, existing_symbols=existing)
+        # OCR 为同步 CPU/子进程；丢进线程池，避免卡住事件循环（行情 SSE 等）
+        result = await anyio.to_thread.run_sync(
+            lambda: import_watchlist_image(data, data_dir, existing_symbols=existing),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
     except RuntimeError as e:
         raise HTTPException(503, str(e)) from e
     except Exception as e:  # noqa: BLE001

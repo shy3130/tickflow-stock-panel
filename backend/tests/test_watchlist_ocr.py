@@ -1,16 +1,19 @@
 """自选截图 OCR：代码抽取与 instruments 匹配（不依赖本机 tesseract）。"""
 from __future__ import annotations
 
+from io import BytesIO
 from pathlib import Path
 
 import polars as pl
+import pytest
+from PIL import Image
 
 from app.services.watchlist_ocr.pipeline import (
     extract_codes,
     import_watchlist_image,
     resolve_candidates,
 )
-from app.services.watchlist_ocr.provider import OcrProvider
+from app.services.watchlist_ocr.provider import OcrProvider, preprocess_for_ocr
 
 
 class _FakeOcr(OcrProvider):
@@ -24,6 +27,12 @@ class _FakeOcr(OcrProvider):
 
     def extract_text(self, image_bytes: bytes) -> str:
         return self._text
+
+
+def _png_bytes(width: int, height: int) -> bytes:
+    buf = BytesIO()
+    Image.new("RGB", (width, height), color=(20, 20, 20)).save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def test_extract_codes_order_and_dedupe():
@@ -73,3 +82,15 @@ def test_import_watchlist_image_with_fake_ocr(tmp_path: Path):
     assert result["codes"] == ["600036", "515880"]
     assert result["matched_count"] == 2
     assert result["unmatched_count"] == 0
+
+
+def test_preprocess_rejects_excessive_pixels():
+    # 4000×8000 = 32M 像素 > 12M 上限
+    with pytest.raises(ValueError, match="分辨率过高"):
+        preprocess_for_ocr(_png_bytes(4000, 8000))
+
+
+def test_preprocess_downsamples_large_edge():
+    # 2500×1000 = 2.5M 像素未超限，但长边 > 2000，应降采样
+    out = preprocess_for_ocr(_png_bytes(2500, 1000))
+    assert max(out.size) <= 2000
