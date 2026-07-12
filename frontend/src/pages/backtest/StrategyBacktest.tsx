@@ -179,8 +179,8 @@ const STRATEGY_GROUPS: { id: StrategyGroup; label: string }[] = [
 const ADVANCED_TABS: { id: AdvancedSettingsTab; label: string }[] = [
   { id: 'params', label: '策略参数' },
   { id: 'filter', label: '基础过滤' },
-  { id: 'entry', label: '买入触发器' },
-  { id: 'exit', label: '卖出触发器' },
+  { id: 'entry', label: '入场触发器' },
+  { id: 'exit', label: '出场触发器' },
   { id: 'scoring', label: '评分权重' },
   { id: 'risk', label: '风控' },
   { id: 'range', label: '回测范围' },
@@ -2135,8 +2135,8 @@ export function StrategyBacktest() {
 
               {settingsTab === 'entry' && (
                 <ConfigSection
-                  title="买入触发器"
-                  hint="任一买点满足即可进入候选"
+                  title="入场触发器"
+                  hint="任一入场点满足即可进入候选"
                   actions={<SignalTriggerActions kind="entry" signals={entrySignals} onChange={next => updateOverride('entry_signals', next)} />}
                 >
                   <SignalPicker
@@ -2149,8 +2149,8 @@ export function StrategyBacktest() {
 
               {settingsTab === 'exit' && (
                 <ConfigSection
-                  title="卖出触发器"
-                  hint="任一卖点满足即触发卖出"
+                  title="出场触发器"
+                  hint="任一出场点满足即触发出场"
                   actions={<SignalTriggerActions kind="exit" signals={exitSignals} onChange={next => updateOverride('exit_signals', next)} />}
                 >
                   <SignalPicker

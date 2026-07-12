@@ -112,9 +112,9 @@ export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose
                 <label className="space-y-1.5">
                   <span className="text-[11px] text-muted">类型</span>
                   <select value={draft.kind} onChange={e => setDraft(d => ({ ...d, kind: e.target.value as CustomSignal['kind'] }))} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground">
-                    <option value="entry">买入</option>
-                    <option value="exit">卖出</option>
-                    <option value="both">买卖通用</option>
+                    <option value="entry">入场</option>
+                    <option value="exit">出场</option>
+                    <option value="both">出入通用</option>
                   </select>
                 </label>
               </div>

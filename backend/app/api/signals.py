@@ -79,9 +79,9 @@ def get_options():
         "maxDays": custom_signals.MAX_DAYS,
         "operators": [">", ">=", "<", "<=", "==", "!="],
         "kinds": [
-            {"key": "entry", "label": "买入"},
-            {"key": "exit", "label": "卖出"},
-            {"key": "both", "label": "买卖通用"},
+            {"key": "entry", "label": "入场"},
+            {"key": "exit", "label": "出场"},
+            {"key": "both", "label": "出入通用"},
         ],
     }
 

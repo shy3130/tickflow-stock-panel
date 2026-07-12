@@ -38,7 +38,6 @@ import {
   Sparkles,
   Layers3,
   Landmark,
-  Cable,
   RadioTower,
   CheckCircle2,
   BookOpenCheck,
@@ -80,7 +79,6 @@ const nav = [
   { to: '/monitor', label: '监控中心', icon: RadioTower },
   { to: '/review',      label: '复盘',   icon: BookOpenCheck },
   { to: '/indices', label: '指数', icon: BarChart3 },
-  { to: '/trading', label: '交易', icon: Cable },
   { to: '/data',       label: '数据',   icon: Database },
 ] as const
 

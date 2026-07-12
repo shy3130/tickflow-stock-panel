@@ -106,7 +106,7 @@ function fmtPctText(pct: number): string {
  * 设计原则: 必念个股名称 (不念代码), source 分类拼接:
  *   strategy(≤5只单条): "[名称] 进入/移出 策略「策略名」 [涨跌幅]"
  *   strategy(>5只批量): 直接念 message (后端已含名称列表)
- *   signal: "[名称] 买入/卖出信号触发 [涨跌幅]"
+ *   signal: "[名称] 入场/出场信号触发 [涨跌幅]"
  *   price/market/其他: "[名称] [message条件摘要] [涨跌幅]"
  */
 function buildSingleText(a: AlertEvent): string {
@@ -130,7 +130,7 @@ function buildSingleText(a: AlertEvent): string {
     return parts.join(' ')
   }
 
-  // 信号类: message 形如 "买入信号触发"/"卖出信号触发"
+  // 信号类: message 形如 "入场信号触发"/"出场信号触发"
   if (a.source === 'signal') {
     const parts = [name]
     if (a.message) parts.push(a.message)

@@ -42,14 +42,14 @@ const codexModelLabel = (model?: string, effort?: string) => {
   return effortLabel ? `${modelLabel} · ${effortLabel}` : modelLabel
 }
 
-const PRESETS: { label: string; provider?: string; url: string; model: string; codexCommand?: string; website: string; websiteLabel: string; description: string; partner?: boolean; promo?: string; custom?: boolean }[] = [
+const PRESETS: { label: string; provider?: string; url: string; model: string; codexCommand?: string; website: string; websiteLabel: string; description: string; custom?: boolean }[] = [
   { label: '自定义', url: '', model: '', website: '', websiteLabel: '', description: '不自动填充任何配置，完全手动填写 API 地址、模型和密钥。', custom: true },
   { label: 'DeepSeek', url: 'https://api.deepseek.com', model: 'deepseek-v4-pro', website: 'https://www.deepseek.com/', websiteLabel: 'deepseek.com', description: 'DeepSeek 官方 OpenAI 兼容接口。' },
   { label: '通义千问', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-3.6plus', website: 'https://tongyi.aliyun.com/', websiteLabel: 'tongyi.aliyun.com', description: '阿里云 DashScope 兼容模式接口。' },
   { label: '智谱 GLM', url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-5.2', website: 'https://open.bigmodel.cn/', websiteLabel: 'open.bigmodel.cn', description: '智谱 AI 官方 OpenAI 兼容接口。' },
   { label: 'Kimi', url: 'https://api.moonshot.cn/v1', model: 'kimi-k2.7-code', website: 'https://platform.moonshot.cn/', websiteLabel: 'platform.moonshot.cn', description: '月之暗面 Moonshot 官方 OpenAI 兼容接口，支持超长上下文。' },
   { label: 'Codex CLI', provider: CODEX_PROVIDER, url: '', model: DEFAULT_CODEX_MODEL, codexCommand: CODEX_COMMAND, website: 'https://developers.openai.com/codex/noninteractive', websiteLabel: 'codex exec', description: '调用本机 Codex CLI 的 codex exec, 适合已登录 ChatGPT/Codex 的本地环境。' },
-  { label: '炸鸡中转站', url: 'https://api.zhaji.dev/v1', model: 'gpt-5.5', website: 'https://api.zhaji.dev', websiteLabel: 'api.zhaji.dev', description: 'OpenAI 兼容中转服务，适合直接使用国际模型。', partner: true, promo: '通过链接邀请注册赠送免费额度 · 国际模型最低0.02倍率' },
+  { label: '炸鸡中转站', url: 'https://api.zhaji.dev/v1', model: 'gpt-5.5', website: 'https://api.zhaji.dev', websiteLabel: 'api.zhaji.dev', description: 'OpenAI 兼容中转服务，适合直接使用国际模型。' },
 ]
 
 export function SettingsAIPanel() {
@@ -258,7 +258,6 @@ export function SettingsAIPanel() {
               <div className="flex items-center gap-1.5 text-xs font-medium">
                 <span>{p.label}</span>
                 {p.provider === CODEX_PROVIDER && <Terminal className="h-3 w-3" />}
-                {p.partner && <span className="rounded-full border border-orange-400/30 bg-orange-400/10 px-1.5 py-px text-[9px] text-orange-400">赞助</span>}
               </div>
             </button>
           ))}
@@ -267,7 +266,6 @@ export function SettingsAIPanel() {
           <div className="mt-3 rounded-btn border border-border/30 bg-base/30 px-3 py-2 text-[11px] leading-relaxed">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <span className="text-secondary">{selectedPreset.description}</span>
-              {selectedPreset.promo && <span className="text-amber-400">{selectedPreset.promo}</span>}
             </div>
             {selectedPreset.website && (
               <a href={selectedPreset.website} target="_blank" rel="noreferrer"

@@ -68,6 +68,37 @@ Message = dict[str, str]
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 
+# ----------------------------------------------------------------
+# 用户 focus 输入净化 — 防止通过"特别关注"绕过红线诱导 AI 给出买卖建议
+# 命中任一敏感词时,整个 focus 被丢弃(返回空串),由各 analyzer 据此跳过注入。
+# ----------------------------------------------------------------
+_FOCUS_BLOCKLIST = re.compile(
+    r"买入|卖出|加仓|减仓|轻仓|重仓|半仓|全仓|仓位|止损|止盈|"
+    r"操作建议|买卖点|买卖区间|建仓|平仓|清仓|调仓|"
+    r"追高|低吸|反包|抄底|逃顶|进攻|防守|"
+    r"激进|稳健|保守|目标价|能涨|会跌|预测涨|预测跌|"
+    r"荐股|推荐买|推荐卖|值得投资|现在买|可以买|能买|要不要买|买吗|卖吗|"
+    r"明日基调|交易计划|下单",
+    re.IGNORECASE,
+)
+
+
+def sanitize_focus(focus: str) -> str:
+    """净化用户输入的 focus 文本。
+
+    命中交易指令/投资建议类敏感词时返回空串,阻止其注入 AI 提示词。
+    这是对系统提示词红线的兜底:即便用户试图通过 focus 绕过,也不会生效。
+    """
+    if not focus:
+        return ""
+    text = focus.strip()
+    if not text:
+        return ""
+    if _FOCUS_BLOCKLIST.search(text):
+        return ""
+    return text
+
+
 def current_ai_provider() -> str:
     return secrets_store.get_ai_config("ai_provider", settings.ai_provider) or OPENAI_COMPAT_PROVIDER
 

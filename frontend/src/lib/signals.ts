@@ -127,7 +127,7 @@ export const BUILTIN_SIGNAL_DEFINITIONS: BuiltinSignalDefinition[] = [
     name: '放量',
     kind: 'both',
     category: '量价',
-    description: '成交量显著放大，可作为买入确认、卖出确认或告警条件。',
+    description: '成交量显著放大，可作为入场确认、出场确认或告警条件。',
   },
   {
     id: 'signal_limit_up',

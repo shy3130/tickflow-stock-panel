@@ -16,7 +16,7 @@ const MODES: Record<Tab, { title: string; subtitle: string; hint: string }> = {
   strategy: {
     title: '策略回测',
     subtitle: '验证完整选股和交易规则',
-    hint: '看净值曲线、回撤、胜率和交易明细，适合判断策略是否可执行。',
+    hint: '看净值曲线、回撤、胜率和交易明细，适合评估策略的历史表现。',
   },
   optimizer: {
     title: '参数优化',

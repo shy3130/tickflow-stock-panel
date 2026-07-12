@@ -9,7 +9,7 @@ import { Skeleton } from '@/components/data/Skeleton'
 
 type SignalSection = 'builtin' | 'custom'
 
-const KIND_LABEL: Record<SignalKind, string> = { entry: '买入', exit: '卖出', both: '买卖通用' }
+const KIND_LABEL: Record<SignalKind, string> = { entry: '入场', exit: '出场', both: '出入通用' }
 const KIND_CLASS: Record<SignalKind, string> = {
   entry: 'bg-accent/10 text-accent',
   exit: 'bg-warning/10 text-warning',
