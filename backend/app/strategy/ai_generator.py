@@ -116,9 +116,9 @@ class AIStrategyGenerator:
             return content.split("```", 1)[1].split("```", 1)[0].strip()
         return content.strip()
 
-    # import 白名单: 策略文件只允许 polars (见 strategy-guide.md「只 import polars」)。
+    # import 白名单: 策略文件只允许 polars + datetime (纯日期运算, 无文件/网络/进程能力)。
     # 白名单而非黑名单 — 黑名单挡不住 ctypes/importlib/builtins/pickle 等未列出的危险模块。
-    _ALLOWED_IMPORT_MODULES = frozenset({"polars", "__future__"})
+    _ALLOWED_IMPORT_MODULES = frozenset({"polars", "__future__", "datetime"})
 
     @classmethod
     def _validate_safety(cls, code: str) -> None:
