@@ -129,6 +129,18 @@ class QuoteSubscriber:
             self._event.set()
 
 
+def _persist_last_fetch(fetched_at_ms: float) -> None:
+    """把"最后获取"时间戳持久化到 preferences, 使进程重启后仍可显示。
+
+    放在锁外调用 (IO); 失败不影响主流程 (内存值已更新, 下次 fetch 再写)。
+    """
+    try:
+        from app.services import preferences
+        preferences.save({"last_fetch_ms": round(fetched_at_ms, 0)})
+    except Exception as e:  # noqa: BLE001
+        logger.debug("last_fetch_ms 持久化失败 (不影响行情): %s", e)
+
+
 class QuoteService:
     """全局实时行情服务 — 单例。"""
 
@@ -166,7 +178,13 @@ class QuoteService:
         # 拉取元信息 (给 SSE / status 用)
         self._fetch_time: float = 0.0       # perf_counter (用于计算 quote_age_ms)
         self._fetch_ms: float = 0.0         # 拉取耗时 (毫秒)
-        self._fetched_at: float = 0.0       # 拉取完成的 Unix 时间戳 (毫秒)
+        # _fetched_at 持久化到 preferences: 进程重启后仍能显示"最后获取"时间,
+        # 不因关闭开关/重启而归零 (数据页卡片常驻显示, 方便判断上次拉取时刻)。
+        try:
+            from app.services import preferences as _prefs
+            self._fetched_at: float = float(_prefs.load().get("last_fetch_ms", 0.0))
+        except Exception:  # noqa: BLE001
+            self._fetched_at = 0.0      # 拉取完成的 Unix 时间戳 (毫秒)
         self._symbol_count: int = 0
         self._index_symbol_count: int = 0
         self._etf_symbol_count: int = 0
@@ -664,6 +682,7 @@ class QuoteService:
             self._etf_symbol_count = len(etf_records)
             self._index_quotes_cache = self._build_index_quotes(index_records)
 
+        _persist_last_fetch(fetched_at)
         logger.info("行情刷新: %d 只股票, %d 只ETF, %d 只指数, 耗时 %.0fms", len(stock_records), len(etf_records), len(index_records), fetch_ms)
 
         # ---- 写 kline_daily (不复权原始价格, 只有 OHLCV) ----
@@ -765,6 +784,7 @@ class QuoteService:
             self._etf_symbol_count = 0
             self._index_quotes_cache = None
 
+        _persist_last_fetch(fetched_at)
         logger.info("自选实时刷新: %d 只股票, 耗时 %.0fms", len(records), fetch_ms)
 
         daily_df = self._build_daily(records)
