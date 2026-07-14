@@ -12,7 +12,13 @@ function parsePyValue(v: string): any {
   if (s === 'True') return true
   if (s === 'False') return false
   if (s === 'None') return null
-  return JSON.parse(s)
+  // get() 已对字符串去外层引号, 纯文本值(如 2024-01-01 / anchor_date)
+  // 不是合法 JSON, JSON.parse 会抛错 → 兜底返回原始字符串
+  try {
+    return JSON.parse(s)
+  } catch {
+    return s
+  }
 }
 
 function slugId(prefix: 'ai' | 'custom' = 'ai'): string {
