@@ -8,6 +8,8 @@ import { cnSignal } from '@/lib/signals'
 import { StockPanel, getDefaultRange } from '@/components/StockPanel'
 import { DatePicker } from '@/components/DatePicker'
 import { RuleEditor } from '@/components/monitor/RuleEditor'
+import { usePreferences, useQuoteStatus } from '@/lib/useSharedQueries'
+import { setFocusSymbol, clearFocusSymbol } from '@/lib/useQuoteStream'
 
 interface Props {
   symbol: string | null
@@ -68,6 +70,25 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
   }, [symbol, onClose])
+
+  // 焦点股票注册: SSE quotes_updated 推送时精准 invalidate 当前股票日K,
+  // 让对话框日K最后一根蜡烛随实时价变化 (后端只读内存, 不调 TickFlow)。
+  // 关闭/切股时清除, 避免无谓刷新。
+  useEffect(() => {
+    if (!symbol) return
+    setFocusSymbol(symbol)
+    return () => clearFocusSymbol()
+  }, [symbol])
+
+  // 分时图实时轮询: 复用自选列表的「分时刷新开关 + 间隔」偏好。
+  // 仅实时行情运行 且 用户开启分时刷新时才轮询; 否则 undefined (定格)。
+  const { data: prefs } = usePreferences()
+  const { data: quoteStatus } = useQuoteStatus()
+  const realtimeRunning = quoteStatus?.running ?? false
+  const intradayRefreshOn = prefs?.minute_intraday_refresh ?? false
+  const intradayRefetchMs = (intradayRefreshOn && realtimeRunning)
+    ? (prefs?.minute_intraday_refresh_interval ?? 6) * 1000
+    : undefined
 
   const handleRefresh = () => {
     if (!symbol) return
@@ -241,6 +262,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
                 onMonitor={() => setShowMonitorEditor(true)}
                 inWatchlist={inWatchlist}
                 onToggleWatchlist={() => toggleWatchlist.mutate()}
+                refetchIntervalMs={intradayRefetchMs}
               />
             </div>
 
