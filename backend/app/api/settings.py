@@ -430,6 +430,7 @@ def get_preferences() -> dict:
         "sidebar_index_symbols": preferences.get_sidebar_index_symbols(),
         "minute_intraday_refresh": preferences.get_minute_intraday_refresh(),
         "minute_intraday_refresh_interval": preferences.get_minute_intraday_refresh_interval(),
+        "monitor_ext_fields": preferences.get_monitor_ext_fields(),
         "nav_order": preferences.get_nav_order(),
         "nav_hidden": preferences.get_nav_hidden(),
         "screener_auto_run": preferences.get_screener_auto_run(),
@@ -756,6 +757,7 @@ class RealtimeMonitorConfigIn(BaseModel):
     screener_auto_run: bool | None = None
     minute_intraday_refresh: bool | None = None
     minute_intraday_refresh_interval: int | None = None
+    monitor_ext_fields: dict | None = None
 
 
 @router.put("/preferences/realtime-monitor")

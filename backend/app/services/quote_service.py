@@ -1058,6 +1058,8 @@ class QuoteService:
 
             # 广播到所有 SSE 订阅者 (背压保护在订阅者队列内做)
             if all_alerts:
+                # 按 symbol 富化行业/概念 ext 字段, 使 toast + 触发记录统一展示板块标签。
+                self._enrich_alerts_ext(all_alerts)
                 self._broadcast_alerts(all_alerts)
                 logger.info("监控评估完成: %d 条通知", len(all_alerts))
 
@@ -1072,6 +1074,42 @@ class QuoteService:
 
         except Exception as e:  # noqa: BLE001
             logger.warning("监控评估失败: %s", e)
+
+    def _enrich_alerts_ext(self, alerts: list[dict]) -> None:
+        """就地给告警事件按 symbol 追加行业/概念 ext 字段。
+
+        读 preferences.get_monitor_ext_fields() 取字段配置, 用 screener._load_ext_value_maps
+        (带 parquet mtime 缓存) 富化。富化失败静默降级 (告警照常推送, 只是没标签)。
+        每条事件新增 {configId}__{fieldName} 键 (与 watchlist/screener 输出约定一致)。
+        """
+        if not alerts or not self._app_state or self._repo is None:
+            return
+        try:
+            from app.services import preferences
+            fields = preferences.get_monitor_ext_fields()
+            # 新结构 {field, maxTags, hiddenIndices}, 后端只需 .field
+            parts = []
+            for key in ("concept", "industry"):
+                item = fields.get(key)
+                if isinstance(item, dict) and item.get("field"):
+                    parts.append(item["field"])
+                elif isinstance(item, str) and item:
+                    parts.append(item)  # 兼容旧格式
+            if not parts:
+                return
+            ext_columns = ",".join(parts)
+            from app.api.screener import _load_ext_value_maps
+            value_maps = _load_ext_value_maps(self._repo, ext_columns)
+            if not value_maps:
+                return
+            for ev in alerts:
+                sym = ev.get("symbol")
+                if not sym:
+                    continue
+                for out_col, vmap in value_maps.items():
+                    ev[out_col] = vmap.get(str(sym))
+        except Exception as e:  # noqa: BLE001
+            logger.debug("告警 ext 富化失败 (不影响推送): %s", e)
 
     def _inject_sealed_vol(self, enriched_today: pl.DataFrame, enriched_date) -> pl.DataFrame:
         """从 depth_service 取封单量, 作为临时列 _sealed_vol 注入 enriched 副本。

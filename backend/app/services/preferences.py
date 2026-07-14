@@ -119,6 +119,56 @@ def get_minute_intraday_refresh_interval() -> int:
                    int(load().get("minute_intraday_refresh_interval", 6))))
 
 
+# 监控中心个股通知 ext 字段默认配置 (与 ext_presets 内置预设对齐)
+_MONITOR_EXT_FIELDS_DEFAULT = {
+    "concept": "ext_gn_ths.所属概念",
+    "industry": "ext_hy_ths.所属同话顺行业",
+}
+
+
+def _normalize_ext_field(raw) -> dict | None:
+    """规范化单个 ext 字段配置, 兼容旧字符串格式 ("id.field") 和新对象格式。
+
+    新格式: {"field": "id.field", "maxTags": N, "hiddenIndices": [...]}
+    maxTags=0 或缺省=不限制; hiddenIndices 指定要隐藏的位置 (0-based)。
+    """
+    if raw is None:
+        return None
+    # 旧格式: 纯字符串 "configId.fieldName"
+    if isinstance(raw, str):
+        return {"field": raw}
+    if isinstance(raw, dict):
+        field = raw.get("field")
+        if not field:
+            return None
+        return {
+            "field": field,
+            "maxTags": int(raw["maxTags"]) if raw.get("maxTags") else 0,
+            "hiddenIndices": [int(i) for i in raw["hiddenIndices"]] if raw.get("hiddenIndices") else [],
+        }
+    return None
+
+
+def get_monitor_ext_fields() -> dict:
+    """监控中心个股通知要展示的 ext 字段 (concept/industry)。
+
+    返回 {"concept": {"field", "maxTags", "hiddenIndices"} | None, ...}。
+    后端只需读 .field 构建 ext_columns; maxTags/hiddenIndices 供前端渲染裁剪。
+    兼容旧字符串格式 ("id.field") 自动升级。
+    """
+    data = load()
+    raw = data.get("monitor_ext_fields")
+    if raw is None:
+        return {
+            "concept": {"field": _MONITOR_EXT_FIELDS_DEFAULT["concept"]},
+            "industry": {"field": _MONITOR_EXT_FIELDS_DEFAULT["industry"]},
+        }
+    return {
+        "concept": _normalize_ext_field(raw.get("concept")),
+        "industry": _normalize_ext_field(raw.get("industry")),
+    }
+
+
 def get_minute_sync_days() -> int:
     return max(1, min(30, load().get("minute_sync_days", 5)))
 
@@ -645,6 +695,12 @@ def set_realtime_monitor_config(cfg: dict) -> dict:
         updates["minute_intraday_refresh_interval"] = max(
             _INTRADAY_REFRESH_INTERVAL_MIN,
             min(_INTRADAY_REFRESH_INTERVAL_MAX, int(cfg["minute_intraday_refresh_interval"])))
+    if "monitor_ext_fields" in cfg:
+        raw = cfg["monitor_ext_fields"] or {}
+        updates["monitor_ext_fields"] = {
+            "concept": _normalize_ext_field(raw.get("concept")),
+            "industry": _normalize_ext_field(raw.get("industry")),
+        }
     if updates:
         save(updates)
     return get_realtime_monitor_config()
@@ -660,6 +716,7 @@ def get_realtime_monitor_config() -> dict:
         "screener_auto_run": get_screener_auto_run(),
         "minute_intraday_refresh": get_minute_intraday_refresh(),
         "minute_intraday_refresh_interval": get_minute_intraday_refresh_interval(),
+        "monitor_ext_fields": get_monitor_ext_fields(),
     }
 
 

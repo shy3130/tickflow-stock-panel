@@ -507,6 +507,8 @@ export interface AlertEvent {
   strategy_id?: string
   conditions?: MonitorCondition[]
   logic?: 'and' | 'or'
+  /** ext 富化字段 (行业/概念等), 键为 "{configId}__{fieldName}" */
+  [key: string]: unknown
 }
 
 /** 生成监控规则 id (时间戳 + 随机后缀), 用户无需手动填写。 */
@@ -847,6 +849,17 @@ export interface Preferences {
   screener_auto_run: boolean
   minute_intraday_refresh: boolean
   minute_intraday_refresh_interval: number
+  monitor_ext_fields: { concept: MonitorExtFieldItem | null; industry: MonitorExtFieldItem | null }
+}
+
+/** 监控中心 ext 字段单项配置 (行业/概念标签的来源 + 显示裁剪) */
+export interface MonitorExtFieldItem {
+  /** "configId.fieldName" */
+  field: string
+  /** 显示前N个标签, 0=不限制 */
+  maxTags?: number
+  /** 隐藏的位置 (0-based), 如 [0] 表示隐藏第一个 */
+  hiddenIndices?: number[]
 }
 export interface StrategyAlertEvent {
   source: 'strategy' | 'depth'
@@ -858,6 +871,8 @@ export interface StrategyAlertEvent {
   price?: number | null
   change_pct?: number | null
   signals?: string[]
+  /** ext 富化字段 (行业/概念等), 键为 "{configId}__{fieldName}" */
+  [key: string]: unknown
 }
 
 // ===== API surface =====
@@ -1026,6 +1041,7 @@ export const api = {
     screener_auto_run?: boolean
     minute_intraday_refresh?: boolean
     minute_intraday_refresh_interval?: number
+    monitor_ext_fields?: { concept: MonitorExtFieldItem | null; industry: MonitorExtFieldItem | null }
   }) =>
     request<{
       sse_refresh_pages: Record<string, boolean>
@@ -1035,6 +1051,7 @@ export const api = {
       screener_auto_run: boolean
       minute_intraday_refresh: boolean
       minute_intraday_refresh_interval: number
+      monitor_ext_fields: { concept: MonitorExtFieldItem | null; industry: MonitorExtFieldItem | null }
     }>('/api/settings/preferences/realtime-monitor', {
       method: 'PUT',
       body: JSON.stringify(cfg),
@@ -1947,12 +1964,13 @@ export const api = {
     request<{ ok: boolean; generated: number }>('/api/monitor-rules/seed', { method: 'POST' }),
 
   // ===== Alerts (触发记录) =====
-  alertsList: (params?: { days?: number; limit?: number; source?: string; type?: string }) => {
+  alertsList: (params?: { days?: number; limit?: number; source?: string; type?: string; extColumns?: string }) => {
     const qs = new URLSearchParams()
     if (params?.days) qs.set('days', String(params.days))
     if (params?.limit) qs.set('limit', String(params.limit))
     if (params?.source) qs.set('source', params.source)
     if (params?.type) qs.set('type', params.type)
+    if (params?.extColumns) qs.set('ext_columns', params.extColumns)
     const s = qs.toString()
     return request<{ alerts: AlertEvent[]; total: number }>(`/api/alerts${s ? `?${s}` : ''}`)
   },
