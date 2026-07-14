@@ -107,6 +107,18 @@ def get_minute_intraday_refresh() -> bool:
         return False
 
 
+# 分时图实时刷新间隔允许范围 (秒)。下限 3s, 上限 60s。
+_INTRADAY_REFRESH_INTERVAL_MIN = 3
+_INTRADAY_REFRESH_INTERVAL_MAX = 60
+
+
+def get_minute_intraday_refresh_interval() -> int:
+    """分时图实时刷新轮询间隔 (秒)。默认 6s, 范围 [3, 60]。"""
+    return max(_INTRADAY_REFRESH_INTERVAL_MIN,
+               min(_INTRADAY_REFRESH_INTERVAL_MAX,
+                   int(load().get("minute_intraday_refresh_interval", 6))))
+
+
 def get_minute_sync_days() -> int:
     return max(1, min(30, load().get("minute_sync_days", 5)))
 
@@ -628,6 +640,11 @@ def set_realtime_monitor_config(cfg: dict) -> dict:
         updates["screener_auto_run"] = bool(cfg["screener_auto_run"])
     if "minute_intraday_refresh" in cfg:
         updates["minute_intraday_refresh"] = bool(cfg["minute_intraday_refresh"])
+    if "minute_intraday_refresh_interval" in cfg:
+        # clamp 到 [5, 60], 与 getter 一致, 防前端传越界值
+        updates["minute_intraday_refresh_interval"] = max(
+            _INTRADAY_REFRESH_INTERVAL_MIN,
+            min(_INTRADAY_REFRESH_INTERVAL_MAX, int(cfg["minute_intraday_refresh_interval"])))
     if updates:
         save(updates)
     return get_realtime_monitor_config()
@@ -642,6 +659,7 @@ def get_realtime_monitor_config() -> dict:
         "sidebar_index_symbols": get_sidebar_index_symbols(),
         "screener_auto_run": get_screener_auto_run(),
         "minute_intraday_refresh": get_minute_intraday_refresh(),
+        "minute_intraday_refresh_interval": get_minute_intraday_refresh_interval(),
     }
 
 

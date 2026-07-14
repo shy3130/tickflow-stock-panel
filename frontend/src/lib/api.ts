@@ -846,6 +846,7 @@ export interface Preferences {
   nav_hidden: string[]
   screener_auto_run: boolean
   minute_intraday_refresh: boolean
+  minute_intraday_refresh_interval: number
 }
 export interface StrategyAlertEvent {
   source: 'strategy' | 'depth'
@@ -1024,6 +1025,7 @@ export const api = {
     sidebar_index_symbols?: string[]
     screener_auto_run?: boolean
     minute_intraday_refresh?: boolean
+    minute_intraday_refresh_interval?: number
   }) =>
     request<{
       sse_refresh_pages: Record<string, boolean>
@@ -1032,6 +1034,7 @@ export const api = {
       sidebar_index_symbols: string[]
       screener_auto_run: boolean
       minute_intraday_refresh: boolean
+      minute_intraday_refresh_interval: number
     }>('/api/settings/preferences/realtime-monitor', {
       method: 'PUT',
       body: JSON.stringify(cfg),

@@ -626,15 +626,16 @@ export function Watchlist() {
 
   // 批量分时数据 (Pro+ 用户, 列可见时才拉)
   // 刷新策略: 仅当实时行情运行 且 用户在实时监控设置里开启 minute_intraday_refresh 时
-  // 按 15s 轮询 (不接 SSE 高频, 避免每秒拉 TickFlow 触限流); 与 Screener / 设置卡片描述一致。
+  // 按用户设定的间隔轮询 (不接 SSE 高频, 避免每秒拉 TickFlow 触限流); 与 Screener / 设置卡片描述一致。
   const { data: prefsData } = usePreferences()
   const intradayRefreshEnabled = prefsData?.minute_intraday_refresh ?? false
+  const intradayRefreshInterval = prefsData?.minute_intraday_refresh_interval ?? 6
   const minuteBatch = useQuery({
     queryKey: QK.minuteBatch(symbolsKey),
     queryFn: () => api.klineMinuteBatch(symbols),
     enabled: intradayVisible && symbols.length > 0,
     staleTime: 10_000,
-    refetchInterval: (intradayRefreshEnabled && realtimeRunning) ? 15_000 : false,
+    refetchInterval: (intradayRefreshEnabled && realtimeRunning) ? intradayRefreshInterval * 1000 : false,
   })
   const minuteData = intradayVisible ? (minuteBatch.data?.data ?? {}) : {}
 
