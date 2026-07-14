@@ -254,7 +254,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
     try {
       const id = strategyId || resolveStrategyId(tab === 'custom' ? 'custom' : 'ai')
       setStrategyId(id)
-      const res = await api.strategyValidateCode({ code: draftCode, strategy_id: id, name: name.trim(), description: description.trim(), strict: true })
+      const res = await api.strategyValidateCode({ code: draftCode, strategy_id: id, name: name.trim(), description: description.trim() })
       if (!res.valid) { setValidated(false); setError(res.error ?? '代码校验失败'); return }
       setCode(res.code); setValidated(true)
       const genDesc = parseMetaField(res.code, 'description')
@@ -281,7 +281,6 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
         mode: mode === 'modify' ? 'update' : 'create',
         name: name.trim(),
         description: description.trim(),
-        strict: true,
       })
       const genRules = parseRules(draftCode)
       const finalRules = (genRules || rules).trim()

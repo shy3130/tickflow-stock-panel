@@ -136,7 +136,6 @@ class StrategyCodeValidateRequest(BaseModel):
     strategy_id: str = ""
     name: str = ""
     description: str = ""
-    strict: bool = True
 
 
 class StrategyCodeSaveRequest(BaseModel):
@@ -146,7 +145,6 @@ class StrategyCodeSaveRequest(BaseModel):
     mode: Literal["create", "update"] = "create"
     name: str = ""
     description: str = ""
-    strict: bool = True
 
 
 class MonitorStartRequest(BaseModel):
@@ -442,8 +440,8 @@ def _prepare_strategy_code(req: StrategyCodeValidateRequest | StrategyCodeSaveRe
                 req.name.strip() or None,
                 req.description.strip() or None,
             )
-    if req.strict:
-        AIStrategyGenerator._validate_safety(code)
+    # 安全校验始终执行 (此前 strict 字段可被客户端设 false 绕过, 已移除)
+    AIStrategyGenerator._validate_safety(code)
     meta = AIStrategyGenerator._extract_meta(code)
     return {"code": code, "meta": meta}
 

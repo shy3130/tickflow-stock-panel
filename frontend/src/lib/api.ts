@@ -2040,7 +2040,7 @@ export const api = {
     }
   },
 
-  strategyValidateCode: (payload: { code: string; strategy_id?: string; name?: string; description?: string; strict?: boolean }) =>
+  strategyValidateCode: (payload: { code: string; strategy_id?: string; name?: string; description?: string }) =>
     request<StrategyBuildResult>('/api/strategies/code/validate', {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -2053,7 +2053,6 @@ export const api = {
     mode: 'create' | 'update'
     name?: string
     description?: string
-    strict?: boolean
   }) =>
     request<StrategyCodeSaveResult>('/api/strategies/code/save', {
       method: 'POST',
