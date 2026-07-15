@@ -9,6 +9,8 @@ const TABLE_TITLES: Record<string, string> = {
   adj_factor: '除权因子',
   enriched: 'Enriched',
   minute: '分钟 K',
+  monthly: '月 K',
+  yearly: '年 K',
   index_instruments: '指数维表',
   index_daily: '指数日 K',
   index_enriched: '指数 Enriched',

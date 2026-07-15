@@ -18,10 +18,12 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import { Check, GripVertical } from 'lucide-react'
 import { storage } from '@/lib/storage'
+import type { CapabilitiesResponse } from '@/lib/api'
+import { hasMonthlyAccess, hasYearlyAccess } from '@/lib/periodAccess'
 
 export type CardKey =
   | 'instruments' | 'daily' | 'adj_factor' | 'enriched'
-  | 'index' | 'etf' | 'minute' | 'financials'
+  | 'index' | 'etf' | 'minute' | 'monthly' | 'yearly' | 'financials'
 
 interface CardDef {
   key: CardKey
@@ -42,6 +44,8 @@ export const DATA_CARD_DEFS: CardDef[] = [
   { key: 'index',       label: '指数',     desc: '主要市场指数日K',        defaultHiddenIfNoCap: false },
   { key: 'etf',         label: 'ETF',      desc: '场内交易基金日K',         defaultHiddenIfNoCap: false, defaultHidden: true },
   { key: 'minute',      label: '分钟 K',   desc: '分钟级K线(需 Pro+)',     defaultHiddenIfNoCap: true },
+  { key: 'monthly',     label: '月 K',     desc: 'stock-sdk 月线',         defaultHiddenIfNoCap: true },
+  { key: 'yearly',      label: '年 K',     desc: '月线聚合年线',           defaultHiddenIfNoCap: true },
   { key: 'financials',  label: '财务数据', desc: '财报数据(需 Expert)',    defaultHiddenIfNoCap: true },
 ]
 
@@ -55,6 +59,13 @@ const CAP_KEY_MAP: Partial<Record<CardKey, string>> = {
   financials: 'financial',
 }
 
+function _hasCardAccess(key: CardKey, caps?: CapabilitiesResponse): boolean {
+  if (key === 'monthly') return hasMonthlyAccess(caps)
+  if (key === 'yearly') return hasYearlyAccess(caps)
+  const capKey = CAP_KEY_MAP[key] ?? ''
+  return !capKey || !!caps?.capabilities?.[capKey]
+}
+
 /**
  * 读取卡片显隐状态。结合档位能力决定默认值:
  * - 用户显式设置过 → 用设置值
@@ -63,9 +74,8 @@ const CAP_KEY_MAP: Partial<Record<CardKey, string>> = {
  * - 其他 → 显示
  */
 export function getCardVisibility(
-  caps: Record<string, unknown> | undefined,
+  caps: CapabilitiesResponse | undefined,
 ): Record<string, boolean> {
-  const has = (capKey: string) => !capKey || !!caps?.[capKey]
   const override = storage.dataCardVisible.get({})
   const result: Record<string, boolean> = {}
   for (const def of DATA_CARD_DEFS) {
@@ -74,7 +84,7 @@ export function getCardVisibility(
     } else if (def.defaultHidden) {
       result[def.key] = false
     } else {
-      result[def.key] = def.defaultHiddenIfNoCap ? has(CAP_KEY_MAP[def.key] ?? '') : true
+      result[def.key] = def.defaultHiddenIfNoCap ? _hasCardAccess(def.key, caps) : true
     }
   }
   return result
@@ -100,7 +110,7 @@ export function getCardOrder(): CardKey[] {
 export function PageSettingsModal({
   caps,
 }: {
-  caps: Record<string, unknown> | undefined
+  caps: CapabilitiesResponse | undefined
 }) {
   const [visible, setVisible] = useState<Record<string, boolean>>(() => getCardVisibility(caps))
   const [order, setOrder] = useState<CardKey[]>(() => getCardOrder())

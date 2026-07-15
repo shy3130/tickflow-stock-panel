@@ -43,6 +43,8 @@ import { ExtendHistoryPanel } from '@/components/data/ExtendHistoryPanel'
 import { RepairDailyPanel } from '@/components/data/RepairDailyPanel'
 import { EnrichedRebuildPanel } from '@/components/data/EnrichedRebuildPanel'
 import { MinuteSyncConfig } from '@/components/data/MinuteSyncConfig'
+import { MonthlySyncConfig } from '@/components/data/MonthlySyncConfig'
+import { YearlySyncConfig } from '@/components/data/YearlySyncConfig'
 import { PipelineScopeConfig } from '@/components/data/PipelineScopeConfig'
 import { PageSettingsModal, getCardVisibility, getCardOrder, type CardKey } from '@/components/data/PageSettingsModal'
 import { QuoteConfigCard } from '@/components/data/QuoteConfigCard'
@@ -176,6 +178,8 @@ export function Data() {
     adj_factor: 'adj_factor',
     etf: 'daily',        // ETF 复用日K能力
     minute: 'minute',
+    monthly: 'monthly',
+    yearly: 'yearly',
     financials: 'financial',
   }
   // 当前 custom 源支持的数据集集合
@@ -184,6 +188,8 @@ export function Data() {
     : new Set<string>()
   // 给定 tierKey, 返回 custom provider 显示名 (走 custom 时) 或 null (走 TickFlow)
   const getCustomProviderName = (tierKey: string): string | null => {
+    if (tierKey === 'monthly' && prefs.data?.monthly_data_provider === 'stocksdk') return 'stock-sdk'
+    if (tierKey === 'yearly' && prefs.data?.yearly_data_provider === 'stocksdk') return 'stock-sdk'
     if (activeProvider === 'tickflow') return null
     const ds = TIERKEY_TO_DATASET[tierKey]
     if (ds && activeCustomDatasets.has(ds)) return activeDataSourceName
@@ -191,6 +197,8 @@ export function Data() {
   }
 
   const minuteAuto = prefs.data?.minute_sync_enabled ?? false
+  const monthlyAuto = prefs.data?.monthly_sync_enabled ?? false
+  const yearlyAuto = prefs.data?.yearly_sync_enabled ?? false
   const pipelineSched = prefs.data?.pipeline_schedule ?? { hour: 15, minute: 30 }
   const instrumentsSched = prefs.data?.instruments_schedule ?? { hour: 9, minute: 10 }
   const indexDailyBatchSize = prefs.data?.index_daily_batch_size ?? 100
@@ -252,7 +260,7 @@ export function Data() {
     window.addEventListener('data-card-visible-change', handler)
     return () => window.removeEventListener('data-card-visible-change', handler)
   }, [])
-  const cardVisible = getCardVisibility(caps.data?.capabilities)
+  const cardVisible = getCardVisibility(caps.data)
   // 引用 cardVisibleTick 触发重渲染(避免 lint 警告)
   void cardVisibleTick
 
@@ -323,6 +331,10 @@ export function Data() {
     sync_index: 'index_daily',
     sync_minute: 'minute',
     extend_minute: 'minute',
+    sync_monthly: 'monthly',
+    extend_monthly: 'monthly',
+    sync_yearly: 'yearly',
+    extend_yearly: 'yearly',
   }
   const activeCard = isRunning && job.data ? STAGE_CARD[job.data.stage] ?? null : null
 
@@ -510,6 +522,48 @@ export function Data() {
             onShowFields={() => setSchemaTable('minute')}
             onSettings={hasData ? () => setOpenSettings(v => v === 'minute' ? null : 'minute') : undefined}
             settingsOpen={openSettings === 'minute'}
+          />
+        )
+      case 'monthly':
+        return (
+          <StatCard
+            title="月 K"
+            hint="stock-sdk 月线"
+            stats={s?.monthly}
+            loading={isLoading}
+            active={activeCard === 'monthly'}
+            done={doneStages.has('monthly')}
+            skipped={skippedCards.has('monthly')}
+            stagePct={activeCard === 'monthly' ? (job.data?.stage_pct ?? 0) : 0}
+            tierKey="monthly"
+            capLimits={caps.data?.capabilities}
+            tierLabel={caps.data?.label}
+            customProvider={getCustomProviderName('monthly')}
+            auto={monthlyAuto}
+            onShowFields={() => setSchemaTable('monthly')}
+            onSettings={hasData ? () => setOpenSettings(v => v === 'monthly' ? null : 'monthly') : undefined}
+            settingsOpen={openSettings === 'monthly'}
+          />
+        )
+      case 'yearly':
+        return (
+          <StatCard
+            title="年 K"
+            hint="月线聚合"
+            stats={s?.yearly}
+            loading={isLoading}
+            active={activeCard === 'yearly'}
+            done={doneStages.has('yearly')}
+            skipped={skippedCards.has('yearly')}
+            stagePct={activeCard === 'yearly' ? (job.data?.stage_pct ?? 0) : 0}
+            tierKey="yearly"
+            capLimits={caps.data?.capabilities}
+            tierLabel={caps.data?.label}
+            customProvider={getCustomProviderName('yearly')}
+            auto={yearlyAuto}
+            onShowFields={() => setSchemaTable('yearly')}
+            onSettings={hasData ? () => setOpenSettings(v => v === 'yearly' ? null : 'yearly') : undefined}
+            settingsOpen={openSettings === 'yearly'}
           />
         )
       case 'financials':
@@ -820,6 +874,8 @@ export function Data() {
                 { label: '除权因子', files: s?.storage.adj_factor_files,  size: s?.storage.adj_factor_size_mb },
                 { label: 'Enriched', files: s?.storage.enriched_files,    size: s?.storage.enriched_size_mb },
                 { label: '分钟 K',   files: s?.storage.minute_files,      size: s?.storage.minute_size_mb },
+                { label: '月 K',     files: s?.storage.monthly_files ?? 0, size: s?.storage.monthly_size_mb ?? 0 },
+                { label: '年 K',     files: s?.storage.yearly_files ?? 0,  size: s?.storage.yearly_size_mb ?? 0 },
                 { label: '财务数据', files: s?.storage.financials_files,   size: s?.storage.financials_size_mb },
               ].map((item) => (
                 <div key={item.label} className="flex items-center justify-between text-[11px]">
@@ -974,7 +1030,7 @@ export function Data() {
       <AnimatePresence>
         {openSettings === 'page-settings' && (
           <SettingsModal title="页面设置 · 数据画像卡片" onClose={() => setOpenSettings(null)}>
-            <PageSettingsModal caps={caps.data?.capabilities} />
+            <PageSettingsModal caps={caps.data} />
           </SettingsModal>
         )}
       </AnimatePresence>
@@ -1086,6 +1142,22 @@ export function Data() {
         {openSettings === 'minute' && (
           <SettingsModal title="分钟 K · 同步设置" onClose={() => setOpenSettings(null)}>
             <MinuteSyncConfig caps={caps.data} onJobStart={(jobId) => { setActiveJobId(jobId); setOpenSettings(null) }} />
+          </SettingsModal>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {openSettings === 'monthly' && (
+          <SettingsModal title="月 K · 同步设置" onClose={() => setOpenSettings(null)}>
+            <MonthlySyncConfig caps={caps.data} onJobStart={(jobId) => { setActiveJobId(jobId); setOpenSettings(null) }} />
+          </SettingsModal>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {openSettings === 'yearly' && (
+          <SettingsModal title="年 K · 同步设置" onClose={() => setOpenSettings(null)}>
+            <YearlySyncConfig caps={caps.data} onJobStart={(jobId) => { setActiveJobId(jobId); setOpenSettings(null) }} />
           </SettingsModal>
         )}
       </AnimatePresence>

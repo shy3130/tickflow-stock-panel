@@ -42,6 +42,8 @@ export function HistoryRow({ job, onClick }: { job: any; onClick: () => void }) 
           if (r.daily_days != null) parts.push(`日K ${r.daily_days}日`)
           if (r.enriched_days != null) parts.push(`enriched ${r.enriched_days}行`)
           if (r.minute_rows != null) parts.push(`分钟K ${r.minute_rows}行`)
+          if (r.monthly_rows != null) parts.push(`月K ${r.monthly_rows}行`)
+          if (r.yearly_rows != null) parts.push(`年K ${r.yearly_rows}行`)
           if (r.earliest_after && r.earliest_before) {
             const a = String(r.earliest_after).slice(0, 10)
             const b = String(r.earliest_before).slice(0, 10)

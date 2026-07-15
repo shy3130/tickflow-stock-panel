@@ -50,6 +50,8 @@ export function SettingsDataSourcesPanel() {
           adj_factor_provider: 'same_as_daily',
           realtime_data_provider: 'tickflow',
           minute_data_provider: 'tickflow',
+          monthly_data_provider: 'tickflow',
+          yearly_data_provider: 'tickflow',
           financial_data_provider: 'tickflow',
         })
       }
@@ -65,6 +67,8 @@ export function SettingsDataSourcesPanel() {
         adj_factor_provider: 'same_as_daily', // 除权始终跟随日K
         realtime_data_provider: pick('realtime'),
         minute_data_provider: pick('minute'),
+        monthly_data_provider: pick('monthly'),
+        yearly_data_provider: pick('yearly'),
         financial_data_provider: pick('financial'),
       })
     },

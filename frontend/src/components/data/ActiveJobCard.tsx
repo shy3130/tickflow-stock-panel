@@ -13,8 +13,12 @@ export const STAGE_LABELS: Record<string, string> = {
   sync_adj: '同步除权因子',
   compute_enriched: '计算技术指标',
   sync_minute: '同步分钟 K',
+  sync_monthly: '同步月 K',
+  sync_yearly: '同步年 K',
   extend_history: '扩展日K历史',
   extend_minute: '扩展分钟K历史',
+  extend_monthly: '扩展月K历史',
+  extend_yearly: '扩展年K历史',
   rebuild_enriched: '全量计算',
   refresh_views: '刷新视图',
   done: '完成',
@@ -122,6 +126,8 @@ export function ActiveJobCard({ job }: { job: PipelineJob }) {
             <Pill label="除权因子" value={cell('sync_adj', `${job.result.adj_factor_symbols ?? 0} 只`)} />
             <Pill label="enriched" value={cell(null, `${job.result.enriched_days ?? 0} 行`)} />
             <Pill label="分钟K" value={cell('sync_minute', `${job.result.minute_rows ?? 0} 行`)} />
+            <Pill label="月K" value={cell('sync_monthly', `${job.result.monthly_rows ?? 0} 行`)} />
+            <Pill label="年K" value={cell('sync_yearly', `${job.result.yearly_rows ?? 0} 行`)} />
           </div>
         )
       })()}

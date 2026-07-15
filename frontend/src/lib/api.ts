@@ -46,6 +46,12 @@ export interface CapabilityLimits {
 export interface CapabilitiesResponse {
   label: string
   capabilities: Record<string, CapabilityLimits>
+  monthly_access?: boolean
+  monthly_provider?: string
+  monthly_provider_active?: boolean
+  yearly_access?: boolean
+  yearly_provider?: string
+  yearly_provider_active?: boolean
 }
 
 // ===== Financials =====
@@ -807,9 +813,15 @@ export interface Preferences {
   minute_sync_enabled: boolean
   minute_sync_days: number
   minute_sync_segment_days: number
+  monthly_sync_enabled?: boolean
+  monthly_sync_months?: number
+  yearly_sync_enabled?: boolean
+  yearly_sync_years?: number
   daily_data_provider?: string
   adj_factor_provider?: string
   minute_data_provider?: string
+  monthly_data_provider?: string
+  yearly_data_provider?: string
   realtime_data_provider?: string
   financial_data_provider?: string
   realtime_watchlist_symbols?: string[]
@@ -956,8 +968,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ provider, dataset, symbols }),
     }),
-  updateDataProviders: (cfg: Partial<Pick<Preferences, 'daily_data_provider' | 'adj_factor_provider' | 'minute_data_provider' | 'realtime_data_provider' | 'financial_data_provider'>>) =>
-    request<Pick<Preferences, 'daily_data_provider' | 'adj_factor_provider' | 'minute_data_provider' | 'realtime_data_provider'>>(
+  updateDataProviders: (cfg: Partial<Pick<Preferences, 'daily_data_provider' | 'adj_factor_provider' | 'minute_data_provider' | 'monthly_data_provider' | 'yearly_data_provider' | 'realtime_data_provider' | 'financial_data_provider'>>) =>
+    request<Pick<Preferences, 'daily_data_provider' | 'adj_factor_provider' | 'minute_data_provider' | 'monthly_data_provider' | 'yearly_data_provider' | 'realtime_data_provider'>>(
       '/api/settings/preferences/data-providers',
       { method: 'PUT', body: JSON.stringify(cfg) },
     ),
@@ -969,6 +981,16 @@ export const api = {
         minute_sync_days: days,
         ...(segmentDays != null ? { minute_sync_segment_days: segmentDays } : {}),
       }),
+    }),
+  updateMonthlySync: (enabled: boolean, months: number) =>
+    request<Preferences>('/api/settings/preferences/monthly-sync', {
+      method: 'PUT',
+      body: JSON.stringify({ monthly_sync_enabled: enabled, monthly_sync_months: months }),
+    }),
+  updateYearlySync: (enabled: boolean, years: number) =>
+    request<Preferences>('/api/settings/preferences/yearly-sync', {
+      method: 'PUT',
+      body: JSON.stringify({ yearly_sync_enabled: enabled, yearly_sync_years: years }),
     }),
   updatePipelinePullTypes: (cfg: Partial<Pick<Preferences, 'pipeline_pull_a_share' | 'pipeline_pull_etf' | 'pipeline_pull_index'>>) =>
     request<{
@@ -1278,6 +1300,20 @@ export const api = {
     request<{ status: string; removed: number }>('/api/kline/clear_minute', {
       method: 'POST',
       body: JSON.stringify({ confirm: true }),
+    }),
+  syncMonthly: () =>
+    request<{ status: string; job_id: string }>('/api/kline/sync_monthly', { method: 'POST' }),
+  extendMonthlyHistory: (value: number, unit: 'year') =>
+    request<{ status: string; job_id: string }>('/api/kline/extend_monthly_history', {
+      method: 'POST',
+      body: JSON.stringify({ value, unit }),
+    }),
+  syncYearly: () =>
+    request<{ status: string; job_id: string }>('/api/kline/sync_yearly', { method: 'POST' }),
+  extendYearlyHistory: (value: number, unit: 'year') =>
+    request<{ status: string; job_id: string }>('/api/kline/extend_yearly_history', {
+      method: 'POST',
+      body: JSON.stringify({ value, unit }),
     }),
   extendHistory: (value: number, unit: 'day' | 'month' | 'year') =>
     request<{ status: string; job_id: string }>('/api/kline/extend_history', {
@@ -2086,6 +2122,10 @@ export interface PipelineJob {
     index_count?: number
     index_daily_rows?: number
     minute_rows: number
+    monthly_rows?: number
+    monthly_months?: number
+    yearly_rows?: number
+    yearly_years?: number
     skipped_stages?: string[]
   } | null
   error: string | null
@@ -2119,6 +2159,8 @@ export interface DataStatus {
   etf_enriched: TableStats | null
   etf_instruments: InstrumentsStats | null
   minute: TableStats | null
+  monthly: TableStats | null
+  yearly: TableStats | null
   adj_factor: TableStats | null
   instruments: InstrumentsStats | null
   financials: { rows: number; tables: Record<string, { rows: number; symbols: number }> } | null
@@ -2143,6 +2185,10 @@ export interface DataStatus {
     etf_adj_factor_size_mb?: number
     minute_files: number
     minute_size_mb: number
+    monthly_files?: number
+    monthly_size_mb?: number
+    yearly_files?: number
+    yearly_size_mb?: number
     adj_factor_files: number
     adj_factor_size_mb: number
     instruments_files: number
