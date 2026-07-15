@@ -10,6 +10,7 @@ Original implementation by @forrany (PR #57), migrated to plugin architecture.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -21,8 +22,9 @@ from app.tickflow.rate_limits import chunked
 
 logger = logging.getLogger(__name__)
 
-# stock-sdk 支持的数据集(financial 不支持 → 不声明, 自动回退 tickflow)
-_DATASETS = ("daily", "adj_factor", "minute", "realtime")
+# stock-sdk 支持的数据集(financial 不支持 → 不声明, 自动回退 tickflow;
+# 年 K 由月线聚合 → yearly)
+_DATASETS = ("daily", "adj_factor", "minute", "monthly", "yearly", "realtime")
 
 # 每次桥接调用的符号数。桥接内部按 concurrency 并发, 分批仅为进度反馈与超时控制。
 _BATCH = 40
@@ -42,6 +44,20 @@ class _StockSDKConfig:
 
 def _yyyymmdd(dt: datetime | None) -> str | None:
     return dt.strftime("%Y%m%d") if dt else None
+
+
+def _minute_concurrency(override: int | None = None) -> int:
+    if override and override > 0:
+        return min(32, override)
+    try:
+        return max(1, min(32, int(os.getenv("STOCKSDK_MINUTE_CONCURRENCY", "10"))))
+    except ValueError:
+        return 10
+
+
+def _minute_bridge_timeout(chunk_len: int, concurrency: int) -> int:
+    waves = max(1, (chunk_len + concurrency - 1) // concurrency)
+    return min(900, max(300, 60 + waves * 40))
 
 
 class StockSDKProvider:
@@ -82,6 +98,83 @@ class StockSDKProvider:
                 result = bridge.run_job(job, timeout=180)
             except bridge.StockSDKBridgeError as e:
                 logger.warning("stock-sdk daily 拉取失败(%d symbols): %s", len(chunk), e)
+                result = {"rows": {}}
+            for sym, rows in (result.get("rows") or {}).items():
+                if not rows:
+                    continue
+                df = normalize_daily(rows, default_symbol=sym, source=self.name)
+                if not df.is_empty():
+                    frames.append(df)
+            if on_chunk_done:
+                on_chunk_done(i + 1, len(chunks))
+        return pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
+
+    # ---- monthly (stock-sdk 月 K → kline_monthly) ----
+    def get_monthly(
+        self,
+        symbols: list[str],
+        start_time: datetime | None,
+        end_time: datetime | None,
+        asset_type: str = "stock",  # noqa: ARG002
+        on_chunk_done=None,
+    ) -> pl.DataFrame:
+        return self._get_history_period(
+            symbols,
+            start_time,
+            end_time,
+            period="monthly",
+            label="monthly",
+            on_chunk_done=on_chunk_done,
+        )
+
+    # ---- yearly (月线聚合 → kline_yearly) ----
+    def get_yearly(
+        self,
+        symbols: list[str],
+        start_time: datetime | None,
+        end_time: datetime | None,
+        asset_type: str = "stock",  # noqa: ARG002
+        on_chunk_done=None,
+    ) -> pl.DataFrame:
+        df = self.get_monthly(
+            symbols,
+            start_time,
+            end_time,
+            asset_type=asset_type,
+            on_chunk_done=on_chunk_done,
+        )
+        return _aggregate_monthly_to_yearly(df)
+
+    def _get_history_period(
+        self,
+        symbols: list[str],
+        start_time: datetime | None,
+        end_time: datetime | None,
+        *,
+        period: str,
+        label: str,
+        on_chunk_done=None,
+    ) -> pl.DataFrame:
+        if not symbols:
+            return pl.DataFrame()
+        logger.info("stock-sdk %s 拉取开始(%d symbols)", label, len(symbols))
+        frames: list[pl.DataFrame] = []
+        chunks = chunked(symbols, _BATCH)
+        conc = _minute_concurrency()
+        for i, chunk in enumerate(chunks):
+            job = {
+                "op": "daily",
+                "symbols": chunk,
+                "period": period,
+                "adjust": "none",
+                "start": _yyyymmdd(start_time),
+                "end": _yyyymmdd(end_time),
+                "concurrency": conc,
+            }
+            try:
+                result = bridge.run_job(job, timeout=_minute_bridge_timeout(len(chunk), conc))
+            except bridge.StockSDKBridgeError as e:
+                logger.warning("stock-sdk %s 拉取失败(%d symbols): %s", label, len(chunk), e)
                 result = {"rows": {}}
             for sym, rows in (result.get("rows") or {}).items():
                 if not rows:
@@ -231,6 +324,12 @@ class StockSDKProvider:
         if dataset == "minute":
             df = self.get_minute(symbols, None, None)
             return _preview("minute", df)
+        if dataset == "monthly":
+            df = self.get_monthly(symbols, None, None)
+            return _preview("monthly", df)
+        if dataset == "yearly":
+            df = self.get_yearly(symbols, None, None)
+            return _preview("yearly", df)
         if dataset == "realtime":
             rows = self.get_realtime()
             head = rows[:5]
@@ -248,7 +347,37 @@ def _preview(dataset: str, df: pl.DataFrame) -> dict:
     return {
         "provider": "stocksdk",
         "dataset": dataset,
-        "rows": df.height,
-        "columns": df.columns,
+        "rows": int(df.height),
+        "columns": list(df.columns),
         "preview": df.head(5).to_dicts() if not df.is_empty() else [],
     }
+
+
+def _aggregate_monthly_to_yearly(df: pl.DataFrame) -> pl.DataFrame:
+    """把月 K 聚合成年 K（日历年）：首开/最高/最低/尾收，量额求和。"""
+    if df.is_empty() or "date" not in df.columns or "symbol" not in df.columns:
+        return df
+    work = df
+    if work.schema.get("date") != pl.Date:
+        work = work.with_columns(pl.col("date").cast(pl.Date))
+    aggs = [
+        pl.col("date").max().alias("date"),
+        pl.col("open").first().alias("open"),
+        pl.col("high").max().alias("high"),
+        pl.col("low").min().alias("low"),
+        pl.col("close").last().alias("close"),
+        pl.col("volume").sum().alias("volume"),
+    ]
+    if "amount" in work.columns:
+        aggs.append(pl.col("amount").sum().alias("amount"))
+    if "quote_ts" in work.columns:
+        aggs.append(pl.col("quote_ts").last().alias("quote_ts"))
+    out = (
+        work.sort(["symbol", "date"])
+        .with_columns(pl.col("date").dt.year().alias("_year"))
+        .group_by(["symbol", "_year"], maintain_order=True)
+        .agg(aggs)
+        .drop("_year")
+        .sort(["symbol", "date"])
+    )
+    return out

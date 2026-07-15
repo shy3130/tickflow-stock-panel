@@ -9,6 +9,6 @@ display_name: "stock-sdk（第三方行情·合规风险自负）"
 runtime: node
 entry: app.plugins.stocksdk.provider:StockSDKProvider
 check: app.plugins.stocksdk.bridge:availability
-datasets: [daily, adj_factor, minute, realtime]
-description: "抓取第三方财经网站行情接口(存在版权与反爬风险,使用需自行评估合规责任)。日K/除权/分钟/实时全市场。需运行环境含 Node.js 18+。Docker 默认不打包。"
+datasets: [daily, adj_factor, minute, monthly, yearly, realtime]
+description: "抓取第三方财经网站行情接口(存在版权与反爬风险,使用需自行评估合规责任)。日K/除权/分钟/月年K/实时全市场。年K由月线聚合。需运行环境含 Node.js 18+。Docker 默认不打包。"
 install_hint: "Docker 需 --build-arg INCLUDE_STOCKSDK=1 才打包;开发模式: cd backend/app/plugins/stocksdk && npm install"

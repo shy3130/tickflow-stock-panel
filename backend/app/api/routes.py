@@ -23,18 +23,26 @@ def health() -> dict:
 @router.get("/api/capabilities")
 def capabilities() -> dict:
     """前端用来决定哪些功能可用、哪些灰显。"""
+    from app.services.period_kline_access import monthly_access_flags, yearly_access_flags
+
     capset = detect_capabilities()
     return {
         "label": tier_label(),
         "capabilities": capset.to_dict(),
+        **monthly_access_flags(capset),
+        **yearly_access_flags(capset),
     }
 
 
 @router.post("/api/capabilities/redetect")
 def redetect() -> dict:
     """用户在设置页"重新检测"按钮。"""
+    from app.services.period_kline_access import monthly_access_flags, yearly_access_flags
+
     capset = detect_capabilities(force=True)
     return {
         "label": tier_label(),
         "capabilities": capset.to_dict(),
+        **monthly_access_flags(capset),
+        **yearly_access_flags(capset),
     }

@@ -158,6 +158,10 @@ class DataStore:
                 SELECT * FROM read_parquet('{d}/kline_etf_minute/**/*.parquet', union_by_name=true)""",
             f"""CREATE OR REPLACE VIEW kline_minute AS
                 SELECT * FROM read_parquet('{d}/kline_minute/**/*.parquet', union_by_name=true)""",
+            f"""CREATE OR REPLACE VIEW kline_monthly AS
+                SELECT * FROM read_parquet('{d}/kline_monthly/**/*.parquet', union_by_name=true)""",
+            f"""CREATE OR REPLACE VIEW kline_yearly AS
+                SELECT * FROM read_parquet('{d}/kline_yearly/**/*.parquet', union_by_name=true)""",
             f"""CREATE OR REPLACE VIEW adj_factor AS
                 SELECT * FROM read_parquet('{d}/adj_factor/**/*.parquet', union_by_name=true)""",
             f"""CREATE OR REPLACE VIEW adj_factor_etf AS
@@ -1612,6 +1616,38 @@ class KlineRepository:
         if df.is_empty():
             return
         self._write_daily_partition(df, "kline_daily")
+
+    def append_period_kline(self, df: pl.DataFrame, subdir: str) -> None:
+        """按 date 分区写入月/年等周期 K 线。"""
+        if df.is_empty():
+            return
+        self._write_daily_partition(df, subdir)
+
+    def earliest_period_kline_date(self, subdir: str) -> date | None:
+        """本地周期 K 最早分区 date=。"""
+        period_dir = self.store.data_dir / subdir
+        if not period_dir.exists():
+            return None
+        dates: list[str] = []
+        for d in period_dir.iterdir():
+            if d.is_dir() and d.name.startswith("date="):
+                dates.append(d.name[5:])
+        if not dates:
+            return None
+        dates.sort()
+        return date.fromisoformat(dates[0])
+
+    def latest_period_kline_date(self, view: str) -> date | None:
+        """本地周期 K 最新日期（DuckDB 视图）。"""
+        try:
+            with self._lock:
+                res = self.db.execute(f"SELECT max(date) FROM {view}").fetchone()
+            if res and res[0]:
+                d = res[0]
+                return d if isinstance(d, date) else date.fromisoformat(str(d))
+        except Exception:
+            return None
+        return None
 
     def append_enriched(self, df: pl.DataFrame) -> None:
         """按日分区写入 enriched 数据 (merge-upsert)。磁盘仅写入 14 列存储列。"""

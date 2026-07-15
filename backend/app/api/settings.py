@@ -341,10 +341,22 @@ class MinuteSyncPrefs(BaseModel):
     minute_sync_segment_days: int | None = None
 
 
+class MonthlySyncPrefs(BaseModel):
+    monthly_sync_enabled: bool
+    monthly_sync_months: int = 24
+
+
+class YearlySyncPrefs(BaseModel):
+    yearly_sync_enabled: bool
+    yearly_sync_years: int = 10
+
+
 class DataProvidersIn(BaseModel):
     daily_data_provider: str | None = None
     adj_factor_provider: str | None = None
     minute_data_provider: str | None = None
+    monthly_data_provider: str | None = None
+    yearly_data_provider: str | None = None
     realtime_data_provider: str | None = None
     financial_data_provider: str | None = None
 
@@ -398,9 +410,15 @@ def get_preferences() -> dict:
         "minute_sync_enabled": preferences.get_minute_sync_enabled(),
         "minute_sync_days": preferences.get_minute_sync_days(),
         "minute_sync_segment_days": preferences.get_minute_sync_segment_days(),
+        "monthly_sync_enabled": preferences.get_monthly_sync_enabled(),
+        "monthly_sync_months": preferences.get_monthly_sync_months(),
+        "yearly_sync_enabled": preferences.get_yearly_sync_enabled(),
+        "yearly_sync_years": preferences.get_yearly_sync_years(),
         "daily_data_provider": preferences.get_daily_data_provider(),
         "adj_factor_provider": preferences.get_adj_factor_provider(),
         "minute_data_provider": preferences.get_minute_data_provider(),
+        "monthly_data_provider": preferences.get_monthly_data_provider(),
+        "yearly_data_provider": preferences.get_yearly_data_provider(),
         "realtime_data_provider": preferences.get_realtime_data_provider(),
         "financial_data_provider": preferences.get_financial_provider(),
         "realtime_watchlist_symbols": preferences.get_realtime_watchlist_symbols(),
@@ -497,6 +515,8 @@ def uninstall_plugin(name: str) -> dict:
     for getter, key, default in [
         (preferences.get_daily_data_provider, "daily_data_provider", "tickflow"),
         (preferences.get_minute_data_provider, "minute_data_provider", "tickflow"),
+        (preferences.get_monthly_data_provider, "monthly_data_provider", "stocksdk"),
+        (preferences.get_yearly_data_provider, "yearly_data_provider", "stocksdk"),
         (preferences.get_realtime_data_provider, "realtime_data_provider", "tickflow"),
         (preferences.get_financial_provider, "financial_data_provider", "tickflow"),
     ]:
@@ -552,6 +572,10 @@ def delete_data_source(name: str) -> dict:
         updates["daily_data_provider"] = "tickflow"
     if preferences.get_realtime_data_provider() == name:
         updates["realtime_data_provider"] = "tickflow"
+    if preferences.get_monthly_data_provider() == name:
+        updates["monthly_data_provider"] = "stocksdk"
+    if preferences.get_yearly_data_provider() == name:
+        updates["yearly_data_provider"] = "stocksdk"
     if preferences.get_financial_provider() == name:
         updates["financial_data_provider"] = "tickflow"
     adj = preferences.get_adj_factor_provider()
@@ -578,12 +602,17 @@ def update_data_providers(req: DataProvidersIn) -> dict:
     """保存数据源选择。"""
     from app.services import preferences
     updates = req.model_dump(exclude_none=True)
+    if updates.get("daily_data_provider") == "stocksdk":
+        updates.setdefault("monthly_data_provider", "stocksdk")
+        updates.setdefault("yearly_data_provider", "stocksdk")
     if updates:
         preferences.save(updates)
     return {
         "daily_data_provider": preferences.get_daily_data_provider(),
         "adj_factor_provider": preferences.get_adj_factor_provider(),
         "minute_data_provider": preferences.get_minute_data_provider(),
+        "monthly_data_provider": preferences.get_monthly_data_provider(),
+        "yearly_data_provider": preferences.get_yearly_data_provider(),
         "realtime_data_provider": preferences.get_realtime_data_provider(),
         "financial_data_provider": preferences.get_financial_provider(),
     }
@@ -667,6 +696,36 @@ def update_minute_sync(req: MinuteSyncPrefs) -> dict:
         "minute_sync_enabled": req.minute_sync_enabled,
         "minute_sync_days": days,
         "minute_sync_segment_days": preferences.get_minute_sync_segment_days(),
+    }
+
+
+@router.put("/preferences/monthly-sync")
+def update_monthly_sync(req: MonthlySyncPrefs) -> dict:
+    """保存月 K 同步偏好。"""
+    from app.services import preferences
+    months = max(1, min(120, req.monthly_sync_months))
+    preferences.save({
+        "monthly_sync_enabled": req.monthly_sync_enabled,
+        "monthly_sync_months": months,
+    })
+    return {
+        "monthly_sync_enabled": req.monthly_sync_enabled,
+        "monthly_sync_months": months,
+    }
+
+
+@router.put("/preferences/yearly-sync")
+def update_yearly_sync(req: YearlySyncPrefs) -> dict:
+    """保存年 K 同步偏好。"""
+    from app.services import preferences
+    years = max(1, min(40, req.yearly_sync_years))
+    preferences.save({
+        "yearly_sync_enabled": req.yearly_sync_enabled,
+        "yearly_sync_years": years,
+    })
+    return {
+        "yearly_sync_enabled": req.yearly_sync_enabled,
+        "yearly_sync_years": years,
     }
 
 

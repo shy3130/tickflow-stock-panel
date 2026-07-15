@@ -42,6 +42,8 @@ _table_cache: dict[str, dict | None] = {
     "etf_enriched": None,
     "etf_instruments": None,
     "minute": None,
+    "monthly": None,
+    "yearly": None,
     "adj_factor": None,
     "instruments": None,
     "financials": None,
@@ -405,6 +407,35 @@ def _safe_aggregate_minute(repo) -> dict | None:
     }
 
 
+def _safe_aggregate_period_dir(repo, subdir: str) -> dict | None:
+    """月/年 K 分区目录轻量统计。"""
+    period_dir = repo.store.data_dir / subdir
+    if not period_dir.exists():
+        return None
+    dates: list[str] = []
+    for d in period_dir.iterdir():
+        if d.is_dir() and d.name.startswith("date="):
+            dates.append(d.name[5:])
+    if not dates:
+        return None
+    dates.sort()
+    return {
+        "rows": 0,
+        "earliest_date": dates[0],
+        "latest_date": dates[-1],
+        "symbols_covered": 0,
+        "trading_days": len(dates),
+    }
+
+
+def _safe_aggregate_monthly(repo) -> dict | None:
+    return _safe_aggregate_period_dir(repo, "kline_monthly")
+
+
+def _safe_aggregate_yearly(repo) -> dict | None:
+    return _safe_aggregate_period_dir(repo, "kline_yearly")
+
+
 def _safe_aggregate_financials(repo) -> dict | None:
     """财务数据统计 — 检查各表文件是否存在及行数。"""
     data_dir = repo.store.data_dir
@@ -492,6 +523,8 @@ def _compute_storage(data_dir: Path) -> dict:
         "etf_instruments": data_dir / "instruments_etf",
         "etf_adj_factor": data_dir / "adj_factor_etf",
         "minute": data_dir / "kline_minute",
+        "monthly": data_dir / "kline_monthly",
+        "yearly": data_dir / "kline_yearly",
         "adj_factor": data_dir / "adj_factor",
         "instruments": data_dir / "instruments",
         "ext_data": data_dir / "ext_data",
@@ -600,6 +633,8 @@ def status(request: Request) -> dict:
     "etf_enriched":      _get_table_stats("etf_enriched",      lambda: _safe_aggregate_etf_enriched(repo)),
     "etf_instruments":   _get_table_stats("etf_instruments",   lambda: _safe_aggregate_etf_instruments(repo)),
     "minute":      _get_table_stats("minute",      lambda: _safe_aggregate_minute(repo)),
+    "monthly":     _get_table_stats("monthly",     lambda: _safe_aggregate_monthly(repo)),
+    "yearly":      _get_table_stats("yearly",      lambda: _safe_aggregate_yearly(repo)),
         "adj_factor":  _get_table_stats("adj_factor",  lambda: _safe_aggregate_adj_factor(repo)),
         "instruments": _get_table_stats("instruments", lambda: _safe_aggregate_instruments(repo)),
         "financials":  _get_table_stats("financials",  lambda: _safe_aggregate_financials(repo)),
@@ -630,6 +665,7 @@ def clear_data(request: Request):
     for sub in (
         "kline_daily", "kline_daily_enriched", "kline_index_daily", "kline_index_enriched",
         "kline_etf_daily", "kline_etf_enriched", "kline_etf_minute", "kline_minute",
+        "kline_monthly", "kline_yearly",
         "adj_factor", "adj_factor_etf", "instruments", "instruments_index", "instruments_etf", "pools", "financials",
         "backtest_results", "screener_results", "ai_cache",
     ):
@@ -734,6 +770,26 @@ _TABLE_FIELD_DESC: dict[str, dict[str, str]] = {
         "volume": "成交量",
         "amount": "成交额",
     },
+    "kline_monthly": {
+        "symbol": "股票代码",
+        "date": "月结束日期",
+        "open": "开盘价",
+        "high": "最高价",
+        "low": "最低价",
+        "close": "收盘价",
+        "volume": "成交量",
+        "amount": "成交额",
+    },
+    "kline_yearly": {
+        "symbol": "股票代码",
+        "date": "年结束日期",
+        "open": "开盘价",
+        "high": "最高价",
+        "low": "最低价",
+        "close": "收盘价",
+        "volume": "成交量",
+        "amount": "成交额",
+    },
     "adj_factor": {
         "symbol": "股票代码",
         "timestamp": "除权除息时间戳(ms)",
@@ -781,6 +837,8 @@ _SCHEMA_VIEWS: dict[str, str] = {
     "etf_enriched": "kline_etf_enriched",
     "etf_instruments": "instruments_etf",
     "minute": "kline_minute",
+    "monthly": "kline_monthly",
+    "yearly": "kline_yearly",
     "adj_factor": "adj_factor",
     "instruments": "instruments",
 }

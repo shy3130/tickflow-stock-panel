@@ -28,6 +28,32 @@ def cn_today() -> date:
     return datetime.now(CN_TZ).date()
 
 
+def last_cn_weekday(on_or_before: date | None = None) -> date:
+    """回退到最近一个 A 股工作日 (Mon–Fri; 不含法定节假日)。"""
+    d = on_or_before or cn_today()
+    for _ in range(10):
+        if d.weekday() < 5:
+            return d
+        d -= timedelta(days=1)
+    return on_or_before or cn_today()
+
+
+def resolve_period_extend_range(
+    *,
+    years: int,
+    earliest: date,
+    min_span_days: int = 31,
+    max_span_days: int = 3650,
+) -> tuple[date, date]:
+    """月/年 K 历史扩展: 在本地最早 bar 之前再向前拉 years 年。"""
+    span_days = max(min_span_days, min(years * 365, max_span_days))
+    start = earliest - timedelta(days=span_days)
+    end = last_cn_weekday(earliest - timedelta(days=1))
+    if start >= end:
+        raise ValueError(f"扩展范围无效: {start} >= {end}")
+    return start, end
+
+
 def trading_minutes_elapsed_from_dt(dt: datetime) -> float:
     """根据北京时间 datetime 计算当日已交易分钟数。
 

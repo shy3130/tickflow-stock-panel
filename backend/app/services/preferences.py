@@ -213,6 +213,36 @@ def get_minute_data_provider() -> str:
     return provider if provider in _allowed_data_providers() else "tickflow"
 
 
+def get_monthly_data_provider() -> str:
+    provider = str(load().get("monthly_data_provider", "stocksdk") or "stocksdk").lower()
+    if provider == "tickflow":
+        return "stocksdk"
+    return provider if provider in _allowed_data_providers() else "stocksdk"
+
+
+def get_monthly_sync_enabled() -> bool:
+    return load().get("monthly_sync_enabled", False)
+
+
+def get_monthly_sync_months() -> int:
+    return max(1, min(120, load().get("monthly_sync_months", 24)))
+
+
+def get_yearly_data_provider() -> str:
+    provider = str(load().get("yearly_data_provider", "stocksdk") or "stocksdk").lower()
+    if provider == "tickflow":
+        return "stocksdk"
+    return provider if provider in _allowed_data_providers() else "stocksdk"
+
+
+def get_yearly_sync_enabled() -> bool:
+    return load().get("yearly_sync_enabled", False)
+
+
+def get_yearly_sync_years() -> int:
+    return max(1, min(40, load().get("yearly_sync_years", 10)))
+
+
 def get_realtime_data_provider() -> str:
     provider = str(load().get("realtime_data_provider", "tickflow") or "tickflow").lower()
     return provider if provider in _allowed_data_providers() else "tickflow"

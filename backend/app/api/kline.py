@@ -29,6 +29,32 @@ def _minute_allowed(capset) -> bool:
     return custom_sources.provider_has_dataset(provider, "minute")
 
 
+def _monthly_allowed(capset) -> bool:  # noqa: ARG001
+    from app.services.period_kline_access import period_provider_active
+    return period_provider_active("monthly")
+
+
+def _yearly_allowed(capset) -> bool:  # noqa: ARG001
+    from app.services.period_kline_access import period_provider_active
+    return period_provider_active("yearly")
+
+
+def _resolve_period_universe(repo) -> list[str]:
+    """月/年 K 同步标的池 — 与分钟 K 全市场同步一致。"""
+    from app.tickflow.pools import get_pool
+
+    universe = sorted(set(get_pool("watchlist")) | set(get_pool("CN_Equity_A")))
+    inst_path = repo.store.data_dir / "instruments" / "instruments.parquet"
+    if inst_path.exists():
+        try:
+            import polars as pl
+            inst = pl.read_parquet(inst_path, columns=["symbol"])
+            universe = sorted(set(universe) | set(inst["symbol"].to_list()))
+        except Exception:  # noqa: BLE001
+            pass
+    return universe
+
+
 @router.get("/instruments/search")
 def search_instruments(
     request: Request,
@@ -772,6 +798,352 @@ async def clear_minute(request: Request):
 
     logger.info("minute K cleared: %d rows removed", removed)
     return {"status": "ok", "removed": removed}
+
+
+@router.post("/sync_monthly")
+async def sync_monthly(request: Request):
+    """手动触发月 K 同步 (stock-sdk → kline_monthly)。"""
+    import asyncio
+
+    from app.api.data import invalidate_data_cache
+    from app.services.monthly_sync import refresh_monthly_view, sync_and_persist_monthly
+    from app.services.pipeline_jobs import job_store, release_run_slot, try_acquire_run_slot
+    from app.services.preferences import get_monthly_sync_months
+
+    repo = request.app.state.repo
+    capset = request.app.state.capabilities
+    if not _monthly_allowed(capset):
+        raise HTTPException(status_code=403, detail="未配置月 K 数据源 (如 stock-sdk)")
+
+    job_id, is_new = job_store.create()
+    if not is_new:
+        return {"status": "reused", "job_id": job_id}
+
+    async def task() -> None:
+        if not try_acquire_run_slot():
+            job_store.fail(job_id, "已有数据任务在运行,请稍后再试")
+            return
+        loop = asyncio.get_event_loop()
+
+        def progress(stage: str, pct: int, msg: str,
+                     stage_pct: int | None = None, skip_log: bool = False) -> None:
+            job_store.progress(job_id, stage, pct, msg,
+                               stage_pct=stage_pct, skip_log=skip_log)
+
+        try:
+            job_store.start(job_id)
+            progress("sync_monthly", 5, "解析标的池…")
+            universe = _resolve_period_universe(repo)
+            progress("sync_monthly", 10, f"标的池 {len(universe)} 只")
+            months = get_monthly_sync_months()
+
+            def _chunk(cur: int, tot: int) -> None:
+                progress("sync_monthly", 10 + int(85 * cur / tot),
+                         f"月K 批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True)
+
+            written = await loop.run_in_executor(
+                _long_task_executor,
+                lambda: sync_and_persist_monthly(
+                    universe, repo, months=months, on_chunk_done=_chunk
+                ),
+            )
+            refresh_monthly_view(repo)
+            progress("done", 100, f"月K 同步完成,{written} 行")
+            job_store.succeed(job_id, {
+                "monthly_rows": written,
+                "universe_size": len(universe),
+            })
+            invalidate_data_cache("monthly")
+        except Exception as e:  # noqa: BLE001
+            job_store.fail(job_id, str(e))
+            invalidate_data_cache("monthly")
+        finally:
+            release_run_slot()
+
+    asyncio.create_task(task())
+    return {"status": "started", "job_id": job_id}
+
+
+@router.post("/extend_monthly_history")
+async def extend_monthly_history(request: Request):
+    """向前扩展月 K 历史 (kline_monthly)。"""
+    import asyncio
+    import traceback as _tb
+
+    from app.api.data import invalidate_data_cache
+    from app.market_time import resolve_period_extend_range
+    from app.services.monthly_sync import KLINE_MONTHLY_SUBDIR, backfill_monthly_range
+    from app.services.pipeline_jobs import job_store, release_run_slot, try_acquire_run_slot
+
+    try:
+        body = await request.json()
+        value = body.get("value")
+        unit = body.get("unit", "year")
+        if not value or value <= 0:
+            raise HTTPException(status_code=400, detail="value 必须为正整数")
+        if unit != "year":
+            raise HTTPException(status_code=400, detail="unit 只支持 year")
+
+        repo = request.app.state.repo
+        capset = request.app.state.capabilities
+        if not _monthly_allowed(capset):
+            raise HTTPException(status_code=403, detail="未配置月 K 数据源")
+
+        job_id, is_new = job_store.create()
+        if not is_new:
+            return {"status": "reused", "job_id": job_id}
+
+        async def task() -> None:
+            if not try_acquire_run_slot():
+                job_store.fail(job_id, "已有数据任务在运行,请稍后再试")
+                return
+            loop = asyncio.get_event_loop()
+
+            def progress(stage: str, pct: int, msg: str,
+                         stage_pct: int | None = None, skip_log: bool = False) -> None:
+                job_store.progress(job_id, stage, pct, msg,
+                                   stage_pct=stage_pct, skip_log=skip_log)
+
+            try:
+                job_store.start(job_id)
+                earliest = repo.earliest_period_kline_date(KLINE_MONTHLY_SUBDIR)
+                if not earliest:
+                    job_store.fail(job_id, "本地无月K数据,请先点击「同步最近月K」")
+                    invalidate_data_cache("monthly")
+                    return
+                try:
+                    start_d, end_d = resolve_period_extend_range(
+                        years=value, earliest=earliest, min_span_days=31
+                    )
+                except ValueError:
+                    job_store.fail(job_id, "扩展范围无效")
+                    invalidate_data_cache("monthly")
+                    return
+
+                start_str = start_d.isoformat()
+                end_str = end_d.isoformat()
+                progress("extend_monthly", 5, "解析标的池…")
+                universe = _resolve_period_universe(repo)
+                progress("extend_monthly", 8, f"标的池: {len(universe)} 只")
+
+                def _run():
+                    def _chunk(cur: int, tot: int) -> None:
+                        progress("extend_monthly", 8 + int(85 * cur / tot),
+                                 f"月K 批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True)
+
+                    return backfill_monthly_range(
+                        universe, repo, start_date=start_d, end_date=end_d, on_chunk_done=_chunk,
+                    )
+
+                progress(
+                    "extend_monthly", 10,
+                    f"获取月K [{start_str} ~ {end_str}] (早于本地最早 {earliest})…",
+                )
+                written, fetched = await loop.run_in_executor(_long_task_executor, _run)
+                if written <= 0:
+                    job_store.fail(
+                        job_id,
+                        f"月K [{start_str}~{end_str}] 未写入 (拉取 {fetched} 行);"
+                        "请检查网络/扩大范围",
+                    )
+                    invalidate_data_cache("monthly")
+                    return
+                monthly_dir = repo.store.data_dir / KLINE_MONTHLY_SUBDIR
+                month_count = len(list(monthly_dir.glob("date=*"))) if monthly_dir.exists() else 0
+                progress("extend_monthly", 95, f"月K 完成,{month_count} 月,{written} 行")
+                job_store.succeed(job_id, {
+                    "monthly_months": month_count,
+                    "monthly_rows": written,
+                    "universe_size": len(universe),
+                })
+                invalidate_data_cache("monthly")
+            except Exception as e:  # noqa: BLE001
+                logger.exception("extend_monthly_history failed: job_id=%s", job_id)
+                job_store.fail(job_id, str(e))
+                invalidate_data_cache("monthly")
+            finally:
+                release_run_slot()
+
+        asyncio.create_task(task())
+        return {"status": "started", "job_id": job_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("extend_monthly_history error: %s\n%s", e, _tb.format_exc())
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post("/sync_yearly")
+async def sync_yearly(request: Request):
+    """手动触发年 K 同步 (月线聚合 → kline_yearly)。"""
+    import asyncio
+
+    from app.api.data import invalidate_data_cache
+    from app.services.pipeline_jobs import job_store, release_run_slot, try_acquire_run_slot
+    from app.services.preferences import get_yearly_sync_years
+    from app.services.yearly_sync import refresh_yearly_view, sync_and_persist_yearly
+
+    repo = request.app.state.repo
+    capset = request.app.state.capabilities
+    if not _yearly_allowed(capset):
+        raise HTTPException(status_code=403, detail="未配置年 K 数据源 (如 stock-sdk)")
+
+    job_id, is_new = job_store.create()
+    if not is_new:
+        return {"status": "reused", "job_id": job_id}
+
+    async def task() -> None:
+        if not try_acquire_run_slot():
+            job_store.fail(job_id, "已有数据任务在运行,请稍后再试")
+            return
+        loop = asyncio.get_event_loop()
+
+        def progress(stage: str, pct: int, msg: str,
+                     stage_pct: int | None = None, skip_log: bool = False) -> None:
+            job_store.progress(job_id, stage, pct, msg,
+                               stage_pct=stage_pct, skip_log=skip_log)
+
+        try:
+            job_store.start(job_id)
+            progress("sync_yearly", 5, "解析标的池…")
+            universe = _resolve_period_universe(repo)
+            progress("sync_yearly", 10, f"标的池 {len(universe)} 只")
+            years = get_yearly_sync_years()
+
+            def _chunk(cur: int, tot: int) -> None:
+                progress("sync_yearly", 10 + int(85 * cur / tot),
+                         f"年K 批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True)
+
+            written = await loop.run_in_executor(
+                _long_task_executor,
+                lambda: sync_and_persist_yearly(
+                    universe, repo, years=years, on_chunk_done=_chunk
+                ),
+            )
+            refresh_yearly_view(repo)
+            progress("done", 100, f"年K 同步完成,{written} 行")
+            job_store.succeed(job_id, {
+                "yearly_rows": written,
+                "universe_size": len(universe),
+            })
+            invalidate_data_cache("yearly")
+        except Exception as e:  # noqa: BLE001
+            job_store.fail(job_id, str(e))
+            invalidate_data_cache("yearly")
+        finally:
+            release_run_slot()
+
+    asyncio.create_task(task())
+    return {"status": "started", "job_id": job_id}
+
+
+@router.post("/extend_yearly_history")
+async def extend_yearly_history(request: Request):
+    """向前扩展年 K 历史 (kline_yearly)。"""
+    import asyncio
+    import traceback as _tb
+
+    from app.api.data import invalidate_data_cache
+    from app.market_time import resolve_period_extend_range
+    from app.services.pipeline_jobs import job_store, release_run_slot, try_acquire_run_slot
+    from app.services.yearly_sync import KLINE_YEARLY_SUBDIR, backfill_yearly_range
+
+    try:
+        body = await request.json()
+        value = body.get("value")
+        unit = body.get("unit", "year")
+        if not value or value <= 0:
+            raise HTTPException(status_code=400, detail="value 必须为正整数")
+        if unit != "year":
+            raise HTTPException(status_code=400, detail="unit 只支持 year")
+
+        repo = request.app.state.repo
+        capset = request.app.state.capabilities
+        if not _yearly_allowed(capset):
+            raise HTTPException(status_code=403, detail="未配置年 K 数据源")
+
+        job_id, is_new = job_store.create()
+        if not is_new:
+            return {"status": "reused", "job_id": job_id}
+
+        async def task() -> None:
+            if not try_acquire_run_slot():
+                job_store.fail(job_id, "已有数据任务在运行,请稍后再试")
+                return
+            loop = asyncio.get_event_loop()
+
+            def progress(stage: str, pct: int, msg: str,
+                         stage_pct: int | None = None, skip_log: bool = False) -> None:
+                job_store.progress(job_id, stage, pct, msg,
+                                   stage_pct=stage_pct, skip_log=skip_log)
+
+            try:
+                job_store.start(job_id)
+                earliest = repo.earliest_period_kline_date(KLINE_YEARLY_SUBDIR)
+                if not earliest:
+                    job_store.fail(job_id, "本地无年K数据,请先点击「同步最近年K」")
+                    invalidate_data_cache("yearly")
+                    return
+                try:
+                    start_d, end_d = resolve_period_extend_range(
+                        years=value, earliest=earliest, min_span_days=365
+                    )
+                except ValueError:
+                    job_store.fail(job_id, "扩展范围无效")
+                    invalidate_data_cache("yearly")
+                    return
+
+                start_str = start_d.isoformat()
+                end_str = end_d.isoformat()
+                progress("extend_yearly", 5, "解析标的池…")
+                universe = _resolve_period_universe(repo)
+                progress("extend_yearly", 8, f"标的池: {len(universe)} 只")
+
+                def _run():
+                    def _chunk(cur: int, tot: int) -> None:
+                        progress("extend_yearly", 8 + int(85 * cur / tot),
+                                 f"年K 批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True)
+
+                    return backfill_yearly_range(
+                        universe, repo, start_date=start_d, end_date=end_d, on_chunk_done=_chunk,
+                    )
+
+                progress(
+                    "extend_yearly", 10,
+                    f"获取年K [{start_str} ~ {end_str}] (早于本地最早 {earliest})…",
+                )
+                written, fetched = await loop.run_in_executor(_long_task_executor, _run)
+                if written <= 0:
+                    job_store.fail(
+                        job_id,
+                        f"年K [{start_str}~{end_str}] 未写入 (拉取 {fetched} 行);"
+                        "请检查网络/扩大范围",
+                    )
+                    invalidate_data_cache("yearly")
+                    return
+                yearly_dir = repo.store.data_dir / KLINE_YEARLY_SUBDIR
+                year_count = len(list(yearly_dir.glob("date=*"))) if yearly_dir.exists() else 0
+                progress("extend_yearly", 95, f"年K 完成,{year_count} 年,{written} 行")
+                job_store.succeed(job_id, {
+                    "yearly_years": year_count,
+                    "yearly_rows": written,
+                    "universe_size": len(universe),
+                })
+                invalidate_data_cache("yearly")
+            except Exception as e:  # noqa: BLE001
+                logger.exception("extend_yearly_history failed: job_id=%s", job_id)
+                job_store.fail(job_id, str(e))
+                invalidate_data_cache("yearly")
+            finally:
+                release_run_slot()
+
+        asyncio.create_task(task())
+        return {"status": "started", "job_id": job_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("extend_yearly_history error: %s\n%s", e, _tb.format_exc())
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/extend_history")
