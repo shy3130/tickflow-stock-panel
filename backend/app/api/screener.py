@@ -52,6 +52,22 @@ def _safe(result_dict: dict) -> dict:
     return result_dict
 
 
+def _one_word_limit_expr(status_main: str, columns: list[str]) -> Any:
+    required = {"open", "high", "low", "close", "status"}
+    if not required.issubset(columns):
+        import polars as pl
+        return pl.lit(False)
+
+    import polars as pl
+    return (
+        (pl.col("status") == status_main)
+        & (pl.col("close") > 0)
+        & (pl.col("open") == pl.col("high"))
+        & (pl.col("high") == pl.col("low"))
+        & (pl.col("low") == pl.col("close"))
+    ).fill_null(False)
+
+
 _EXT_IDENT_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 
@@ -643,6 +659,8 @@ def limit_ladder(
             pl.lit(None).alias("sealed_vol"),
         )
 
+    df = df.with_columns(_one_word_limit_expr(status_main, df.columns).alias("is_one_word"))
+
     # 动态 JOIN 扩展数据
     ext_specs = _parse_ext_columns(ext_columns) if ext_columns else []
     ext_col_names: list[str] = []
@@ -680,7 +698,7 @@ def limit_ladder(
                         pass
 
     # 选择输出列
-    cols = ["symbol", "name", "close", "change_pct", "boards", "status", consec_col, "sealed_status", "sealed_vol"] + ext_col_names
+    cols = ["symbol", "name", "close", "change_pct", "boards", "status", consec_col, "sealed_status", "sealed_vol", "is_one_word"] + ext_col_names
     df = df.select([c for c in cols if c in df.columns])
     # 排序: boards 降序, status 按主状态→炸/翘→断/止
     status_order = pl.when(pl.col("status") == status_main).then(0)

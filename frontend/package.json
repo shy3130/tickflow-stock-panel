@@ -1,7 +1,7 @@
 {
   "name": "tickflow-stock-panel-frontend",
   "private": true,
-  "version": "0.1.84",
+  "version": "0.1.86",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -14,6 +14,7 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@tanstack/react-query": "^5.55.0",
+    "@tanstack/react-virtual": "^3.13.12",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
     "echarts": "^5.5.0",

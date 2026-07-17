@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 import polars as pl
 
 from app.indicators.pipeline import filter_halt_days
+from app.market_time import cn_now
 from app.services import preferences
 from app.tickflow.capabilities import Cap, CapabilitySet
 from app.tickflow.client import get_client
@@ -639,6 +640,101 @@ def sync_minute_batch(
     if not out:
         return pl.DataFrame()
     return pl.concat(out, how="diagonal_relaxed")
+
+
+def intraday_monitor_support(capset: CapabilitySet | None) -> dict[str, object]:
+    """返回分时信号监控可用的数据能力和单轮标的上限。"""
+    provider_name = preferences.get_minute_data_provider()
+    if provider_name != "tickflow":
+        from app.data_providers import custom as custom_sources
+        if custom_sources.provider_has_dataset(provider_name, "minute"):
+            return {
+                "available": True, "source": "custom_minute", "max_symbols": 100,
+                "reason": "使用已配置的分钟数据插件",
+            }
+    if capset is None:
+        return {
+            "available": False, "source": None, "max_symbols": 0,
+            "reason": "需要分钟 K 或日内分时数据权限",
+        }
+    for cap, source in (
+        (Cap.INTRADAY_BATCH, "intraday_batch"),
+        (Cap.KLINE_MINUTE_BATCH, "minute_batch"),
+    ):
+        if capset.has(cap):
+            limits = capset.limits(cap)
+            return {
+                "available": True, "source": source,
+                "max_symbols": max(1, int(limits.batch or 100)) if limits else 100,
+                "reason": "日内分时数据可用" if cap == Cap.INTRADAY_BATCH else "分钟 K 数据可用",
+            }
+    for cap, source in (
+        (Cap.INTRADAY, "intraday_single"),
+        (Cap.KLINE_MINUTE_BY_SYMBOL, "minute_single"),
+    ):
+        if capset.has(cap):
+            return {
+                "available": True, "source": source, "max_symbols": 1,
+                "reason": "当前权限仅支持单标的分时监控",
+            }
+    return {
+        "available": False, "source": None, "max_symbols": 0,
+        "reason": "需要分钟 K 或日内分时数据权限",
+    }
+
+
+def _normalize_intraday_raw(raw, default_symbol: str | None = None) -> list[pl.DataFrame]:
+    frames: list[pl.DataFrame] = []
+    if isinstance(raw, dict):
+        for symbol, sub in raw.items():
+            if sub is not None and len(sub) > 0:
+                frames.append(_normalize_minute(sub, default_symbol=str(symbol)))
+    elif raw is not None and len(raw) > 0:
+        frames.append(_normalize_minute(raw, default_symbol=default_symbol))
+    return [frame for frame in frames if not frame.is_empty()]
+
+
+def fetch_intraday_monitor_batch(
+    symbols: list[str], capset: CapabilitySet | None, *, now: datetime | None = None,
+) -> pl.DataFrame:
+    """按当前能力获取分时信号所需的当日分钟数据，不落盘。"""
+    if not symbols:
+        return pl.DataFrame()
+    support = intraday_monitor_support(capset)
+    if not support["available"] or len(symbols) > int(support["max_symbols"]):
+        return pl.DataFrame()
+
+    now = now or cn_now()
+    start_time = now.replace(hour=9, minute=25, second=0, microsecond=0)
+    source = support["source"]
+    if source in {"custom_minute", "minute_batch"}:
+        limits = capset.limits(Cap.KLINE_MINUTE_BATCH) if capset and capset.has(Cap.KLINE_MINUTE_BATCH) else None
+        return sync_minute_batch(
+            symbols, start_time=start_time, end_time=now,
+            batch_size=limits.batch if limits else None,
+            rpm=limits.rpm if limits else None,
+        )
+
+    tf = get_client()
+    frames: list[pl.DataFrame] = []
+    try:
+        if source == "intraday_batch":
+            limits = capset.limits(Cap.INTRADAY_BATCH) if capset else None
+            raw = tf.klines.intraday_batch(
+                symbols, count=300, as_dataframe=True, show_progress=False,
+                batch_size=limits.batch if limits and limits.batch else 100,
+            )
+            frames.extend(_normalize_intraday_raw(raw))
+        elif source == "intraday_single":
+            raw = tf.klines.intraday(symbols[0], count=300, as_dataframe=True)
+            frames.extend(_normalize_intraday_raw(raw, default_symbol=symbols[0]))
+        elif source == "minute_single":
+            raw = tf.klines.get(symbols[0], period="1m", count=300, as_dataframe=True)
+            frames.extend(_normalize_intraday_raw(raw, default_symbol=symbols[0]))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("intraday monitor fetch failed (%s, %d symbols): %s", source, len(symbols), e)
+        return pl.DataFrame()
+    return pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
 
 
 def fetch_minute_single(symbol: str, trade_date: date) -> pl.DataFrame:
