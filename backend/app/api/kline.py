@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import date, timedelta
 from typing import Optional
 
@@ -9,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.indicators.pipeline import compute_enriched, compute_enriched_single
 from app.market_time import cn_now, cn_today
+from app.price_limits import is_risk_warning_name, price_limit_pct
 from app.services import kline_sync
 
 logger = logging.getLogger(__name__)
@@ -131,6 +133,67 @@ def _get_asset_info(repo, symbol: str, asset_type: str) -> dict:
         return {"name": hit["name"][0]}
     except Exception:
         return {}
+
+
+def _get_price_limit_info(
+    repo,
+    symbol: str,
+    trade_date: date,
+    asset_type: str,
+    instrument_name: str | None,
+) -> dict | None:
+    """Return the date-aware limit rule and today's authoritative prices."""
+    if asset_type == "index":
+        return None
+
+    info = {
+        "rate": price_limit_pct(
+            symbol,
+            trade_date,
+            is_risk_warning=(
+                asset_type == "stock" and is_risk_warning_name(instrument_name)
+            ),
+        ),
+        "limit_up": None,
+        "limit_down": None,
+        "source": "rule",
+    }
+    if trade_date != cn_today():
+        return info
+
+    try:
+        import polars as pl
+
+        instruments = repo.get_instruments_asset(asset_type)
+        available = [
+            column
+            for column in ("symbol", "limit_up", "limit_down")
+            if column in instruments.columns
+        ]
+        if "symbol" not in available or len(available) == 1:
+            return info
+        hit = instruments.filter(pl.col("symbol") == symbol).select(available).head(1)
+        row = hit.to_dicts()[0] if not hit.is_empty() else None
+    except Exception:
+        return info
+    if row is None:
+        return info
+
+    has_authoritative_price = False
+    for field in ("limit_up", "limit_down"):
+        value = row.get(field)
+        if value is None:
+            continue
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(numeric) and 0 < numeric < 10_000:
+            info[field] = numeric
+            has_authoritative_price = True
+    if has_authoritative_price:
+        info["source"] = "instrument"
+    return info
 
 
 @router.get("/daily")
@@ -532,11 +595,18 @@ def get_minute(
         # 本地无任何分钟K，尝试从 TickFlow 拉取当天
         trade_date = cn_today()
         df = kline_sync.fetch_minute_single(symbol, trade_date)
+        price_limit = _get_price_limit_info(
+            repo, symbol, trade_date, asset_type, stock_name,
+        )
         return {
             "symbol": symbol, "name": stock_name, "stock_info": stock_info,
             "date": str(trade_date), "rows": df.to_dicts(), "source": "live",
+            "price_limit": price_limit,
         }
 
+    price_limit = _get_price_limit_info(
+        repo, symbol, trade_date, asset_type, stock_name,
+    )
     df = repo.get_minute(symbol, trade_date, asset_type=asset_type)
 
     # 完整交易日应有 240 条分钟K；如果是今天(盘中)，期望条数按已交易分钟估算
@@ -562,6 +632,7 @@ def get_minute(
         return {
             "symbol": symbol, "name": stock_name, "stock_info": stock_info,
             "date": str(trade_date), "rows": df.to_dicts(), "source": "local",
+            "price_limit": price_limit,
         }
 
     # 本地不完整或无数据 → 从 TickFlow 实时拉取
@@ -570,6 +641,7 @@ def get_minute(
         "symbol": symbol, "name": stock_name, "stock_info": stock_info,
         "date": str(trade_date), "rows": live_df.to_dicts(),
         "source": "live" if not live_df.is_empty() else "none",
+        "price_limit": price_limit,
     }
 
 
@@ -1013,4 +1085,3 @@ async def rebuild_enriched(request: Request):
 # 长时间任务专用线程池（隔离于 FastAPI 默认线程池，防止阻塞请求处理）
 import concurrent.futures as _cf
 _long_task_executor = _cf.ThreadPoolExecutor(max_workers=2, thread_name_prefix="long-task")
-

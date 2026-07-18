@@ -118,6 +118,15 @@ export interface FinancialCashFlowRecord {
   [key: string]: any
 }
 
+export interface FinancialSharesRecord {
+  symbol?: string
+  period_end: string
+  announce_date?: string | null
+  total_shares?: number | null
+  float_shares?: number | null
+  [key: string]: any
+}
+
 /** AI 财务分析历史报告 */
 export interface AiFinancialReport {
   id: string
@@ -183,6 +192,13 @@ export interface MinuteKlineRow {
   close: number
   volume: number
   amount: number
+}
+
+export interface PriceLimitInfo {
+  rate: number
+  limit_up: number | null
+  limit_down: number | null
+  source: 'rule' | 'instrument'
 }
 
 export interface KlineRow {
@@ -1250,6 +1266,7 @@ export const api = {
       date: string | null
       rows: MinuteKlineRow[]
       source?: 'local' | 'live' | 'none'
+      price_limit?: PriceLimitInfo | null
     }>(
       `/api/kline/minute?symbol=${encodeURIComponent(symbol)}${date ? `&date=${date}` : ''}`,
     ),
@@ -1663,6 +1680,11 @@ export const api = {
   financialCashFlow: (symbol?: string) =>
     request<{ data: FinancialCashFlowRecord[] }>(
       `/api/financials/cash-flow${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ''}`,
+    ),
+
+  financialShares: (symbol?: string) =>
+    request<{ data: FinancialSharesRecord[] }>(
+      `/api/financials/shares${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ''}`,
     ),
 
   /** 触发财务数据同步(后台异步执行,接口立即返回 started 状态) */

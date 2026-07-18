@@ -1394,7 +1394,16 @@ class QuoteService:
                         pass
                 instruments = self._repo.get_instruments() if asset_type == "stock" else None
 
-                enriched_full = compute_enriched(full_df, factors=factors, instruments=instruments)
+                enriched_full = compute_enriched(
+                    full_df,
+                    factors=factors,
+                    instruments=instruments,
+                    historical_shares=(
+                        self._repo.get_historical_shares()
+                        if asset_type == "stock"
+                        else None
+                    ),
+                )
                 enriched_today = enriched_full.filter(pl.col("date") == today)
 
             if enriched_today.is_empty():

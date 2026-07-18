@@ -332,7 +332,6 @@ export function Indices() {
                         height={620}
                         prevClose={prevClose}
                         date={selectedDate ?? undefined}
-                        symbol={selectedSymbol}
                         showLimitLines={false}
                         showAvgLine={false}
                         onPriceHover={setLinkedPrice}

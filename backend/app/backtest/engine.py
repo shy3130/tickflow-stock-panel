@@ -354,6 +354,11 @@ class BacktestEngine:
                 needed={"signal_limit_up", "signal_limit_down"}
                 if matrix_native
                 else set(feature_plan.signal_columns),
+                historical_shares=(
+                    self.repo.get_historical_shares()
+                    if asset_type == "stock" and self.repo is not None
+                    else None
+                ),
             )
             join_cols = ["symbol"] if "symbol" in instruments.columns else []
             join_cols.extend(
