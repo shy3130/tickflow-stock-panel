@@ -22,6 +22,7 @@
 
 ## 实现要点
 - `resolve_limit(..., apply_safety=True)` 默认对 rpm 做 `floor(rpm * 0.8)`。
-- `sleep_between_batches`：`index=0` 只占槽不 sleep（首批突发行为已有测试文档化）；后续 batch 按槽位等待。
+- `sleep_between_batches`：`index=0` 只占槽不 sleep（首批突发；**并发多个 index=0 仍可能超 rpm**）；后续 batch 按槽位等待。
+- Phase 1 / Stage A：**不要并发**启动多个 probe 或大批量 sync。
 - 诊断可传 `apply_safety=False`；跨容器账户预算需另设（Stage A 不做）。
 - 任一 429 / fallback 应记入证据链，禁止静默混源。

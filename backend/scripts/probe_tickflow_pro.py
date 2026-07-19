@@ -15,6 +15,7 @@ import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -30,6 +31,19 @@ class ProbeGate:
     has_key: bool
     allowed: bool
     reason: str
+
+
+class _KlinesNS(Protocol):
+    def batch(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
+class _QuotesNS(Protocol):
+    def get(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
+class TickFlowLike(Protocol):
+    klines: _KlinesNS
+    quotes: _QuotesNS
 
 
 def evaluate_gate(*, dry_run: bool, force: bool, has_key: bool, now: datetime | None = None) -> ProbeGate:
@@ -68,6 +82,15 @@ def _sanitize_sample(obj: object) -> object:
     return obj
 
 
+def _to_sample(raw: object) -> object:
+    if hasattr(raw, "to_dict"):
+        try:
+            return _sanitize_sample(raw.to_dict())  # type: ignore[attr-defined]
+        except Exception:
+            pass
+    return _sanitize_sample(raw)
+
+
 def run_dry_run(out_dir: Path) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     report = {
@@ -75,69 +98,87 @@ def run_dry_run(out_dir: Path) -> dict:
         "as_of": datetime.now(SHANGHAI).isoformat(timespec="seconds"),
         "symbols": list(GOLDEN),
         "planned_checks": [
-            "quote.batch",
-            "kline.daily.batch",
-            "kline.minute.by_symbol",
-            "adj_factor",
+            "quotes.get",
+            "klines.batch(period=1d)",
+            "klines.batch(period=1m)",
+            "klines.ex_factors",
             "rate_limit_observation",
         ],
         "safety": {
             "SAFETY_RPM_FACTOR": 0.8,
             "offpeak_hour": OFFPEAK_HOUR,
-            "note": "Live probe must not overlap Gold Stage A peak window without --force.",
+            "note": (
+                "Dry-run only validates CLI gates/plan. "
+                "Live probe must not overlap Gold Stage A peak window without --force. "
+                "Do not start multiple Phase 1 probe/sync processes concurrently."
+            ),
         },
-        "status": "READY_FOR_LIVE",
+        # Gate-only success; does not prove SDK methods, network, or auth.
+        "status": "DRY_RUN_OK",
     }
     (out_dir / "probe_summary.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     (out_dir / "probe_summary.md").write_text(
         "# TickFlow Pro probe (dry-run)\n\n"
         f"- as_of: {report['as_of']}\n"
         f"- symbols: {', '.join(GOLDEN)}\n"
-        "- status: READY_FOR_LIVE\n"
+        "- status: DRY_RUN_OK (gates/plan only; not a live contract proof)\n"
         f"- live command: `TICKFLOW_API_KEY=... python scripts/probe_tickflow_pro.py --live` "
         f"(after {OFFPEAK_HOUR}:00 or with --force)\n"
     )
     return report
 
 
-def run_live(out_dir: Path) -> dict:
-    """Minimal live smoke: capability detect + one daily pull for golden symbols."""
+def run_live(
+    out_dir: Path,
+    *,
+    client: TickFlowLike | None = None,
+    endpoint: str | None = None,
+) -> dict:
+    """Minimal live smoke: daily klines.batch + quotes.get for golden symbols.
+
+    Pass ``client`` in tests (fake SDK). Production path builds TickFlow from env key.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
-    # Prefer env for one-shot CLI; secrets_store if app context available.
-    key = os.environ.get("TICKFLOW_API_KEY", "").strip()
-    if not key:
-        try:
-            from app.secrets_store import get_tickflow_key  # type: ignore
 
-            key = (get_tickflow_key() or "").strip()
-        except Exception:
-            key = ""
-    if not key:
-        raise SystemExit("missing TICKFLOW_API_KEY")
-
-    from tickflow import TickFlow
-
-    from app.tickflow.client import PAID_ENDPOINT, _base_url
     from app.tickflow.rate_limits import SAFETY_RPM_FACTOR, apply_safety_rpm
 
-    base = _base_url() or PAID_ENDPOINT
-    tf = TickFlow(api_key=key, base_url=base)
+    if client is not None:
+        # Test/injection path: do not import app.tickflow.client (pulls tickflow SDK).
+        base = endpoint or "https://api.tickflow.org"
+        tf = client
+    else:
+        key = os.environ.get("TICKFLOW_API_KEY", "").strip()
+        if not key:
+            try:
+                from app.secrets_store import get_tickflow_key  # type: ignore
+
+                key = (get_tickflow_key() or "").strip()
+            except Exception:
+                key = ""
+        if not key:
+            raise SystemExit("missing TICKFLOW_API_KEY")
+
+        from tickflow import TickFlow
+
+        from app.tickflow.client import PAID_ENDPOINT, _base_url
+
+        base = endpoint or (_base_url() or PAID_ENDPOINT)
+        tf = TickFlow(api_key=key, base_url=base)
+
     samples: dict[str, object] = {}
     errors: list[str] = []
 
-    # daily batch for 3 symbols — do not log key
     try:
-        raw = tf.kline.daily(symbols=list(GOLDEN), limit=5)  # type: ignore[attr-defined]
-        samples["kline.daily"] = _sanitize_sample(raw if not hasattr(raw, "to_dict") else raw.to_dict())
+        raw = tf.klines.batch(list(GOLDEN), period="1d", count=5, as_dataframe=False)
+        samples["klines.batch.1d"] = _to_sample(raw)
     except Exception as exc:  # noqa: BLE001
-        errors.append(f"kline.daily: {type(exc).__name__}")
+        errors.append(f"klines.batch.1d: {type(exc).__name__}")
 
     try:
-        raw = tf.quote.get(symbols=list(GOLDEN))  # type: ignore[attr-defined]
-        samples["quote"] = _sanitize_sample(raw if not hasattr(raw, "to_dict") else raw.to_dict())
+        raw = tf.quotes.get(symbols=list(GOLDEN), as_dataframe=False)
+        samples["quotes.get"] = _to_sample(raw)
     except Exception as exc:  # noqa: BLE001
-        # SDK surface varies; record type only
-        errors.append(f"quote: {type(exc).__name__}: try alternate API in follow-up")
+        errors.append(f"quotes.get: {type(exc).__name__}")
 
     report = {
         "mode": "live",
@@ -185,7 +226,6 @@ def main(argv: list[str] | None = None) -> int:
     if dry_run:
         report = run_dry_run(out_dir)
     else:
-        # Ensure app imports resolve when run as script
         root = _repo_root() / "backend"
         if str(root) not in sys.path:
             sys.path.insert(0, str(root))

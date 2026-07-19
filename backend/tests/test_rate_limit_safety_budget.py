@@ -37,7 +37,11 @@ def test_resolve_limit_can_skip_safety_for_diagnostics() -> None:
 
 
 def test_two_first_batches_do_not_wait_even_when_slot_reserved() -> None:
-    """Documents current behavior called out in Codex critique (first-batch burst)."""
+    """Known limitation: concurrent/serial index=0 calls do not sleep (first-batch burst).
+
+    Comments document that aggregate rpm is therefore not guaranteed when many
+    pipelines start with index=0; Phase 1 must avoid concurrent probe/sync.
+    """
     with _slot_lock:
         _next_slot.clear()
     t0 = time.perf_counter()

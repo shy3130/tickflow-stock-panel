@@ -9,9 +9,13 @@ cd backend
 python3 scripts/probe_tickflow_pro.py
 ```
 
-Writes sanitized plan under `reports/tickflow_pro_probe/<timestamp>/`.
+Writes sanitized plan under `reports/tickflow_pro_probe/<timestamp>/` with status `DRY_RUN_OK`
+(gates/plan only — not proof of SDK methods, network, or auth).
 
 ## Live probe (off-peak)
+
+Uses real SDK namespaces aligned with the app: `tf.klines.batch` and `tf.quotes.get`.
+Do not start multiple Phase 1 probe/sync processes concurrently.
 
 Requirements:
 
