@@ -1,12 +1,12 @@
-# TickFlow Pro 共享限频（Gold Shadow + A 股研究）
+# TickFlow Pro 限频安全预算（进程内 + 跨产品错峰）
 
-## 决策
-- 同一 TickFlow API Key 的所有调用方必须共享进程级限频器：`backend/app/tickflow/rate_limits.py`。
-- 项目安全预算 = 套餐额度 × **80%**（见 `tiers.yaml` 的 `pro` 段）。
-- Gold Shadow Stage A 与 A 股同步/回测**不得**各建一套限频，避免叠加超限。
+## 决策（经 ChatGPT/Codex 评析修订）
+- `backend/app/tickflow/rate_limits.py` 提供**单 Python 进程内**的 rpm 槽位限速与 `SAFETY_RPM_FACTOR=0.8`。
+- **不要**把「各进程各扣 80%」当成账户级共享限频：Gold Shadow 容器与 A 股面板进程状态独立，理论聚合可达 160%。
+- Stage A 期间跨产品靠**错峰**，不在 Gold 上部署分布式限频重构。
 
-## 预算表示例（Pro）
-| capability | 套餐 rpm | 80% 预算 |
+## 预算表示例（Pro，单进程 80%）
+| capability | 套餐 rpm | 进程内 80% |
 |---|---:|---:|
 | quote.batch | 120 | 96 |
 | quote.pool | 60 | 48 |
@@ -15,12 +15,13 @@
 | depth5.batch | 30 | 24 |
 | adj_factor | 60 | 48 |
 
-## 错峰
-- 盘中（A 股交易时段）：优先保证 Gold Shadow 观察与 legacy 监控。
-- 盘后：A 股日线/研究批量、分钟按需回填。
+## 错峰（Stage A）
+- 盘中：优先 Gold Shadow 观察与 legacy `gold-monitor`。
+- A 股 Pro 探测/大批量同步：建议 **16:00 后**。
 - 禁止全市场一年分钟一次性回填。
 
 ## 实现要点
-- 调用方只传 `rpm`/`batch`，统一走 `sleep_between_batches` / `_reserve_slot`。
-- 应用 80% 预算：在 resolve 后对 rpm 做 `floor(rpm * 0.8)`（后续 Phase 实现，Phase 0 仅冻结约定）。
-- 任一 fallback / 429 必须写入 DatasetEvidence，禁止静默混源。
+- `resolve_limit(..., apply_safety=True)` 默认对 rpm 做 `floor(rpm * 0.8)`。
+- `sleep_between_batches`：`index=0` 只占槽不 sleep（首批突发行为已有测试文档化）；后续 batch 按槽位等待。
+- 诊断可传 `apply_safety=False`；跨容器账户预算需另设（Stage A 不做）。
+- 任一 429 / fallback 应记入证据链，禁止静默混源。
