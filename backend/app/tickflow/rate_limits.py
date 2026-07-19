@@ -14,6 +14,12 @@ from app.tickflow.capabilities import Cap, CapabilitySet
 
 T = TypeVar("T")
 
+# TickFlow Pro 单进程安全预算: 套餐标称 rpm 的 80%。
+# 注意: _next_slot 仅在本 Python 进程内共享, 不能跨 Gold 容器与 A 股面板进程。
+# Stage A 期间跨产品靠错峰(盘中 Gold 优先, A 股 Pro 批处理建议 16:00 后),
+# 不要把「各进程各扣 80%」误当成账户级共享限频。
+SAFETY_RPM_FACTOR = 0.8
+
 # 进程级共享限速器: 原先每个调用方各自本地 sleep(60/rpm), 并发同步 (kline/index/
 # depth/watchlist/custom) 时聚合请求速率会成倍超过单能力 rpm → 429。
 # 这里用一张按 rpm 分桶的「下一个可用时刻」表 (Lock 守护), 所有调用方按同一时间轴
@@ -21,6 +27,13 @@ T = TypeVar("T")
 # rpm 是各能力速率的代理); 恰好同 rpm 的不同能力会共享一队, 偏保守但绝不超速。
 _slot_lock = threading.Lock()
 _next_slot: dict[int, float] = {}
+
+
+def apply_safety_rpm(rpm: int | None, *, factor: float = SAFETY_RPM_FACTOR) -> int | None:
+    """Scale a package rpm by the shared safety factor (default 80%)."""
+    if rpm is None or rpm <= 0:
+        return rpm
+    return max(1, int(rpm * factor))
 
 
 def _reserve_slot(rpm: int, interval: float) -> float:
@@ -50,14 +63,26 @@ def resolve_limit(
     default_batch: int | None = None,
     default_rpm: int | None = None,
     default_rpm_when_unset: bool = True,
+    apply_safety: bool = True,
 ) -> ResolvedLimit:
-    """Return a capability's batch/rpm with caller-provided fallbacks."""
+    """Return a capability's batch/rpm with caller-provided fallbacks.
+
+    By default rpm is scaled by SAFETY_RPM_FACTOR (0.8) inside this process only.
+    This is not a cross-container account budget. Pass apply_safety=False for diagnostics.
+    """
     lim = capset.limits(cap)
     if lim is None:
-        return ResolvedLimit(batch=default_batch, rpm=default_rpm)
+        rpm = default_rpm
+    else:
+        rpm = lim.rpm if lim.rpm else (default_rpm if default_rpm_when_unset else None)
+        default_batch = lim.batch if lim.batch else default_batch
+    if apply_safety:
+        rpm = apply_safety_rpm(rpm)
+    if lim is None:
+        return ResolvedLimit(batch=default_batch, rpm=rpm)
     return ResolvedLimit(
-        batch=lim.batch if lim.batch else default_batch,
-        rpm=lim.rpm if lim.rpm else (default_rpm if default_rpm_when_unset else None),
+        batch=default_batch,
+        rpm=rpm,
     )
 
 
