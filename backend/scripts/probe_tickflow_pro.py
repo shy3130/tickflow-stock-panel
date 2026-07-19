@@ -176,28 +176,6 @@ def main(argv: list[str] | None = None) -> int:
     dry_run = not args.live
     has_key = bool(os.environ.get("TICKFLOW_API_KEY", "").strip())
     gate = evaluate_gate(dry_run=dry_run, force=args.force, has_key=has_key)
-    # #region agent log
-    try:
-        _dbg = Path(__file__).resolve().parents[2] / ".cursor" / "debug-976372.log"
-        _dbg.parent.mkdir(parents=True, exist_ok=True)
-        _dbg.open("a").write(
-            json.dumps(
-                {
-                    "sessionId": "976372",
-                    "runId": "phase1-scaffold",
-                    "hypothesisId": "H1",
-                    "location": "probe_tickflow_pro.py:main",
-                    "message": "probe gate decision",
-                    "data": asdict(gate),
-                    "timestamp": int(datetime.now(SHANGHAI).timestamp() * 1000),
-                },
-                ensure_ascii=False,
-            )
-            + "\n"
-        )
-    except Exception:
-        pass
-    # #endregion
     print(json.dumps(asdict(gate), ensure_ascii=False))
     if not gate.allowed:
         return 2
