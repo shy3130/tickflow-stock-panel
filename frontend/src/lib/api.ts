@@ -821,6 +821,8 @@ export interface DatasetConfig {
   symbols_param?: string
   start_param?: string
   end_param?: string
+  asset_type_param?: string | null
+  freq_param?: string | null
 }
 
 export interface AuthConfig {

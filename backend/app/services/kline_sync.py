@@ -733,13 +733,14 @@ def sync_minute_batch(
 def intraday_monitor_support(capset: CapabilitySet | None) -> dict[str, object]:
     """返回分时信号监控可用的数据能力和单轮标的上限。"""
     provider_name = preferences.get_minute_data_provider()
-    if provider_name != "tickflow":
-        from app.data_providers import custom as custom_sources
-        if custom_sources.provider_has_dataset(provider_name, "minute"):
-            return {
-                "available": True, "source": "custom_minute", "max_symbols": 100,
-                "reason": "使用已配置的分钟数据插件",
-            }
+    _, fallback, error = _resolve_minute_provider(provider_name)
+    if not fallback:
+        return {
+            "available": True, "source": "custom_minute", "max_symbols": 100,
+            "reason": "使用已配置的分钟数据插件",
+        }
+    if error is not None:
+        logger.warning("minute provider resolution failed while checking monitor support: %s", error)
     if capset is None:
         return {
             "available": False, "source": None, "max_symbols": 0,

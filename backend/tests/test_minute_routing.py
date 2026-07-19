@@ -639,3 +639,44 @@ def test_resolve_minute_provider_success_returns_provider(monkeypatch):
     assert provider is mock_provider
     assert fallback is False
     assert err is None
+
+
+def test_minute_allowed_resolver_exception_returns_false(monkeypatch):
+    """权限入口复用安全 resolver, 插件注册异常不再穿透为 500。"""
+    from app.api import kline as kline_api
+    from app.tickflow.capabilities import CapabilitySet
+
+    monkeypatch.setattr(
+        "app.services.preferences.get_minute_data_provider",
+        lambda: "broken",
+    )
+
+    def _raising(name, dataset):
+        raise RuntimeError("registry corrupted")
+
+    monkeypatch.setattr("app.data_providers.custom.provider_has_dataset", _raising)
+
+    assert kline_api._minute_allowed(CapabilitySet()) is False
+
+
+def test_intraday_monitor_support_resolver_exception_falls_back(monkeypatch):
+    """监控入口解析自定义源失败后继续按 TickFlow 能力判断。"""
+    from app.tickflow.capabilities import Cap, CapabilitySet
+
+    monkeypatch.setattr(
+        kline_sync.preferences,
+        "get_minute_data_provider",
+        lambda: "broken",
+    )
+
+    def _raising(name, dataset):
+        raise RuntimeError("registry corrupted")
+
+    monkeypatch.setattr("app.data_providers.custom.provider_has_dataset", _raising)
+    capset = CapabilitySet()
+    capset.grant(Cap.KLINE_MINUTE_BATCH)
+
+    support = kline_sync.intraday_monitor_support(capset)
+
+    assert support["available"] is True
+    assert support["source"] == "minute_batch"

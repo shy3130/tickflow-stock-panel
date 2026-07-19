@@ -25,10 +25,10 @@ def _minute_allowed(capset) -> bool:
         return True
     from app.services import preferences
     provider = preferences.get_minute_data_provider()
-    if provider == "tickflow":
-        return False
-    from app.data_providers import custom as custom_sources
-    return custom_sources.provider_has_dataset(provider, "minute")
+    _, fallback, error = kline_sync._resolve_minute_provider(provider)
+    if error is not None:
+        logger.warning("minute provider resolution failed while checking access: %s", error)
+    return not fallback
 
 
 @router.get("/instruments/search")
