@@ -192,6 +192,15 @@ export function Screener() {
     },
   })
 
+  // 防止 reload / auto-run / StrictMode 叠出并发 run_all（后端 Numba 会崩溃）
+  const requestRunAll = useCallback((
+    vars: { date?: string; strategyIds?: string[] } = {},
+    options?: Parameters<typeof runAll.mutate>[1],
+  ) => {
+    if (runAll.isPending) return
+    runAll.mutate(vars, options)
+  }, [runAll])
+
   const applyRunAllResult = useCallback((strategyId: string, date: string, data = runAll.data) => {
     const cached = data?.results?.[strategyId]
     if (!cached || cached.as_of !== date) return false
@@ -417,12 +426,12 @@ export function Screener() {
     // 未覆盖: 受系统开关控制
     if (!screenerAutoRun) return
     runAllDateRef.current = runKey
-    runAll.mutate({ date: asOf }, {
+    requestRunAll({ date: asOf }, {
       onSuccess: (data) => {
         if (activeStrategy) applyRunAllResult(activeStrategy, asOf, data)
       },
     })
-  }, [asOf, strategies.data, visiblePool, extColumnsParam, cacheCoversPool, screenerAutoRun, activeStrategy, applyRunAllResult])
+  }, [asOf, strategies.data, visiblePool, extColumnsParam, cacheCoversPool, screenerAutoRun, activeStrategy, applyRunAllResult, requestRunAll, runAll.isPending, assetType])
 
   const qc = useQueryClient()
 
@@ -473,7 +482,7 @@ export function Screener() {
   const handleDateChange = (newDate: string) => {
     setAsOf(newDate)
     runAllDateRef.current = `${newDate}|${visiblePool.join(',')}|${extColumnsParam}`
-    runAll.mutate({ date: newDate }, {
+    requestRunAll({ date: newDate }, {
       onSuccess: (data) => {
         if (activeStrategy) applyRunAllResult(activeStrategy, newDate, data)
       },
@@ -513,7 +522,7 @@ export function Screener() {
     mutationFn: api.strategyReload,
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['screener-strategies'] })
-      if (asOf) runAll.mutate({ date: asOf })
+      if (asOf) requestRunAll({ date: asOf })
     },
   })
 
@@ -971,7 +980,7 @@ export function Screener() {
             reorderPool(newPool)
             if (asOf) {
               runAllDateRef.current = ''
-              runAll.mutate({ date: asOf, strategyIds: newPool })
+              requestRunAll({ date: asOf, strategyIds: newPool })
             }
           }}
           onClose={() => setShowPoolDialog(false)}
