@@ -1893,6 +1893,24 @@ class KlineRepository:
                 )
             self._atomic_write_parquet(date_df.sort(["symbol", "date"]), out)
 
+    def _with_instrument_metadata(self, asset_type: str, df: pl.DataFrame) -> pl.DataFrame:
+        """补齐实时内存缓存所需的维表字段；这些字段不会写入 enriched 分区。"""
+        if asset_type not in {"stock", "etf"} or df.is_empty():
+            return df
+        instruments = self.get_instruments_asset(asset_type)
+        if instruments.is_empty() or "symbol" not in instruments.columns:
+            return df
+        metadata_cols = [
+            c for c in ("name", "total_shares", "float_shares")
+            if c in instruments.columns and c not in df.columns
+        ]
+        if not metadata_cols:
+            return df
+        metadata = instruments.select(["symbol", *metadata_cols]).unique(
+            subset=["symbol"], keep="last",
+        )
+        return df.join(metadata, on="symbol", how="left")
+
     def merge_live_enriched_asset(self, asset_type: str, df: pl.DataFrame) -> None:
         """按 symbol 合并当天 enriched 分区和内存缓存。用于少量自选实时。"""
         if df.is_empty() or "date" not in df.columns:
@@ -1910,9 +1928,10 @@ class KlineRepository:
         else:
             return
 
-        merged_cache = df
+        cache_df = self._with_instrument_metadata(asset_type, df)
+        merged_cache = cache_df
         if existing_cache is not None and not existing_cache.is_empty():
-            merged_cache = pl.concat([existing_cache, df], how="diagonal_relaxed").unique(
+            merged_cache = pl.concat([existing_cache, cache_df], how="diagonal_relaxed").unique(
                 subset=["symbol", "date"], keep="last"
             )
         merged_cache = merged_cache.sort(["symbol"])
@@ -1977,12 +1996,13 @@ class KlineRepository:
         if df.is_empty() or "date" not in df.columns:
             return
         dt = df["date"][0]
+        cache_df = self._with_instrument_metadata(asset_type, df).sort(["symbol"])
         if asset_type == "stock":
-            self._enriched_cache = df.sort(["symbol"])
+            self._enriched_cache = cache_df
             self._enriched_cache_date = dt
             table = "kline_daily_enriched"
         elif asset_type == "etf":
-            self._etf_enriched_cache = df.sort(["symbol"])
+            self._etf_enriched_cache = cache_df
             self._etf_enriched_cache_date = dt
             table = "kline_etf_enriched"
         elif asset_type == "index":
