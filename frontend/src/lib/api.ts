@@ -300,6 +300,25 @@ export interface ScreenerResult {
   elapsed_ms: number
 }
 
+export interface ScreenerResultSummary {
+  total: number
+  as_of: string
+}
+
+export interface ScreenerCachedSummary {
+  as_of: string | null
+  results: Record<string, ScreenerResultSummary>
+  today_ever_counts: Record<string, number>
+  updated_at: number | null
+}
+
+export interface ScreenerCachedResult {
+  result: ScreenerResult | null
+  today_ever_rows: Record<string, any> | null
+  strategy_ids_by_symbol: Record<string, string[]>
+  updated_at: number | null
+}
+
 export interface MarketSnapshotRow {
   symbol: string
   name?: string | null
@@ -1399,9 +1418,17 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ conditions, order_by: orderBy, limit, pool, ext_columns: extColumns || null, asset_type: assetType }),
     }),
-  screenerRunAll: (asOf?: string, strategyIds?: string[], extColumns?: string, assetType: 'stock' | 'etf' = 'stock') =>
-    request<{ as_of: string | null; results: Record<string, { total: number; as_of: string; rows: any[] }> }>(
-      '/api/screener/run_all', { method: 'POST', body: JSON.stringify({ as_of: asOf ?? null, strategy_ids: strategyIds ?? null, ext_columns: extColumns || null, asset_type: assetType, timeframe: '1d' }) },
+  screenerRunAll: (asOf?: string, strategyIds?: string[], assetType: 'stock' | 'etf' = 'stock') =>
+    request<{ as_of: string | null; results: Record<string, ScreenerResultSummary> }>(
+      '/api/screener/run_all', { method: 'POST', body: JSON.stringify({ as_of: asOf ?? null, strategy_ids: strategyIds ?? null, asset_type: assetType, timeframe: '1d', summary_only: true }) },
+    ),
+  screenerCachedSummary: () =>
+    request<ScreenerCachedSummary>('/api/screener/cached-summary'),
+  screenerCachedResult: (strategyId: string, extColumns?: string) =>
+    request<ScreenerCachedResult>(
+      extColumns
+        ? `/api/screener/cached-result/${encodeURIComponent(strategyId)}?ext_columns=${encodeURIComponent(extColumns)}`
+        : `/api/screener/cached-result/${encodeURIComponent(strategyId)}`,
     ),
   screenerCached: (extColumns?: string) =>
     request<{ as_of: string | null; results: Record<string, { total: number; as_of: string; rows: any[] }>; today_ever_matched: Record<string, string[]> | null; today_ever_rows: Record<string, Record<string, any>> | null; updated_at: number | null }>(
