@@ -842,6 +842,7 @@ export interface DatasetConfig {
   end_param?: string
   asset_type_param?: string | null
   freq_param?: string | null
+  timeout?: number | null
 }
 
 export interface AuthConfig {

@@ -373,6 +373,7 @@ class DatasetConfigIn(BaseModel):
     end_param: str = "end_time"
     asset_type_param: str | None = None
     freq_param: str | None = None
+    timeout: float | None = None
 
 
 class AuthConfigIn(BaseModel):
