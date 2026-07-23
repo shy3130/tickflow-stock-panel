@@ -290,6 +290,7 @@ def _config_to_dict(config: CustomSourceConfig) -> dict:
             "method": ds.method,
             **({"batch": ds.batch} if ds.batch is not None else {}),
             **({"rpm": ds.rpm} if ds.rpm is not None else {}),
+            **({"timeout": ds.timeout} if ds.timeout != 30.0 else {}),
             "response_path": ds.response_path,
             "field_map": dict(ds.field_map),
             **({"transforms": dict(ds.transforms)} if ds.transforms else {}),
@@ -380,6 +381,11 @@ def _sanitize_dataset(ds_cfg: dict) -> dict:
     if ds_cfg.get("rpm") is not None:
         try:
             out["rpm"] = int(ds_cfg["rpm"])
+        except (TypeError, ValueError):
+            pass
+    if ds_cfg.get("timeout") is not None:
+        try:
+            out["timeout"] = float(ds_cfg["timeout"])
         except (TypeError, ValueError):
             pass
     out["response_path"] = str(ds_cfg.get("response_path", "") or "")

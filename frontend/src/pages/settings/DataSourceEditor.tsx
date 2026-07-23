@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { KeyRound, Play, Plus, Save, Trash2, X, Zap, Check } from 'lucide-react'
+  import { KeyRound, Play, Plus, Save, Trash2, X, Zap, Check, ChevronDown } from 'lucide-react'
 import { api, type CustomSourceConfig, type DatasetConfig } from '@/lib/api'
 import { toast } from '@/components/Toast'
 
@@ -319,6 +319,8 @@ function DatasetDetail({
 }) {
   const enabled = !!cfg
   const [testSymbols, setTestSymbols] = useState('000001.SZ,600000.SH')
+  const [showParams, setShowParams] = useState(false)
+  const showTimeParams = datasetKey !== 'realtime'
   const test = useMutation({
     mutationFn: () => api.testDataSource(
       providerName,
@@ -368,7 +370,7 @@ function DatasetDetail({
               </Field>
             </div>
 
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
               <Field label="批量">
                 <input
                   value={cfg.batch ?? ''}
@@ -385,6 +387,16 @@ function DatasetDetail({
                   className={`${INPUT_CLS} w-full`}
                 />
               </Field>
+              <Field label="超时">
+                <input
+                  type="number"
+                  value={cfg.timeout ?? ''}
+                  onChange={e => onUpdate({ timeout: e.target.value ? Number(e.target.value) : null })}
+                  onWheel={e => e.currentTarget.blur()}
+                  placeholder="30"
+                  className={`${INPUT_CLS} w-full`}
+                />
+              </Field>
               <Field label="响应路径">
                 <input
                   value={cfg.response_path}
@@ -395,30 +407,91 @@ function DatasetDetail({
               </Field>
             </div>
 
-            {datasetKey === 'minute' && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <Field label="资产类型参数">
-                  <input
-                    value={cfg.asset_type_param ?? ''}
-                    onChange={e => onUpdate({ asset_type_param: e.target.value || null })}
-                    placeholder="asset_type"
-                    className={`${INPUT_CLS} w-full`}
-                  />
-                </Field>
-                <Field label="周期参数">
-                  <input
-                    value={cfg.freq_param ?? ''}
-                    onChange={e => onUpdate({ freq_param: e.target.value || null })}
-                    placeholder="period"
-                    className={`${INPUT_CLS} w-full`}
-                  />
-                </Field>
+            {/* 请求参数字段映射 — 折叠区 */}
+            <div>
+              <button
+                type="button"
+                onClick={() => setShowParams(v => !v)}
+                className="w-full flex items-center gap-1.5 mb-2"
+              >
+                <span className="text-[10px] uppercase tracking-widest text-muted">请求参数字段映射</span>
+                <ChevronDown className={`h-3 w-3 text-muted transition-transform ${showParams ? 'rotate-180' : ''}`} />
+              </button>
+              <div className="text-[10px] text-muted/50 mb-1.5">
+                改外部接口的参数名（留空用默认）
               </div>
-            )}
+              <AnimatePresence initial={false}>
+                {showParams && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.15 }}
+                    className="overflow-hidden"
+                  >
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+                      {showTimeParams && (
+                        <>
+                          <Field label="代码参数">
+                            <input
+                              value={cfg.symbols_param ?? ''}
+                              onChange={e => onUpdate({ symbols_param: e.target.value || undefined })}
+                              placeholder="symbols"
+                              className={`${INPUT_CLS} w-full`}
+                            />
+                          </Field>
+                          <Field label="起始时间参数">
+                            <input
+                              value={cfg.start_param ?? ''}
+                              onChange={e => onUpdate({ start_param: e.target.value || undefined })}
+                              placeholder="start_time"
+                              className={`${INPUT_CLS} w-full`}
+                            />
+                          </Field>
+                          <Field label="结束时间参数">
+                            <input
+                              value={cfg.end_param ?? ''}
+                              onChange={e => onUpdate({ end_param: e.target.value || undefined })}
+                              placeholder="end_time"
+                              className={`${INPUT_CLS} w-full`}
+                            />
+                          </Field>
+                        </>
+                      )}
+                      {datasetKey === 'minute' && (
+                        <>
+                          <Field label="资产类型参数">
+                            <input
+                              value={cfg.asset_type_param ?? ''}
+                              onChange={e => onUpdate({ asset_type_param: e.target.value || null })}
+                              placeholder="asset_type"
+                              className={`${INPUT_CLS} w-full`}
+                            />
+                          </Field>
+                          <Field label="周期参数">
+                            <input
+                              value={cfg.freq_param ?? ''}
+                              onChange={e => onUpdate({ freq_param: e.target.value || null })}
+                              placeholder="period"
+                              className={`${INPUT_CLS} w-full`}
+                            />
+                          </Field>
+                        </>
+                      )}
+                      {datasetKey === 'realtime' && (
+                        <div className="col-span-full text-[10px] text-muted/50">
+                          实时行情为全市场快照接口，不逐标的拉取，无需配置请求参数名。
+                        </div>
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
 
             <div>
               <div className="flex items-center justify-between mb-2">
-                <div className="text-[10px] uppercase tracking-widest text-muted">字段映射</div>
+                <div className="text-[10px] uppercase tracking-widest text-muted">响应参数字段映射</div>
                 <a
                   href="https://github.com/shy3130/tickflow-stock-panel/blob/main/docs/custom-data-source.md#用-ai-生成映射配置"
                   target="_blank"
