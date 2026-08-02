@@ -3,6 +3,7 @@ import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
 import type { MinuteKlineRow, PriceLimitInfo } from '@/lib/api'
 import { useChartTheme, type ChartTheme } from '@/lib/theme'
+import { intradayTimeLabel, intradayTimes } from '@/lib/intraday-market'
 
 type YMode = 'adaptive' | 'limit'
 
@@ -21,16 +22,10 @@ interface Props {
   prevClose?: number
   date?: string
   priceLimit?: PriceLimitInfo
+  symbol?: string
   onPriceHover?: (price: number | null) => void
   showLimitLines?: boolean
   showAvgLine?: boolean
-}
-
-function fmtTime(dt: string): string {
-  const match = dt.match(/(\d{2}):(\d{2})/)
-  if (!match) return dt.slice(11, 16)
-  const h = (parseInt(match[1]) + 8) % 24
-  return `${String(h).padStart(2, '0')}:${match[2]}`
 }
 
 function computeAvgPrice(data: MinuteKlineRow[]): number[] {
@@ -56,29 +51,6 @@ function isValidPrice(v: number | null | undefined): v is number {
   return typeof v === 'number' && Number.isFinite(v) && v > 0
 }
 
-/** 生成全天分时时间刻度 9:30 ~ 11:30, 13:00 ~ 15:00, 每分钟一个点 (共242个) */
-function generateFullDayTimes(): string[] {
-  const times: string[] = []
-  // 上午 9:30 ~ 11:30 (121 分钟)
-  for (let h = 9; h <= 11; h++) {
-    const startM = h === 9 ? 30 : 0
-    const endM = h === 11 ? 30 : 59
-    for (let m = startM; m <= endM; m++) {
-      times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`)
-    }
-  }
-  // 下午 13:00 ~ 15:00 (121 分钟)
-  for (let h = 13; h <= 15; h++) {
-    const endM = h === 15 ? 0 : 59
-    for (let m = 0; m <= endM; m++) {
-      times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`)
-    }
-  }
-  return times
-}
-
-const FULL_DAY_TIMES = generateFullDayTimes()
-
 /** 计算实际涨跌停价 (四舍五入到2位小数) 和实际涨跌停幅度 */
 function getLimitPrices(prevClose: number, priceLimit?: PriceLimitInfo): {
   limitUp: number      // 涨停价 (四舍五入)
@@ -101,18 +73,19 @@ function getLimitPrices(prevClose: number, priceLimit?: PriceLimitInfo): {
   return { limitUp, limitDown, upPct, downPct }
 }
 
-function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgPrices: number[], lineColor: string, areaColor: string, yMode: YMode, ct: ChartTheme, priceLimit?: PriceLimitInfo, showLimitLines = true, showAvgLine = true): EChartsOption {
+function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgPrices: number[], lineColor: string, areaColor: string, yMode: YMode, ct: ChartTheme, priceLimit?: PriceLimitInfo, symbol?: string, showLimitLines = true, showAvgLine = true): EChartsOption {
+  const fullDayTimes = intradayTimes(symbol)
   // 将数据映射到全天时间轴上的正确位置
-  const timeIndexMap = new Map(FULL_DAY_TIMES.map((t, i) => [t, i]))
-  const closes = new Array(FULL_DAY_TIMES.length).fill(null) as (number | null)[]
-  const highs = new Array(FULL_DAY_TIMES.length).fill(null) as (number | null)[]
-  const lows = new Array(FULL_DAY_TIMES.length).fill(null) as (number | null)[]
-  const avgData = new Array(FULL_DAY_TIMES.length).fill(null) as (number | null)[]
-  const volumes = new Array(FULL_DAY_TIMES.length).fill(null) as (any | null)[]
+  const timeIndexMap = new Map(fullDayTimes.map((t, i) => [t, i]))
+  const closes = new Array(fullDayTimes.length).fill(null) as (number | null)[]
+  const highs = new Array(fullDayTimes.length).fill(null) as (number | null)[]
+  const lows = new Array(fullDayTimes.length).fill(null) as (number | null)[]
+  const avgData = new Array(fullDayTimes.length).fill(null) as (number | null)[]
+  const volumes = new Array(fullDayTimes.length).fill(null) as (any | null)[]
 
   const volNeutral = 'rgba(161,161,170,0.5)'
   for (let i = 0; i < data.length; i++) {
-    const timeKey = fmtTime(data[i].datetime)
+    const timeKey = intradayTimeLabel(data[i].datetime)
     const idx = timeIndexMap.get(timeKey)
     if (idx !== undefined) {
       closes[idx] = data[i].close
@@ -204,18 +177,10 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
     }
   }
 
-  // x 轴标签: 9:30, 10:30, 11:30/13:00, 14:00, 15:00
-  // 11:30(idx 120) 和 13:00(idx 121) 相邻会重叠, 合并为一个标签
-  const xAxisLabelMap: Record<number, string> = {
-    0: '9:30',
-    60: '10:30',
-    120: '11:30/13:00',
-    181: '14:00',
-    241: '15:00',
-  }
-  const xAxisLabelFormatter = (_value: string, idx: number) => {
-    return xAxisLabelMap[idx] ?? ''
-  }
+  const axisLabelIndexes = new Set(
+    Array.from({ length: 6 }, (_, index) => Math.round(index * (fullDayTimes.length - 1) / 5)),
+  )
+  const xAxisLabelFormatter = (value: string, idx: number) => axisLabelIndexes.has(idx) ? value : ''
 
   return {
     animation: false,
@@ -252,7 +217,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
     xAxis: [
       {
         type: 'category',
-        data: FULL_DAY_TIMES,
+        data: fullDayTimes,
         boundaryGap: false,
         axisPointer: {
           show: true,
@@ -288,7 +253,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
       {
         type: 'category',
         gridIndex: 1,
-        data: FULL_DAY_TIMES,
+        data: fullDayTimes,
         boundaryGap: false,
         axisLine: { show: false },
         axisLabel: { show: false },
@@ -399,7 +364,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
   }
 }
 
-export function EChartsIntraday({ data, height = 320, prevClose, date, priceLimit, onPriceHover, showLimitLines = true, showAvgLine = true }: Props) {
+export function EChartsIntraday({ data, height = 320, prevClose, date, priceLimit, symbol, onPriceHover, showLimitLines = true, showAvgLine = true }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<ECharts | null>(null)
   const roRef = useRef<ResizeObserver | null>(null)
@@ -477,10 +442,10 @@ export function EChartsIntraday({ data, height = 320, prevClose, date, priceLimi
 
     if (data.length > 0) {
       // 构建全日索引 → 数据索引 的映射
-      const timeIndexMap = new Map(FULL_DAY_TIMES.map((t, i) => [t, i]))
+      const timeIndexMap = new Map(intradayTimes(symbol).map((t, i) => [t, i]))
       const mapping = new Map<number, number>()
       for (let i = 0; i < data.length; i++) {
-        const timeKey = fmtTime(data[i].datetime)
+        const timeKey = intradayTimeLabel(data[i].datetime)
         const fullDayIdx = timeIndexMap.get(timeKey)
         if (fullDayIdx !== undefined) {
           mapping.set(fullDayIdx, i)
@@ -488,11 +453,11 @@ export function EChartsIntraday({ data, height = 320, prevClose, date, priceLimi
       }
       fullDayToDataIdx.current = mapping
 
-      chart.setOption(buildOption(data, prevClose, avgPrices, lineColor, areaFill, yMode, ct, priceLimit, showLimitLines, showAvgLine), true)
+      chart.setOption(buildOption(data, prevClose, avgPrices, lineColor, areaFill, yMode, ct, priceLimit, symbol, showLimitLines, showAvgLine), true)
     } else {
       chart.clear()
     }
-  }, [data, prevClose, height, lineColor, areaFill, yMode, ct, priceLimit, showLimitLines, showAvgLine])
+  }, [data, prevClose, height, lineColor, areaFill, yMode, ct, priceLimit, symbol, showLimitLines, showAvgLine])
 
   useEffect(() => {
     return () => {

@@ -452,6 +452,14 @@ def get_preferences() -> dict:
     }
 
 
+@router.get("/longbridge-websocket")
+def get_longbridge_websocket() -> dict:
+    """返回长桥 WebSocket 订阅器的真实配置和最近写入覆盖。"""
+    from app.services.longbridge_websocket_status import get_longbridge_websocket_status
+
+    return get_longbridge_websocket_status()
+
+
 @router.get("/data-sources")
 def list_data_sources() -> dict:
     """列出已加载的数据源 (内置 / 插件 / 用户自定义)。"""

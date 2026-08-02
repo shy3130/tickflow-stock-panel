@@ -143,6 +143,7 @@ def _strategy_detail(s: StrategyDef, overrides: dict | None = None) -> dict:
         "description": description or s.meta.get("description", ""),
         "tags": s.meta.get("tags", []),
         "source": s.source,
+        "strategy_role": s.meta.get("strategy_role", "buy"),
         "execution_backend": s.execution_backend,
         "asset_types": s.meta.get("asset_types", ["stock"]),
         "timeframes": s.meta.get("timeframes", ["1d"]),

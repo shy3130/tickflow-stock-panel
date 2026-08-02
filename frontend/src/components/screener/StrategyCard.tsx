@@ -1,6 +1,8 @@
 import { Settings2, TrendingDown, RadioTower } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { storage } from '@/lib/storage'
+import { strategyRoleLabel, type StrategyRole } from '@/lib/strategy-role'
+import type { ScreenerRunStatus } from '@/lib/api'
 
 // ===== 卡片尺寸 =====
 
@@ -76,6 +78,7 @@ interface StrategyCardProps {
   name: string
   description?: string
   source?: string
+  strategyRole?: StrategyRole
   active: boolean
   count?: number
   /** 今日曾命中总数 */
@@ -83,6 +86,7 @@ interface StrategyCardProps {
   /** 今日已失效数 (曾命中 - 当前命中) */
   expiredCount?: number
   loading: boolean
+  progress?: ScreenerRunStatus | null
   cardSize: CardSize
   onRun: () => void
   disabled: boolean
@@ -94,8 +98,8 @@ interface StrategyCardProps {
 }
 
 export function StrategyCard({
-  name, description, source, active, count, expiredCount,
-  loading, cardSize,
+  name, description, source, strategyRole, active, count, expiredCount,
+  loading, progress, cardSize,
   onRun, disabled, onSettings, monitored, onToggleMonitor,
 }: StrategyCardProps) {
   const cs = CARD_STYLES[cardSize]
@@ -107,9 +111,53 @@ export function StrategyCard({
     : 'bg-gradient-to-r from-amber-400 to-orange-500 bg-clip-text text-transparent'
   const srcLabel = cardSize === 'mini' ? (SRC_MAP[source ?? ''] ?? '内') : (SRC_MAP[source ?? ''] ?? '内置')
   const badgeCls = BADGE_CLS_MAP[source ?? 'builtin'] ?? BADGE_CLS_MAP.builtin
+  const roleBadge = strategyRole === 'risk' || strategyRole === 'early_buy'
+    ? strategyRoleLabel(strategyRole)
+    : null
+  const roleBadgeCls = strategyRole === 'risk'
+    ? 'bg-red-500/10 text-red-400 border-red-500/30'
+    : 'bg-amber-400/10 text-amber-400 border-amber-400/30'
 
   // 失效数 > 0 时显示
   const hasExpired = expiredCount != null && expiredCount > 0
+  const stageLabel = progress ? ({
+    queued: '排队等待',
+    starting: '启动策略',
+    resolve_date: '确定日期',
+    load_config: '加载配置',
+    prepare_data: '准备数据',
+    execute_strategy: '执行策略',
+    format_result: '整理结果',
+    update_cache: '更新缓存',
+    complete: '执行完成',
+    failed: '执行失败',
+  }[progress.stage] ?? progress.stage) : ''
+  const progressTone = progress?.status === 'failed'
+    ? 'text-danger'
+    : progress?.status === 'complete'
+      ? 'text-emerald-400'
+      : 'text-accent'
+
+  const progressDetail = progress && (
+    <div className="mt-1 w-full min-w-[132px]" title={progress.message}>
+      <div className="flex items-center justify-between gap-2 text-[9px] leading-tight">
+        <span className={`truncate ${progressTone}`}>当前阶段：{stageLabel}</span>
+        <span className={`font-mono tabular-nums shrink-0 ${progressTone}`}>{progress.progress}%</span>
+      </div>
+      <div className="mt-1 h-1 overflow-hidden rounded-sm bg-elevated">
+        <div
+          className={`h-full transition-[width] duration-300 ${
+            progress.status === 'failed' ? 'bg-danger' : progress.status === 'complete' ? 'bg-emerald-400' : 'bg-accent'
+          }`}
+          style={{ width: `${progress.progress}%` }}
+        />
+      </div>
+      <div className="mt-0.5 truncate text-[9px] leading-tight text-muted">
+        {progress.message}
+        {progress.total != null ? ` · ${progress.completed ?? 0}/${progress.total}` : ''}
+      </div>
+    </div>
+  )
 
   return (
     <motion.div
@@ -124,6 +172,7 @@ export function StrategyCard({
             className="flex flex-col items-start cursor-pointer disabled:opacity-50 disabled:cursor-wait w-full">
             <div className="flex items-center gap-1.5 max-w-full">
               <span className={`text-[9px] px-1 py-px rounded border font-medium leading-tight shrink-0 ${badgeCls}`}>{srcLabel}</span>
+              {roleBadge && <span className={`text-[9px] px-1 py-px rounded border font-medium leading-tight shrink-0 ${roleBadgeCls}`}>{roleBadge}</span>}
               <span className="text-xs font-medium truncate text-foreground">{name}</span>
             </div>
             {description && (
@@ -144,6 +193,7 @@ export function StrategyCard({
               </div>
             )}
             {loading && <div className="mt-1 h-4 w-10 rounded bg-elevated animate-pulse" />}
+            {progressDetail}
           </button>
           <button onClick={(e) => { e.stopPropagation(); onSettings() }}
             className="absolute top-1.5 right-1.5 p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer" title="策略设置">
@@ -163,6 +213,7 @@ export function StrategyCard({
             className="flex flex-col items-start cursor-pointer disabled:opacity-50 disabled:cursor-wait min-w-0">
             <div className="flex items-center gap-1.5 min-w-0">
               <span className={`text-[9px] px-1 py-px rounded border font-medium leading-tight shrink-0 ${badgeCls}`}>{srcLabel}</span>
+              {roleBadge && <span className={`text-[9px] px-1 py-px rounded border font-medium leading-tight shrink-0 ${roleBadgeCls}`}>{roleBadge}</span>}
               <span className="text-xs font-medium truncate text-foreground">{name}</span>
               {count != null && !loading && (
                 <span className={`text-xs font-mono font-bold tabular-nums shrink-0 ${countCls}`}>{count}</span>
@@ -177,6 +228,7 @@ export function StrategyCard({
                 <span className="text-[9px] font-mono text-red-400/80">{'-' + expiredCount}</span>
               )}
             </div>
+            {progressDetail}
           </button>
           <button onClick={(e) => { e.stopPropagation(); onSettings() }}
             className="absolute top-1.5 right-1.5 p-0.5 rounded hover:bg-elevated transition-colors cursor-pointer" title="策略设置">
@@ -196,6 +248,7 @@ export function StrategyCard({
           <button onClick={onRun} disabled={disabled}
             className="flex items-center gap-1 cursor-pointer disabled:opacity-50 disabled:cursor-wait">
             <span className="text-[8px] px-0.5 rounded bg-secondary/10 text-muted border border-border font-medium leading-tight">{srcLabel}</span>
+            {roleBadge && <span className={`text-[8px] px-0.5 rounded border font-medium leading-tight ${roleBadgeCls}`}>{roleBadge}</span>}
             <span className="text-[10px] font-medium whitespace-nowrap text-foreground">{name}</span>
             {count != null && !loading && (
               <span className={`text-xs font-mono font-bold tabular-nums ${countCls}`}>{count}</span>
@@ -204,6 +257,11 @@ export function StrategyCard({
               <span className="text-[9px] font-mono text-red-400/70">{'-' + expiredCount}</span>
             )}
             {loading && <span className="w-4 h-2.5 rounded bg-elevated animate-pulse" />}
+            {progress && (
+              <span className={`max-w-[120px] truncate text-[9px] ${progressTone}`} title={progress.message}>
+                {stageLabel} {progress.progress}% · {progress.message}
+              </span>
+            )}
           </button>
           {onToggleMonitor && (
             <button onClick={(e) => { e.stopPropagation(); onToggleMonitor() }}

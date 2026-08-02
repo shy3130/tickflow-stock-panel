@@ -1732,7 +1732,7 @@ def _compute_limit_signals_today(df: pl.DataFrame, instruments: pl.DataFrame) ->
     limit_down_price = polars_limit_price(prev_raw, limit_pct, up=False)
 
     # 生效涨跌停价: 维表日期与行情日期一致时优先使用交易所权威值;
-    # 维表过期或价格缺失时回退自算理论价。旧版无 as_of 维表保持兼容。
+    # 维表过期、价格缺失或新股哨兵值均回退自算理论价。旧版无 as_of 维表保持兼容。
     # 哨兵阈值 10000 用于识别 "新股无涨跌停限制" 的占位值 (实际涨停价不可能上万)。
     _SENTINEL = 10000.0
     authoritative_date = (

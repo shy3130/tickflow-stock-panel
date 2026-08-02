@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import polars as pl
+import pytest
 
 from app.backtest.engine import BacktestEngine, SimResult
 from app.backtest.matrix import build_market_data_matrix, make_signal_matrix, rolling_mean
@@ -116,6 +117,30 @@ class _EngineStub:
             per_symbol_stats=[],
             stats={"total_return": 0.0, "n_trades": 0},
         )
+
+
+def test_risk_strategy_backtest_is_rejected():
+    strategy = _strategy(meta={
+        "id": "head_shoulders_top",
+        "name": "头肩顶结构",
+        "strategy_role": "risk",
+        "scoring": {},
+        "params": [],
+        "limit": 100,
+    })
+    service = StrategyBacktestService(
+        _EngineStub(pl.DataFrame()),
+        _StrategyEngineStub(strategy),
+    )
+    config = StrategyBacktestConfig(
+        strategy_id="head_shoulders_top",
+        symbols=None,
+        start=date(2026, 1, 1),
+        end=date(2026, 1, 31),
+    )
+
+    with pytest.raises(ValueError, match="风险策略不支持买入回测"):
+        service.run(config)
 
 
 def test_basic_filter_only_limits_entries_not_panel_rows():

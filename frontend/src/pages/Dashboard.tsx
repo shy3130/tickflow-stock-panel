@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Activity, ArrowDownRight, ArrowUpRight, BarChart3, BellRing, Database, Flame, Gauge, Info, LineChart, Loader2, Play, RefreshCw, Sparkles, Target, Timer } from 'lucide-react'
 import { DatePicker } from '@/components/DatePicker'
+import { resolveDashboardDateState, selectedDateForRequest } from '@/lib/dashboard-date'
 import { api, type MarketSnapshotRow, type OverviewDimensionRankItem, type OverviewMarket, type AlertEvent } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { fmtBigNum, fmtPct } from '@/lib/format'
@@ -16,6 +17,9 @@ import { cn } from '@/lib/cn'
 import { cnSignal } from '@/lib/signals'
 import { strategyEventMeta, strategyName } from '@/lib/strategyMonitorEvents'
 import { boardTag } from '@/components/stock-table/primitives'
+import { useMarketScope } from '@/lib/market-scope'
+import { currencyLabel, marketLabel } from '@/lib/market-display'
+import { overviewRefetchInterval } from '@/lib/overviewRefresh'
 
 function n(v: number | null | undefined) {
   return typeof v === 'number' && Number.isFinite(v) ? v : null
@@ -535,6 +539,7 @@ function HotRankCard({ title, rank, configUrl, onStockClick }: {
 
 export function Dashboard() {
   const qc = useQueryClient()
+  const { market } = useMarketScope()
   const [selectedDate, setSelectedDate] = useState<string | undefined>()
   const [manualFetching, setManualFetching] = useState(false)
   const [previewStock, setPreviewStock] = useState<{symbol: string; name?: string; alert?: AlertEvent} | null>(null)
@@ -542,12 +547,15 @@ export function Dashboard() {
   const [showWelcomeModal, setShowWelcomeModal] = useState(false)
   const dataStatus = useDataStatus({ staleTime: 60_000 })
   const overview = useQuery({
-    queryKey: QK.overviewMarket(selectedDate),
-    queryFn: () => api.overviewMarket(selectedDate),
+    queryKey: QK.overviewMarket(market, selectedDate),
+    queryFn: () => api.overviewMarket(market, selectedDate),
     staleTime: 5_000,
+    refetchInterval: overviewRefetchInterval(selectedDate),
+    refetchIntervalInBackground: true,
     placeholderData: (prev) => prev,
   })
   const data = overview.data
+  const hasLimitLadder = data?.features?.limit_ladder !== false
   const caps = useCapabilities()
   const settings = useSettings()
   const hasDepth = !!caps.data?.capabilities?.['depth5.batch']
@@ -596,9 +604,9 @@ export function Dashboard() {
   useEffect(() => {
     if (fetchSucceeded) {
       qc.invalidateQueries({ queryKey: QK.dataStatus })
-      qc.invalidateQueries({ queryKey: QK.overviewMarket(undefined) })
+      qc.invalidateQueries({ queryKey: QK.overviewMarket(market, undefined) })
     }
-  }, [fetchSucceeded, qc])
+  }, [fetchSucceeded, market, qc])
 
   // 组件重新挂载时(从其他页面切回)恢复正在运行的同步任务进度。
   // 原因: fetchJobId 是组件内状态, 切走页面时组件卸载、状态丢失, 切回后进度卡片消失。
@@ -649,14 +657,20 @@ export function Dashboard() {
   const strongUp = data.breadth.strong_up ?? 0
   const strongDown = data.breadth.strong_down ?? 0
   const latestDate = dataStatus.data?.enriched?.latest_date ?? null
-  const currentDate = selectedDate ?? data.as_of ?? ''
-  const quoteRunning = (!selectedDate || selectedDate === latestDate) && data.quote_status?.running
+  const realtimeAsOf = data.realtime_as_of ?? null
+  const { currentDate, maxDate } = resolveDashboardDateState(
+    latestDate,
+    data.as_of,
+    realtimeAsOf,
+    selectedDate,
+  )
+  const quoteRunning = !selectedDate && data.quote_status?.running
   // 实时模式: none / watchlist / full_market。
   // watchlist (Free 档) 仅自选 ≤5 只实时, 看板呈现的大盘数据实为盘后快照, 需提示避免误读。
   const quoteMode = data.quote_status?.mode as ('none' | 'watchlist' | 'full_market') | undefined
 
   return (
-    <div className="min-h-full bg-base p-1.5">
+    <div className="min-h-full bg-base p-2 sm:p-1.5">
       {/* 无本地数据常驻引导卡片 —— 一键触发盘后管道获取数据(无 Key 也可) */}
       {hasNoData && (
         <FetchDataCard
@@ -684,7 +698,7 @@ export function Dashboard() {
       </AnimatePresence>
       <div className="relative mb-1.5 flex flex-wrap items-center justify-between gap-2 overflow-hidden rounded-card border border-border bg-gradient-to-r from-surface/90 to-surface/70 px-3 py-1.5 shadow-[0_1px_3px_hsl(var(--border)/0.4)] backdrop-blur-sm">
         <div className="pointer-events-none absolute left-0 top-0 h-full w-1 bg-gradient-to-b from-accent to-accent/20" aria-hidden />
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Gauge className="h-4 w-4 text-accent" />
           <h1 className="text-base font-semibold text-foreground">市场看板</h1>
           <span
@@ -698,13 +712,13 @@ export function Dashboard() {
             {data.emotion.label} · {score}
           </span>
         </div>
-        <div className="flex items-center gap-3 text-[11px] text-muted">
+        <div className="flex w-full flex-wrap items-center gap-2 text-[11px] text-muted sm:w-auto sm:flex-nowrap sm:gap-3">
           {currentDate ? (
             <DatePicker
               value={currentDate}
-              onChange={setSelectedDate}
+              onChange={(value) => setSelectedDate(selectedDateForRequest(value, realtimeAsOf))}
               min={dataStatus.data?.enriched?.earliest_date ?? undefined}
-              max={latestDate ?? undefined}
+              max={maxDate ?? undefined}
               className="w-32"
             />
           ) : (
@@ -734,20 +748,27 @@ export function Dashboard() {
         </div>
       )}
 
-      <div className="mb-1.5 grid grid-cols-4 gap-1">
-        {data.indices.map(item => <IndexTicker key={item.symbol} item={item} />)}
-      </div>
+      {data.indices.length > 0 ? (
+        <div className="mb-1.5 grid grid-cols-2 gap-1 sm:grid-cols-4">
+          {data.indices.map(item => <IndexTicker key={item.symbol} item={item} />)}
+        </div>
+      ) : (
+        <div className="mb-1.5 rounded-card border border-border bg-surface/80 px-3 py-2 text-xs text-secondary">
+          当前市场：<strong className="text-foreground">{marketLabel(data.market)}</strong>
+          <span className="ml-2 text-muted">计价币种 {currencyLabel(data.currency)}</span>
+        </div>
+      )}
 
-      <div className="mb-1.5 grid grid-cols-6 gap-1">
+      <div className="mb-1.5 grid grid-cols-2 gap-1 sm:grid-cols-3 md:grid-cols-6">
         <KpiCell label="个股涨 / 平 / 跌" value={<><span className="text-bull">{data.breadth.up}</span><span className="text-muted">/</span><span className="text-muted">{data.breadth.flat}</span><span className="text-muted">/</span><span className="text-bear">{data.breadth.down}</span></>} sub={`上涨率 ${data.breadth.up_pct.toFixed(1)}%`} />
         <KpiCell label="强势 / 弱势" value={<><span className="text-bull">{strongUp}</span><span className="text-muted">/</span><span className="text-bear">{strongDown}</span></>} sub="涨跌 ≥3%" />
-        <KpiCell label={<span className="inline-flex items-center gap-1">涨停 / 跌停<SealedBadge degraded={isSealedDegrade} hasDepth={hasDepth} isHistorical={false} sealedReady={sealedReady} sealedCountsUp={{ real: data.limit.limit_up, fake: data.limit.fake_up ?? 0, pending: 0 }} sealedCountsDown={{ real: data.limit.limit_down, fake: data.limit.fake_down ?? 0, pending: 0 }} rawUp={data.limit.limit_up + (data.limit.fake_up ?? 0)} rawDown={data.limit.limit_down + (data.limit.fake_down ?? 0)} invalidateKeys={['overview-market', 'limit-ladder']} /></span>} value={<><span className="text-bull">{data.limit.limit_up}</span><span className="text-muted">/</span><span className="text-bear">{data.limit.limit_down}</span></>} sub={`封板率 ${(data.limit.seal_rate ?? 0).toFixed(0)}%`} />
-        <KpiCell label="最高连板" value={`${data.limit.max_boards || 0}板`} sub={(() => {
+        {hasLimitLadder ? <KpiCell label={<span className="inline-flex items-center gap-1">涨停 / 跌停<SealedBadge degraded={isSealedDegrade} hasDepth={hasDepth} isHistorical={false} sealedReady={sealedReady} sealedCountsUp={{ real: data.limit.limit_up, fake: data.limit.fake_up ?? 0, pending: 0 }} sealedCountsDown={{ real: data.limit.limit_down, fake: data.limit.fake_down ?? 0, pending: 0 }} rawUp={data.limit.limit_up + (data.limit.fake_up ?? 0)} rawDown={data.limit.limit_down + (data.limit.fake_down ?? 0)} invalidateKeys={['overview-market', 'limit-ladder']} /></span>} value={<><span className="text-bull">{data.limit.limit_up}</span><span className="text-muted">/</span><span className="text-bear">{data.limit.limit_down}</span></>} sub={`封板率 ${(data.limit.seal_rate ?? 0).toFixed(0)}%`} /> : <KpiCell label="当前市场" value={marketLabel(data.market)} sub={currencyLabel(data.currency)} tone="accent" />}
+        {hasLimitLadder ? <KpiCell label="最高连板" value={`${data.limit.max_boards || 0}板`} sub={(() => {
           const top = data.limit.tiers.find(t => t.boards === data.limit.max_boards)
           const stocks = top?.stocks ?? []
           if (stocks.length > 0 && stocks.length <= 3) return stocks.map(s => s.name || s.symbol).join(' · ')
           return `梯队 ${data.limit.tiers.length}`
-        })()} tone="accent" />
+        })()} tone="accent" /> : <KpiCell label="覆盖标的" value={`${data.breadth.total}只`} sub={`数据日 ${data.as_of ?? '—'}`} />}
         <KpiCell label="成交额" value={fmtBigNum(data.amount.total)} sub={`均额 ${fmtBigNum(data.amount.avg)}`} />
         <KpiCell label="换手 / 量比" value={`${fmtPrice(data.activity.avg_turnover, 1)}% / ${fmtPrice(data.activity.vol_ratio, 2)}`} sub={`高换手 ${data.activity.high_turnover} · 放量占比 ${fmtPrice(data.activity.high_vol_ratio, 1)}%`} tone="accent" />
       </div>
@@ -755,7 +776,7 @@ export function Dashboard() {
       <div className="grid grid-cols-1 gap-1.5 xl:grid-cols-[minmax(0,1fr)_20rem]">
         <main className="min-w-0 space-y-1.5">
           <div className="grid grid-cols-1 gap-1.5 lg:grid-cols-3">
-            <section className="rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
+            <section className="min-w-0 rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
               <SectionTitle icon={BarChart3} title="涨跌分布 / 广度" hint={`${data.breadth.total}只`} />
               <DistributionBars rows={data.distribution} />
               <div className="mt-2">
@@ -768,14 +789,14 @@ export function Dashboard() {
             </section>
 
             <section
-              className="rounded-card border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]"
+              className="min-w-0 rounded-card border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]"
               style={{ borderColor: `${scoreColor(score)}40` }}
             >
               <SectionTitle icon={Sparkles} title="情绪雷达" hint={`情绪评分 ${score}`} />
               <EmotionRadar radar={data.radar} score={score} />
             </section>
 
-            <section className="flex flex-col rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
+            <section className="flex min-w-0 flex-col rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
               <div>
                 <SectionTitle icon={LineChart} title="趋势强度" hint="均线/新高低" />
                 <div className="grid grid-cols-3 gap-1.5">
@@ -790,8 +811,8 @@ export function Dashboard() {
               <div className="mt-1.5 border-t border-border pt-1.5">
                 <SectionTitle icon={Target} title="实用监控" hint="盘中观察" />
                 <div className="grid grid-cols-3 gap-1.5">
-                  <MiniMetric label="炸板" value={`${data.limit.broken ?? 0}`} cls="text-warning" />
-                  <MiniMetric label="跌停" value={`${data.limit.limit_down ?? 0}`} cls="text-bear" />
+                  {hasLimitLadder ? <MiniMetric label="炸板" value={`${data.limit.broken ?? 0}`} cls="text-warning" /> : <MiniMetric label="上涨数" value={`${data.breadth.up}`} cls="text-bull" />}
+                  {hasLimitLadder ? <MiniMetric label="跌停" value={`${data.limit.limit_down ?? 0}`} cls="text-bear" /> : <MiniMetric label="下跌数" value={`${data.breadth.down}`} cls="text-bear" />}
                   <MiniMetric label="站上MA60" value={`${data.trend.above_ma60_pct.toFixed(0)}%`} cls="text-accent" />
                   <MiniMetric label="新高/新低" value={`${compactCount(data.trend.new_high)}/${compactCount(data.trend.new_low)}`} cls={data.trend.new_high >= data.trend.new_low ? 'text-bull' : 'text-bear'} />
                   <MiniMetric label="高换手数" value={`${data.activity.high_turnover}`} cls="text-accent" />
@@ -815,10 +836,10 @@ export function Dashboard() {
         </main>
 
         <aside className="min-w-0 space-y-1.5">
-          <section className="rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
+          {hasLimitLadder && <section className="rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
             <SectionTitle icon={Flame} title="涨停梯队" hint={<span className="inline-flex items-center gap-1">{`涨停 ${data.limit.limit_up}`}{isSealedDegrade && <span className="text-[9px] px-1 rounded bg-yellow-500/10 text-yellow-600 dark:text-yellow-500">{hasDepth ? '未修正' : '降级'}</span>}</span>} />
             <LadderMini limit={data.limit} />
-          </section>
+          </section>}
           <section className="rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
             <div className="mb-2 flex items-center justify-between gap-2">
               <div className="flex items-center gap-1.5">

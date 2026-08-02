@@ -7,6 +7,10 @@ import { QK } from '@/lib/queryKeys'
 import { useCapabilities } from '@/lib/useSharedQueries'
 import { EChartsCandlestick, type OHLC } from '@/components/EChartsCandlestick'
 import { EChartsIntraday } from '@/components/EChartsIntraday'
+import { useMarketScope } from '@/lib/market-scope'
+import { marketLabel } from '@/lib/market-display'
+import { indexMatchesMarket, pinnedIndexesForMarket, type CoreIndex } from '@/lib/market-indices'
+import type { MarketCode } from '@/lib/market-display'
 
 function defaultRange() {
   const now = new Date()
@@ -54,18 +58,16 @@ function fmtNum(v: number | null | undefined, digits = 2) {
   return Number(v).toFixed(digits)
 }
 
-const PINNED_INDEXES = [
-  { symbol: '000001.SH', name: '上证指数' },
-  { symbol: '399001.SZ', name: '深证成指' },
-  { symbol: '399006.SZ', name: '创业板指' },
-  { symbol: '000680.SH', name: '科创综指' },
-]
-
-function pinnedRank(item: IndexInstrument) {
-  return PINNED_INDEXES.findIndex(p => item.symbol === p.symbol || item.name === p.name)
+function pinnedRank(item: IndexInstrument, pinnedIndexes: readonly CoreIndex[]) {
+  return pinnedIndexes.findIndex(p => item.symbol === p.symbol || item.name === p.name)
 }
 
 export function Indices() {
+  const { market } = useMarketScope()
+  return <IndicesMarket market={market} />
+}
+
+function IndicesMarket({ market }: { market: MarketCode }) {
   const qc = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const [keyword, setKeyword] = useState('')
@@ -74,19 +76,20 @@ export function Indices() {
   const [range, setRange] = useState(defaultRange)
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const [linkedPrice, setLinkedPrice] = useState<number | null>(null)
+  const pinnedIndexes = pinnedIndexesForMarket(market)
 
   // 分时数据需 Pro+ (kline.minute.batch) 能力
   const caps = useCapabilities()
   const hasMinuteCap = !!caps.data?.capabilities?.['kline.minute.batch']
 
   const list = useQuery({
-    queryKey: QK.indexList,
-    queryFn: api.indexList,
+    queryKey: [...QK.indexList, market],
+    queryFn: () => api.indexList(market),
   })
 
   const search = useQuery({
-    queryKey: ['index-search', keyword],
-    queryFn: () => api.indexSearch(keyword, 50),
+    queryKey: ['index-search', market, keyword],
+    queryFn: () => api.indexSearch(keyword, 50, market),
     enabled: keyword.trim().length > 0,
   })
 
@@ -95,27 +98,35 @@ export function Indices() {
     : (list.data?.results ?? [])
   const topRows = useMemo(() => {
     const all = list.data?.results ?? []
-    return PINNED_INDEXES.map(p => (
+    return pinnedIndexes.map(p => (
       all.find(item => item.symbol === p.symbol || item.name === p.name) ?? { symbol: p.symbol, name: p.name, asset_type: 'index' as const }
     ))
-  }, [list.data?.results])
-  const listRows = useMemo(() => rows.filter(item => pinnedRank(item) < 0), [rows])
+  }, [list.data?.results, pinnedIndexes])
+  const listRows = useMemo(() => rows.filter(item => pinnedRank(item, pinnedIndexes) < 0), [pinnedIndexes, rows])
 
-  const selectedSymbol = selected || topRows[0]?.symbol || listRows[0]?.symbol || ''
+  const selectedSymbol = (indexMatchesMarket(selected, market) ? selected : '') || topRows[0]?.symbol || listRows[0]?.symbol || ''
 
   useEffect(() => {
-    if (symbolParam && symbolParam !== selected) setSelected(symbolParam)
-  }, [selected, symbolParam])
+    const next = symbolParam && indexMatchesMarket(symbolParam, market) ? symbolParam : ''
+    setSelected(current => current === next ? current : next)
+  }, [market, symbolParam])
 
   const selectIndex = (symbol: string) => {
     setSelected(symbol)
-    setSearchParams({ symbol })
+    setSearchParams({ symbol, market })
   }
 
+  const quoteSymbols = useMemo(
+    () => [...new Set([...topRows, ...listRows].map(item => item.symbol))],
+    [listRows, topRows],
+  )
+
   const quotes = useQuery({
-    queryKey: QK.indexQuotes,
-    queryFn: () => api.indexQuotes(),
+    queryKey: [...QK.indexQuotes, market, quoteSymbols.join(',')],
+    queryFn: () => api.indexQuotes(quoteSymbols),
+    enabled: quoteSymbols.length > 0,
     placeholderData: (prev) => prev,
+    refetchInterval: 6_000,
   })
 
   const daily = useQuery({
@@ -202,15 +213,15 @@ export function Indices() {
   }
 
   return (
-    <div className="h-full overflow-auto bg-base p-4">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-semibold text-foreground">指数</h1>
+    <div className="h-full overflow-auto bg-base p-3 sm:p-4">
+      <div className="mb-4 flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <h1 className="text-lg font-semibold text-foreground">{marketLabel(market)}指数</h1>
           <p className="mt-1 text-xs text-muted">
-            指数使用独立 kline_index_* parquet，不进入股票选股和策略链路。
+            当前市场：{marketLabel(market)} · 指数使用独立 kline_index_* parquet，不进入股票选股和策略链路。
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div aria-label="指数同步操作" className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
           <button
             onClick={() => syncInstruments.mutate()}
             disabled={syncInstruments.isPending}
@@ -230,7 +241,11 @@ export function Indices() {
         </div>
       </div>
 
-      <div className="grid grid-cols-[15rem_1fr] gap-4">
+      <div
+        role="region"
+        aria-label="指数行情内容"
+        className="grid grid-cols-1 gap-4 lg:grid-cols-[15rem_minmax(0,1fr)]"
+      >
         <aside className="rounded-card border border-border bg-surface p-3">
           <div className="relative mb-3">
             <Search className="pointer-events-none absolute left-2 top-2 h-3.5 w-3.5 text-muted" />
@@ -255,10 +270,10 @@ export function Indices() {
           </div>
         </aside>
 
-        <main className="min-w-0 rounded-card border border-border bg-surface p-3">
-          <div className="mb-3 flex items-center justify-between gap-3">
+        <section className="min-w-0 rounded-card border border-border bg-surface p-3">
+          <div className="mb-3 flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Activity className="h-4 w-4 text-accent" />
                 <h2 className="truncate text-sm font-semibold text-foreground">
                   {selectedInfo?.name || selectedSymbol || '未选择指数'}
@@ -271,32 +286,37 @@ export function Indices() {
                 实时缓存 {quotes.data?.count ?? 0} 只指数 · 日K来源 {daily.data?.source ?? '--'}
               </div>
             </div>
-            <div className="flex items-center gap-2 text-xs">
+            <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 text-xs sm:flex">
               <input
                 type="date"
                 value={range.start}
                 onChange={e => setRange(r => ({ ...r, start: e.target.value }))}
-                className="rounded-btn border border-border bg-base px-2 py-1 text-secondary outline-none focus:border-accent"
+                className="min-w-0 rounded-btn border border-border bg-base px-2 py-1 text-secondary outline-none focus:border-accent sm:w-auto"
               />
               <span className="text-muted">至</span>
               <input
                 type="date"
                 value={range.end}
                 onChange={e => setRange(r => ({ ...r, end: e.target.value }))}
-                className="rounded-btn border border-border bg-base px-2 py-1 text-secondary outline-none focus:border-accent"
+                className="min-w-0 rounded-btn border border-border bg-base px-2 py-1 text-secondary outline-none focus:border-accent sm:w-auto"
               />
             </div>
           </div>
 
-          {daily.isLoading && <div className="py-10 text-center text-sm text-muted">日K加载中…</div>}
-          {daily.isError && <div className="py-4 text-sm text-danger">指数日K加载失败</div>}
-          {!daily.isLoading && !daily.isError && chartRows.length === 0 && (
-            <div className="rounded-card bg-elevated p-6 text-center text-sm text-muted">
-              暂无日K数据。可以先同步指数日K，或选择其他指数。
-            </div>
-          )}
-          {chartRows.length > 0 && (
-            <div className="flex items-start gap-3">
+          <div
+            role="region"
+            aria-label="指数图表组合"
+            className="flex min-w-0 flex-col items-stretch gap-3 xl:flex-row xl:items-start"
+          >
+            {daily.isLoading && <div className="w-full py-10 text-center text-sm text-muted">日K加载中…</div>}
+            {daily.isError && <div className="w-full py-4 text-sm text-danger">指数日K加载失败</div>}
+            {!daily.isLoading && !daily.isError && chartRows.length === 0 && (
+              <div className="w-full rounded-card bg-elevated p-6 text-center text-sm text-muted">
+                暂无日K数据。可以先同步指数日K，或选择其他指数。
+              </div>
+            )}
+            {chartRows.length > 0 && (
+              <>
               <div className="min-w-0 flex-1">
                 <EChartsCandlestick
                   data={chartRows}
@@ -311,7 +331,7 @@ export function Indices() {
                   activeIndicators={['vol', 'macd']}
                 />
               </div>
-              <div className="min-w-0 flex-1 border-l border-border pl-3" style={{ height: 620 }}>
+              <div className="min-w-0 w-full flex-1 border-t border-border pt-3 xl:border-l xl:border-t-0 xl:pl-3 xl:pt-0" style={{ height: 620 }}>
                 {!hasMinuteCap ? (
                   <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
                     <Lock className="h-5 w-5 text-muted" />
@@ -332,6 +352,7 @@ export function Indices() {
                         height={620}
                         prevClose={prevClose}
                         date={selectedDate ?? undefined}
+                        symbol={selectedSymbol}
                         showLimitLines={false}
                         showAvgLine={false}
                         onPriceHover={setLinkedPrice}
@@ -340,9 +361,10 @@ export function Indices() {
                   </>
                 )}
               </div>
-            </div>
-          )}
-        </main>
+              </>
+            )}
+          </div>
+        </section>
       </div>
     </div>
   )

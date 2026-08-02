@@ -25,16 +25,41 @@ export interface OHLC {
   kdj_j?: number | null
   boll_upper?: number | null
   boll_lower?: number | null
+  vol_ma5?: number | null
+  vol_ma10?: number | null
+  vol_ratio_5d?: number | null
 }
 
 export interface ChartMarker {
   date: string
   kind: 'buy' | 'sell' | 'neutral'
+  /** Original engine side, retained when a failed replay is shown as neutral. */
+  signalSide?: string
   label?: string
+  /** Exact backend signal price. Falls back to the candle extreme for legacy markers. */
+  price?: number
   /** 若为 true，标记放在蜡烛上方（如涨停连板标签）。 */
   above?: boolean
   /** 自定义标签颜色，覆盖默认的 kind 对应色。 */
   color?: string
+  title?: string
+  conclusion?: string
+  reason?: string
+  confidence?: string
+  lineId?: string | null
+  lineRole?: string | null
+  firstCrossTime?: string | null
+  lineValue?: number | null
+  lineAnchorTimes?: string[] | null
+  lineAnchorPrices?: number[] | null
+  structurePivotId?: string | null
+  structurePivotPrice?: number | null
+  structurePivotTime?: string | null
+  triggerPath?: string | null
+  reasonCodes?: string[]
+  pattern?: string | null
+  volumeRatio?: number | null
+  evidenceText?: string | null
 }
 
 export interface ChartRange {
@@ -45,11 +70,46 @@ export interface ChartRange {
 }
 
 export interface ChartPriceLine {
+  id?: string
   value: number
+  endValue?: number
   label?: string
   color?: string
   start?: string
   end?: string
+  lineType?: 'solid' | 'dashed' | 'dotted'
+  width?: number
+}
+
+export interface HeadShouldersOverlayPoint {
+  role: 'A' | 'N1' | 'B' | 'N2' | 'C' | 'D'
+  date: string
+  price: number
+}
+
+export interface HeadShouldersOverlay {
+  id: string
+  type: 'BOTTOM' | 'TOP'
+  stage: string
+  color: string
+  warning: boolean
+  points: HeadShouldersOverlayPoint[]
+  neckline: {
+    start: string
+    anchor2: string
+    end: string
+    startValue: number
+    anchor2Value: number
+    endValue: number
+  }
+  marker?: {
+    kind: 'buy' | 'sell'
+    date: string
+    price: number
+    color: string
+    label: 'B' | 'S'
+  }
+  tooltipHtml: string
 }
 
 export interface StockInfo {
@@ -120,6 +180,148 @@ function volumeRatioAt(data: OHLC[], index: number, days: number): number | null
 
 function fmtVolumeRatio(value: number | null, digits = 2): string {
   return value == null ? '—' : `${value.toFixed(digits)}x`
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function escapeHtml(value: unknown) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+}
+
+function translateStage(value: unknown) {
+  if (value === 'CONFIRMED') return '已确认'
+  if (value === 'TRIGGER') return '触发'
+  if (value === 'WARNING') return '预警'
+  return value ? String(value) : '-'
+}
+
+function translateTriggerPath(value: unknown) {
+  if (value === 'PRIMARY_STRUCTURE') return '主趋势线+结构位双突破'
+  if (value === 'DIRECT_STRUCTURE') return '趋势线+关键位直接双突破'
+  if (value === 'TWO_BAR_RETEST') return '二次回踩确认'
+  if (value === 'LINE_BREAK') return '趋势线突破'
+  if (value === 'engine output') return '系统信号确认'
+  return value ? String(value) : '-'
+}
+
+function translateReasonCode(value: string) {
+  if (value === 'PRIMARY_LINE_AND_STRUCTURE_BROKEN') return '主趋势线与结构位同时突破'
+  if (value === 'LINE_AND_NEAREST_LEVEL_BROKEN') return '趋势线与附近关键位同时突破'
+  if (value === 'LINE_AND_KEY_STRUCTURE_BROKEN') return '趋势线与前高/前低同时突破'
+  if (value === 'SECOND_CLOSE_ABOVE') return '第二根K线站上确认'
+  if (value === 'SECOND_CLOSE_BELOW') return '第二根K线跌破确认'
+  if (value === 'HIGHER_SECOND_CLOSE') return '第二根收盘更强'
+  if (value === 'LOWER_SECOND_CLOSE') return '第二根收盘更弱'
+  if (value === 'FIRST_ACCEPTANCE_HIGH_BROKEN') return '突破首次承接高点'
+  if (value === 'FIRST_ACCEPTANCE_LOW_BROKEN') return '跌破首次承接低点'
+  if (value === 'FOLLOW_THROUGH_FAILED') return '后续走势未能延续突破'
+  if (value === 'FELL_BACK_UNDER_STRUCTURE') return '重新跌回关键结构位下方'
+  if (value === 'RECOVERED_ABOVE_STRUCTURE') return '重新收回关键结构位上方'
+  if (value === 'FOLLOW_THROUGH_HELD') return '后续走势保持在突破方向'
+  if (value === 'STRONG_CLOSE_LOCATION') return '收盘位置较强'
+  if (value === 'WEAK_CLOSE_LOCATION') return '收盘位置较弱'
+  if (value === 'LONG_UPPER_SHADOW') return '上影线较长'
+  if (value === 'LONG_LOWER_SHADOW') return '下影线较长'
+  if (value === 'NOT_OUTSIDE_BOX') return '仍在开盘箱体内'
+  if (value === 'VOLUME_EXPANDED') return '量能放大'
+  if (value === 'VOLUME_NOT_CONFIRMED') return '量能未确认'
+  return value.replaceAll('_', ' ').toLowerCase()
+}
+
+function translateReasonCodes(values: string[] | undefined) {
+  if (!Array.isArray(values) || values.length === 0) return null
+  return values.map(translateReasonCode).join('；')
+}
+
+function trendLineLabel(marker: ChartMarker) {
+  const role = marker.lineRole === 'ACCELERATION' ? '加速' : '主'
+  const direction = marker.signalSide === 'BUY' || marker.kind === 'buy' ? '下降' : '上涨'
+  return `${role}${direction}趋势线`
+}
+
+function keyLevelLabel(marker: ChartMarker) {
+  return marker.signalSide === 'BUY' || marker.kind === 'buy' ? '前高/压力位' : '前低/支撑位'
+}
+
+function formatSignalTime(value: string) {
+  const sourceTime = value.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/)
+  if (sourceTime) {
+    return `${sourceTime[2]}-${sourceTime[3]} ${sourceTime[4]}:${sourceTime[5]}`
+  }
+  const parsed = new Date(value)
+  if (!Number.isFinite(parsed.getTime())) return value
+  const month = String(parsed.getMonth() + 1).padStart(2, '0')
+  const day = String(parsed.getDate()).padStart(2, '0')
+  const hour = String(parsed.getHours()).padStart(2, '0')
+  const minute = String(parsed.getMinutes()).padStart(2, '0')
+  return `${month}-${day} ${hour}:${minute}`
+}
+
+function formatAnchorPair(times: string[] | null | undefined, prices: number[] | null | undefined) {
+  if (!Array.isArray(times) || times.length < 2) return null
+  const firstPrice = Array.isArray(prices) && typeof prices[0] === 'number' && Number.isFinite(prices[0])
+    ? ` ${prices[0].toFixed(3)}`
+    : ''
+  const secondPrice = Array.isArray(prices) && typeof prices[1] === 'number' && Number.isFinite(prices[1])
+    ? ` ${prices[1].toFixed(3)}`
+    : ''
+  return `${formatSignalTime(times[0])}${firstPrice} / ${formatSignalTime(times[1])}${secondPrice}`
+}
+
+function formatLevelPoint(time: string | null | undefined, price: number | null | undefined) {
+  if (!time) return null
+  const priceText = typeof price === 'number' && Number.isFinite(price) ? ` ${price.toFixed(3)}` : ''
+  return `${formatSignalTime(time)}${priceText}`
+}
+
+function markerTooltipHtml(marker: ChartMarker) {
+  const trendLabel = trendLineLabel(marker)
+  const levelLabel = keyLevelLabel(marker)
+  const reasonCodesText = translateReasonCodes(marker.reasonCodes)
+  const rows: Array<[string, string]> = [
+    ['\u89e6\u53d1\u65f6\u95f4', formatSignalTime(marker.date)],
+  ]
+  if (typeof marker.price === 'number' && Number.isFinite(marker.price)) {
+    rows.push(['\u89e6\u53d1\u4ef7', marker.price.toFixed(3)])
+  }
+  if (typeof marker.lineValue === 'number' && Number.isFinite(marker.lineValue)) {
+    rows.push([trendLabel, marker.lineValue.toFixed(3)])
+  } else if (marker.lineId) {
+    rows.push(['\u8d8b\u52bf\u7ebf', '\u5df2\u7a81\u7834'])
+  }
+  const lineAnchors = formatAnchorPair(marker.lineAnchorTimes, marker.lineAnchorPrices)
+  if (lineAnchors) rows.push(['\u8d8b\u52bf\u7ebfK\u4f4d', lineAnchors])
+  if (typeof marker.structurePivotPrice === 'number' && Number.isFinite(marker.structurePivotPrice)) {
+    rows.push([levelLabel, marker.structurePivotPrice.toFixed(3)])
+  }
+  const levelPoint = formatLevelPoint(marker.structurePivotTime, marker.structurePivotPrice)
+  if (levelPoint) rows.push(['\u652f\u6491/\u538b\u529bK\u4f4d', levelPoint])
+  if (marker.firstCrossTime) rows.push(['\u9996\u6b21\u7a81\u7834', formatSignalTime(marker.firstCrossTime)])
+  rows.push(['\u5224\u65ad\u903b\u8f91', translateTriggerPath(marker.triggerPath || marker.reason)])
+  if (marker.confidence) rows.push(['\u786e\u8ba4\u72b6\u6001', translateStage(marker.confidence)])
+  if (typeof marker.volumeRatio === 'number' && Number.isFinite(marker.volumeRatio)) {
+    rows.push(['\u91cf\u80fd', `${marker.volumeRatio.toFixed(2)}x`])
+  }
+  if (reasonCodesText) rows.push(['\u5173\u952e\u8bc1\u636e', reasonCodesText])
+  const title = marker.conclusion || marker.title || marker.label || marker.kind
+  return [
+    '<div style="background:#111217;border:1px solid rgba(229,231,235,0.22);border-radius:6px;padding:7px 8px;box-shadow:0 10px 28px rgba(0,0,0,0.55)">',
+    `<div style="font-size:11px;font-weight:650;margin-bottom:5px;color:${marker.color ?? CT().text}">${escapeHtml(title)}</div>`,
+    ...rows.map(([label, value]) => (
+      `<div style="min-width:220px;max-width:330px;white-space:normal;line-height:1.35;font-size:11px">`
+      + `<span style="color:#9CA3AF">${escapeHtml(label)}\uff1a</span>`
+      + `<b style="color:#E5E7EB;font-weight:500;font-size:11px">${escapeHtml(value)}</b>`
+      + '</div>'
+    )),
+    '</div>',
+  ].join('')
 }
 
 export const SUB_CHARTS: SubChartDef[] = [
@@ -321,6 +523,7 @@ export const OVERLAY_INDICATORS: { key: string; label: string }[] = [
 interface Props {
   data: OHLC[]
   markers?: ChartMarker[]
+  headShouldersOverlays?: HeadShouldersOverlay[]
   ranges?: ChartRange[]
   priceLines?: ChartPriceLine[]
   height?: number
@@ -340,6 +543,135 @@ interface Props {
   volumeCompare?: VolumeCompareConfig
 }
 
+function headShouldersPointLabelPosition(
+  overlay: HeadShouldersOverlay,
+  role: HeadShouldersOverlayPoint['role'],
+) {
+  const isStructurePoint = role === 'A' || role === 'B' || role === 'C'
+  if (overlay.type === 'BOTTOM') return isStructurePoint ? 'bottom' : 'top'
+  return isStructurePoint ? 'top' : 'bottom'
+}
+
+export function buildHeadShouldersSeries(overlays: HeadShouldersOverlay[]): any[] {
+  return overlays.flatMap(overlay => {
+    const pointSeries = {
+      name: `头肩点位 ${overlay.id}`,
+      type: 'scatter',
+      data: overlay.points.map(point => ({
+        name: point.role,
+        value: [point.date, point.price],
+        tooltipHtml: overlay.tooltipHtml,
+        label: {
+          show: true,
+          formatter: point.role,
+          position: headShouldersPointLabelPosition(overlay, point.role),
+          distance: 7,
+          color: overlay.color,
+          fontSize: 10,
+          fontWeight: 650,
+          fontFamily: MARKER_LABEL_FONT_FAMILY,
+        },
+      })),
+      symbol: 'circle',
+      symbolSize: 7,
+      itemStyle: { color: overlay.color, borderColor: '#111217', borderWidth: 1 },
+      emphasis: { scale: 1.35 },
+      animation: false,
+      z: 83,
+    }
+    const shapeSeries = {
+      name: `头肩形态 ${overlay.id}`,
+      type: 'line',
+      data: overlay.points.map(point => ({
+        value: [point.date, point.price],
+        tooltipHtml: overlay.tooltipHtml,
+      })),
+      symbol: 'none',
+      lineStyle: {
+        color: overlay.color,
+        width: 1.5,
+        type: overlay.warning ? 'dashed' : 'solid',
+        opacity: 0.92,
+      },
+      animation: false,
+      z: 81,
+    }
+    const necklineSeries = {
+      name: `头肩颈线 ${overlay.id}`,
+      type: 'line',
+      data: [
+        {
+          value: [overlay.neckline.start, overlay.neckline.startValue],
+          tooltipHtml: overlay.tooltipHtml,
+        },
+        {
+          value: [overlay.neckline.end, overlay.neckline.endValue],
+          tooltipHtml: overlay.tooltipHtml,
+        },
+      ],
+      symbol: 'none',
+      lineStyle: { color: overlay.color, width: 1.5, type: 'dotted', opacity: 0.95 },
+      animation: false,
+      z: 82,
+    }
+    const signalSeries = overlay.marker
+      ? [{
+          name: `头肩信号 ${overlay.id}`,
+          type: 'scatter',
+          data: [{
+            name: overlay.marker.date,
+            value: [overlay.marker.date, overlay.marker.price],
+            tooltipHtml: overlay.tooltipHtml,
+            label: {
+              show: true,
+              formatter: overlay.marker.label,
+              position: 'inside',
+              color: '#FFFFFF',
+              fontSize: 10,
+              fontWeight: 'bold',
+              fontFamily: MARKER_LABEL_FONT_FAMILY,
+            },
+          }],
+          symbol: 'pin',
+          symbolSize: 28,
+          symbolOffset: [0, -34],
+          itemStyle: { color: overlay.marker.color },
+          animation: false,
+          z: 101,
+        }]
+      : overlay.warning
+        ? [{
+            name: `头肩警示 ${overlay.id}`,
+            type: 'scatter',
+            data: [{
+              name: overlay.points.at(-1)?.date,
+              value: [
+                overlay.points.at(-1)?.date,
+                overlay.points.at(-1)?.price,
+              ],
+              tooltipHtml: overlay.tooltipHtml,
+              label: {
+                show: true,
+                formatter: '假',
+                position: 'top',
+                distance: 7,
+                color: overlay.color,
+                fontSize: 10,
+                fontWeight: 'bold',
+                fontFamily: MARKER_LABEL_FONT_FAMILY,
+              },
+            }],
+            symbol: 'diamond',
+            symbolSize: 10,
+            itemStyle: { color: overlay.color },
+            animation: false,
+            z: 84,
+          }]
+        : []
+    return [shapeSeries, necklineSeries, pointSeries, ...signalSeries]
+  })
+}
+
 // 序列颜色 (双主题通用); 画布轴/网格/文字等主题相关色走 CT() 动态取
 const THEME = {
   bull: '#C74040',
@@ -352,6 +684,8 @@ const THEME = {
   ma60: '#8B5CF6',
   bg: 'transparent',
 }
+
+const MARKER_LABEL_FONT_FAMILY = '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", "SimHei", "JetBrains Mono", sans-serif'
 
 /** 当前主题的图表调色板 (buildOption/信息栏在渲染时调用; 主题切换由组件 effect 触发重建)。 */
 const CT = () => chartTheme(getTheme())
@@ -463,6 +797,7 @@ function buildOption(
   dates: string[],
   dateIndexMap: Map<string, number>,
   markers: ChartMarker[] | undefined,
+  headShouldersOverlays: HeadShouldersOverlay[] | undefined,
   ranges: ChartRange[] | undefined,
   priceLines: ChartPriceLine[] | undefined,
   showMA: boolean,
@@ -485,42 +820,56 @@ function buildOption(
       const d = data[idx]
       const isBuy = m.kind === 'buy'
       const isSell = m.kind === 'sell'
+      const markerPrice = typeof m.price === 'number' && Number.isFinite(m.price)
+        ? m.price
+        : (isBuy ? d.low : d.high)
 
       if (m.above) {
         const dotColor = m.color ?? (isBuy ? '#FACC15' : CT().text)
+        const displayPrice = d.high
         if (compact) {
           markPointData.push({
-            name: m.date, coord: [m.date, d.high],
-            symbol: 'circle', symbolSize: 4, symbolOffset: [0, -10],
+            name: m.date, coord: [m.date, displayPrice],
+            marker: m,
+            symbol: 'pin', symbolSize: 18, symbolOffset: [0, -22],
             itemStyle: { color: dotColor, cursor: 'pointer' },
-            label: { show: false }, z: 100, zlevel: 10,
+            tooltip: { formatter: () => markerTooltipHtml(m) },
+            label: {
+              show: true, formatter: m.label ?? '',
+              color: '#FFFFFF', fontSize: 8, fontWeight: 'bold',
+              fontFamily: MARKER_LABEL_FONT_FAMILY,
+            },
+            z: 100, zlevel: 10,
           })
         } else {
           markPointData.push({
-            name: m.date, coord: [m.date, d.high],
-            symbol: 'circle', symbolSize: 12, symbolOffset: [0, -2],
-            itemStyle: { color: 'transparent' },
+            name: m.date, coord: [m.date, displayPrice],
+            marker: m,
+            symbol: 'pin', symbolSize: 30, symbolOffset: [0, -34],
+            itemStyle: { color: dotColor },
+            tooltip: { formatter: () => markerTooltipHtml(m) },
             label: {
-              show: true, formatter: m.label ?? '', position: 'top', distance: 0,
-              color: dotColor, fontSize: 10, fontWeight: 'normal',
-              fontFamily: 'JetBrains Mono, monospace',
+              show: true, formatter: m.label ?? '', position: 'inside',
+              color: '#FFFFFF', fontSize: 11, fontWeight: 'bold',
+              fontFamily: MARKER_LABEL_FONT_FAMILY,
             },
             z: 100, zlevel: 10,
           })
         }
       } else {
         markPointData.push({
-          name: m.label ?? '',
-          coord: [m.date, isBuy ? d.low : d.high],
-          symbol: 'arrow', symbolSize: 12,
-          symbolRotate: isBuy ? 0 : 180,
-          symbolOffset: isBuy ? [0, '60%'] : [0, '-60%'],
-          itemStyle: { color: isBuy ? THEME.bull : isSell ? THEME.bear : CT().text },
+          name: m.date,
+          coord: [m.date, markerPrice],
+          marker: m,
+          symbol: 'pin', symbolSize: compact ? 18 : 30,
+          symbolRotate: 0,
+          symbolOffset: isBuy ? [0, compact ? 16 : 22] : [0, compact ? -16 : -22],
+          itemStyle: { color: m.color ?? (isBuy ? THEME.bull : isSell ? THEME.bear : CT().text) },
+          tooltip: { formatter: () => markerTooltipHtml(m) },
           label: {
-            show: !!m.label, formatter: m.label ?? '',
-            position: isBuy ? 'bottom' : 'top', distance: 8,
-            color: CT().text, fontSize: 10,
-            fontFamily: 'JetBrains Mono, monospace',
+            show: !!m.label, formatter: m.label ?? '', position: 'inside',
+            color: '#FFFFFF', fontSize: compact ? 8 : 11, fontWeight: 'bold',
+            fontFamily: MARKER_LABEL_FONT_FAMILY,
           },
         })
       }
@@ -600,8 +949,8 @@ function buildOption(
     .map(line => {
       const lineStyle = {
         color: line.color ?? CT().text,
-        type: 'dashed' as const,
-        width: 1,
+        type: line.lineType ?? 'dashed',
+        width: line.width ?? 1,
         opacity: 0.92,
       }
       const label = {
@@ -618,7 +967,13 @@ function buildOption(
       if (line.start && line.end && dateIndexMap.has(line.start) && dateIndexMap.has(line.end)) {
         return [
           { xAxis: line.start, yAxis: line.value },
-          { xAxis: line.end, yAxis: line.value, lineStyle, label, symbol: 'none' },
+          {
+            xAxis: line.end,
+            yAxis: Number.isFinite(line.endValue) ? line.endValue : line.value,
+            lineStyle,
+            label,
+            symbol: 'none',
+          },
         ]
       }
       return { yAxis: line.value, lineStyle, label, symbol: 'none' }
@@ -657,6 +1012,8 @@ function buildOption(
     markArea: markAreaData.length > 0 ? { silent: true, data: markAreaData } : undefined,
     markLine: markLineData.length > 0 ? { silent: true, symbol: 'none', data: markLineData, animation: false } : undefined,
   })
+
+  series.push(...buildHeadShouldersSeries(headShouldersOverlays ?? []))
 
   if (hasMA) {
     const maLine = (key: keyof OHLC, color: string, name: string) => ({
@@ -743,12 +1100,22 @@ function buildOption(
     animation: false,
     backgroundColor: THEME.bg,
     tooltip: {
-      trigger: 'axis',
+      trigger: 'item',
       axisPointer: { type: 'cross', crossStyle: { color: CT().crosshair } },
-      backgroundColor: 'transparent',
-      borderWidth: 0,
-      textStyle: { fontSize: 0 },
-      formatter: () => '',
+      backgroundColor: '#111217',
+      borderColor: 'rgba(229,231,235,0.22)',
+      borderWidth: 1,
+      padding: 0,
+      extraCssText: 'box-shadow:0 10px 28px rgba(0,0,0,0.55);border-radius:6px;',
+      textStyle: { color: '#E5E7EB', fontSize: 11 },
+      formatter: (params: unknown) => {
+        if (!isRecord(params)) return ''
+        const data = params.data
+        if (!isRecord(data)) return ''
+        if (typeof data.tooltipHtml === 'string') return data.tooltipHtml
+        if (params.componentType !== 'markPoint' || !isRecord(data.marker)) return ''
+        return markerTooltipHtml(data.marker as unknown as ChartMarker)
+      },
     },
     axisPointer: {
       link: [{ xAxisIndex: 'all' }],
@@ -780,6 +1147,7 @@ function buildOption(
 export function EChartsCandlestick({
   data,
   markers,
+  headShouldersOverlays,
   ranges,
   priceLines,
   height = 480,
@@ -1027,41 +1395,55 @@ export function EChartsCandlestick({
       const d = data[idx]
       const isBuy = m.kind === 'buy'
       const isSell = m.kind === 'sell'
+      const markerPrice = typeof m.price === 'number' && Number.isFinite(m.price)
+        ? m.price
+        : (isBuy ? d.low : d.high)
       if (m.above) {
         const dotColor = m.color ?? (isBuy ? '#FACC15' : CT().text)
+        const displayPrice = d.high
         if (compact) {
           markPointData.push({
-            name: m.date, coord: [m.date, d.high],
-            symbol: 'circle', symbolSize: 4, symbolOffset: [0, -10],
+            name: m.date, coord: [m.date, displayPrice],
+            marker: m,
+            symbol: 'pin', symbolSize: 18, symbolOffset: [0, -22],
             itemStyle: { color: dotColor, cursor: 'pointer' },
-            label: { show: false }, z: 100, zlevel: 10,
+            tooltip: { formatter: () => markerTooltipHtml(m) },
+            label: {
+              show: true, formatter: m.label ?? '',
+              color: '#FFFFFF', fontSize: 8, fontWeight: 'bold',
+              fontFamily: MARKER_LABEL_FONT_FAMILY,
+            },
+            z: 100, zlevel: 10,
           })
         } else {
           markPointData.push({
-            name: m.date, coord: [m.date, d.high],
-            symbol: 'circle', symbolSize: 12, symbolOffset: [0, -2],
-            itemStyle: { color: 'transparent' },
+            name: m.date, coord: [m.date, displayPrice],
+            marker: m,
+            symbol: 'pin', symbolSize: 30, symbolOffset: [0, -34],
+            itemStyle: { color: dotColor },
+            tooltip: { formatter: () => markerTooltipHtml(m) },
             label: {
-              show: true, formatter: m.label ?? '', position: 'top', distance: 0,
-              color: dotColor, fontSize: 10, fontWeight: 'normal',
-              fontFamily: 'JetBrains Mono, monospace',
+              show: true, formatter: m.label ?? '', position: 'inside',
+              color: '#FFFFFF', fontSize: 11, fontWeight: 'bold',
+              fontFamily: MARKER_LABEL_FONT_FAMILY,
             },
             z: 100, zlevel: 10,
           })
         }
       } else {
         markPointData.push({
-          name: m.label ?? '',
-          coord: [m.date, isBuy ? d.low : d.high],
-          symbol: 'arrow', symbolSize: 12,
-          symbolRotate: isBuy ? 0 : 180,
-          symbolOffset: isBuy ? [0, '60%'] : [0, '-60%'],
-          itemStyle: { color: isBuy ? THEME.bull : isSell ? THEME.bear : CT().text },
+          name: m.date,
+          coord: [m.date, markerPrice],
+          marker: m,
+          symbol: 'pin', symbolSize: compact ? 18 : 30,
+          symbolRotate: 0,
+          symbolOffset: isBuy ? [0, compact ? 16 : 22] : [0, compact ? -16 : -22],
+          itemStyle: { color: m.color ?? (isBuy ? THEME.bull : isSell ? THEME.bear : CT().text) },
+          tooltip: { formatter: () => markerTooltipHtml(m) },
           label: {
-            show: !!m.label, formatter: m.label ?? '',
-            position: isBuy ? 'bottom' : 'top', distance: 8,
-            color: CT().text, fontSize: 10,
-            fontFamily: 'JetBrains Mono, monospace',
+            show: !!m.label, formatter: m.label ?? '', position: 'inside',
+            color: '#FFFFFF', fontSize: compact ? 8 : 11, fontWeight: 'bold',
+            fontFamily: MARKER_LABEL_FONT_FAMILY,
           },
         })
       }
@@ -1089,6 +1471,7 @@ export function EChartsCandlestick({
     const option = buildOption(
       data, dates, dateIndexMap,
       showMarkersProp ? markers : undefined,
+      headShouldersOverlays,
       ranges,
       priceLines,
       showMA, compactRef.current,
@@ -1113,7 +1496,7 @@ export function EChartsCandlestick({
     if (infoEl) {
       infoEl.innerHTML = getInfoBarHTML()
     }
-  }, [data, markers, ranges, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme])
+  }, [data, markers, headShouldersOverlays, ranges, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme])
 
   // 渲染信息栏容器 (内容由 JS 直接写入)
   const initialHTML = useMemo(() => {

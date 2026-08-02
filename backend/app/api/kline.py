@@ -3,14 +3,16 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.indicators.pipeline import compute_enriched, compute_enriched_single
 from app.market_time import cn_now, cn_today
+from app.market_rules import market_rule_for_symbol
 from app.price_limits import is_risk_warning_name, price_limit_pct
 from app.db_safe import is_valid_ext_ident, quote_ident
 from app.services import kline_sync
@@ -86,6 +88,7 @@ def search_instruments(
     q: str = Query("", min_length=0, max_length=50, description="搜索关键词"),
     limit: int = Query(20, ge=1, le=50),
     asset_types: str = Query("stock", description="逗号分隔的资产类型: stock,etf"),
+    markets: str = Query("", description="逗号分隔的市场: cn,hk,us; 留空表示全部"),
 ):
     """模糊搜索标的 (代码 / 名称)。从内存 instruments 缓存中查。
 
@@ -105,15 +108,33 @@ def search_instruments(
         if df_t.is_empty() or "symbol" not in df_t.columns:
             continue
         # dtype 全部归一到 Utf8: 股票/ETF 两份缓存来源不同 (ETF 含 legacy 合并), 防 concat SchemaError
+        market_expr = (
+            pl.col("market").cast(pl.Utf8).str.to_lowercase()
+            if "market" in df_t.columns
+            else pl.when(pl.col("symbol").str.to_uppercase().str.ends_with(".HK"))
+            .then(pl.lit("hk"))
+            .when(pl.col("symbol").str.to_uppercase().str.ends_with(".US"))
+            .then(pl.lit("us"))
+            .otherwise(pl.lit("cn"))
+        )
         parts.append(df_t.with_columns([
             pl.col("symbol").cast(pl.Utf8).alias("symbol"),
             (pl.col("name").cast(pl.Utf8) if "name" in df_t.columns else pl.lit("")).alias("name"),
             (pl.col("code").cast(pl.Utf8) if "code" in df_t.columns else pl.lit("")).alias("code"),
+            market_expr.alias("market"),
             pl.lit(t).alias("asset_type"),
-        ]).select(["symbol", "name", "code", "asset_type"]))
+        ]).select(["symbol", "name", "code", "market", "asset_type"]))
     if not parts:
         return {"results": []}
     df = pl.concat(parts, how="vertical")
+
+    requested_markets = {
+        market.strip().lower()
+        for market in markets.split(",")
+        if market.strip().lower() in {"cn", "hk", "us"}
+    }
+    if requested_markets:
+        df = df.filter(pl.col("market").is_in(requested_markets))
 
     keyword = q.strip().upper()
     is_pinyin_query = keyword.isalpha() and keyword.isascii()
@@ -161,7 +182,7 @@ def search_instruments(
             pl.concat(collected, how="vertical") if len(collected) > 1
             else (collected[0] if collected else df.head(0))
         )
-    rows = matched.select(["symbol", "name", "code", "asset_type"]).to_dicts()
+    rows = matched.select(["symbol", "name", "code", "market", "asset_type"]).to_dicts()
     return {"results": rows}
 
 
@@ -319,14 +340,14 @@ def get_daily(
         enriched = compute_enriched(raw, factors=factors)
         rows = enriched.tail(days).to_dicts()
         # 即使 live 模式也尝试追加实时蜡烛
-        rows = _maybe_inject_live_candle(request, symbol, rows, asset_type)
+        rows = _maybe_inject_live_candle(request, symbol, rows, asset_type, end_date=end)
         resp = {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": rows, "source": "live"}
         return _attach_ext(resp, repo, symbol, ext_columns)
 
     rows = df.to_dicts()
 
     # 追加/覆盖今日实时蜡烛
-    rows = _maybe_inject_live_candle(request, symbol, rows, asset_type)
+    rows = _maybe_inject_live_candle(request, symbol, rows, asset_type, end_date=end)
 
     resp = {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": rows, "source": "enriched"}
     return _attach_ext(resp, repo, symbol, ext_columns)
@@ -397,36 +418,78 @@ def _attach_ext(resp: dict, repo, symbol: str, ext_columns: Optional[str]) -> di
     return resp
 
 
-def _maybe_inject_live_candle(request: Request, symbol: str, rows: list[dict], asset_type: str = "stock") -> list[dict]:
+def _maybe_inject_live_candle(
+    request: Request,
+    symbol: str,
+    rows: list[dict],
+    asset_type: str = "stock",
+    end_date: date | None = None,
+) -> list[dict]:
     """如果有当日实时 enriched 数据, 用实时数据生成今日蜡烛并追加/覆盖。
 
-    stock 走 QuoteService 的股票实时缓存; etf 走 ETF enriched 缓存 (开启实时 ETF
-    拉取时为盘中数据, 否则为磁盘最新日, 由下方"非今日不注入"守卫自然跳过)。
+    stock 优先走当前配置的实时行情源，QuoteService 缓存作为回退；etf 走 ETF enriched 缓存。
     """
     if asset_type == "stock":
-        qs = getattr(request.app.state, "quote_service", None)
-        if not qs:
+        market_tz = ZoneInfo(market_rule_for_symbol(symbol).timezone)
+        market_today = datetime.now(market_tz).date()
+        if end_date is not None and end_date < market_today:
             return rows
-        df_today, enriched_date = qs.get_enriched_today()
+
+        q = None
+        enriched_date = None
+        try:
+            from app.data_providers import custom as custom_sources
+            from app.services import preferences
+
+            provider_name = preferences.get_realtime_data_provider()
+            if (
+                provider_name != "tickflow"
+                and custom_sources.provider_has_dataset(provider_name, "realtime")
+            ):
+                quotes = custom_sources.get_provider(provider_name).get_realtime(symbols=[symbol]) or []
+                q = next((item for item in quotes if item.get("symbol") == symbol), None)
+                if q:
+                    timestamp = q.get("timestamp")
+                    enriched_date = (
+                        datetime.fromtimestamp(float(timestamp) / 1000.0, tz=market_tz).date()
+                        if timestamp
+                        else market_today
+                    )
+                    q = {**q, "close": q.get("last_price")}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("stock detail realtime provider unavailable for %s: %s", symbol, type(exc).__name__)
+
+        if q is None:
+            qs = getattr(request.app.state, "quote_service", None)
+            if not qs:
+                return rows
+            df_today, enriched_date = qs.get_enriched_today()
+            if df_today.is_empty():
+                return rows
+            import polars as pl
+            try:
+                matches = df_today.filter(pl.col("symbol") == symbol).to_dicts()
+                if not matches:
+                    return rows
+                q = matches[0]
+            except Exception:  # noqa: BLE001
+                return rows
     elif asset_type == "etf":
         df_today, enriched_date = request.app.state.repo.get_enriched_latest_asset("etf")
+        if df_today.is_empty():
+            return rows
+        import polars as pl
+        try:
+            matches = df_today.filter(pl.col("symbol") == symbol).to_dicts()
+            if not matches:
+                return rows
+            q = matches[0]
+        except Exception:  # noqa: BLE001
+            return rows
     else:
         return rows
-    if df_today.is_empty():
-        return rows
 
-    # 非交易日（周末/假日）缓存的行情日期 != 今天，跳过注入避免产生重复蜡烛
-    if not enriched_date or enriched_date != date.today():
-        return rows
-
-    # 查找该 symbol 的实时 enriched 行
-    import polars as pl
-    try:
-        q = df_today.filter(pl.col("symbol") == symbol).to_dicts()
-        if not q:
-            return rows
-        q = q[0]
-    except Exception:  # noqa: BLE001
+    if not enriched_date or (end_date is not None and enriched_date > end_date):
         return rows
 
     close_price = q.get("close")
@@ -451,7 +514,13 @@ def _maybe_inject_live_candle(request: Request, symbol: str, rows: list[dict], a
         "amount": q.get("amount"),
         "change_pct": q.get("change_pct"),
         "is_live": True,
+        "quote_timestamp": q.get("timestamp"),
     }
+    prev_close = q.get("prev_close")
+    if not prev_close and rows:
+        prev_close = rows[-1].get("close")
+    if live_row["change_pct"] is None and prev_close:
+        live_row["change_pct"] = (close_price - prev_close) / prev_close
     # 补上 enriched 的技术指标字段
     for key in ("ma5", "ma10", "ma20", "ma30", "ma60",
                 "macd_dif", "macd_dea", "macd_hist",

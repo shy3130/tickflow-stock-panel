@@ -207,6 +207,7 @@ class StrategyBacktestRequest(BaseModel):
     holding_days: int = 5
     asset_type: str = "stock"
     minute_fill: bool = False
+    market: str = "cn"
 
 
 @router.post("/strategy/run")
@@ -219,9 +220,18 @@ def strategy_run(req: StrategyBacktestRequest, request: Request):
     start = _resolve_start(req, end, FACTOR_DEFAULT_DAYS)
     _guard_server_backtest_range(start, end)
 
+    from app.services.market_scope import normalize_market, symbols_for_market
+
+    market = normalize_market(req.market)
+    symbols = req.symbols if req.symbols else None
+    if req.asset_type == "stock":
+        allowed_symbols = symbols_for_market(request.app.state.repo, market)
+        allowed_set = set(allowed_symbols)
+        symbols = [symbol for symbol in symbols if symbol in allowed_set] if symbols else allowed_symbols
+
     cfg = StrategyBacktestConfig(
         strategy_id=req.strategy_id,
-        symbols=req.symbols if req.symbols else None,
+        symbols=symbols,
         start=start,
         end=end,
         params=req.params,
@@ -241,6 +251,7 @@ def strategy_run(req: StrategyBacktestRequest, request: Request):
         holding_days=req.holding_days,
         asset_type=req.asset_type,
         minute_fill=req.minute_fill,
+        market=market,
     )
     task = make_worker_task("backtest", settings.data_dir, cfg)
     return run_worker_task(task)
@@ -315,8 +326,9 @@ def _make_job_key(
     commission_pct: float | None = None, stamp_tax_pct: float | None = None,
     asset_type: str = "stock",
     minute_fill: bool = False,
+    market: str = "cn",
 ) -> str:
-    raw = f"{strategy_id}|{symbols}|{start}|{end}|{matching}|{entry_fill}|{exit_fill}|{fees_pct}|{slippage_bps}|{max_positions}|{max_exposure_pct}|{initial_capital}|{position_sizing}|{params}|{overrides}|{mode}|{holding_days}|{commission_pct}|{stamp_tax_pct}|{asset_type}|{minute_fill}"
+    raw = f"{strategy_id}|{symbols}|{start}|{end}|{matching}|{entry_fill}|{exit_fill}|{fees_pct}|{slippage_bps}|{max_positions}|{max_exposure_pct}|{initial_capital}|{position_sizing}|{params}|{overrides}|{mode}|{holding_days}|{commission_pct}|{stamp_tax_pct}|{asset_type}|{minute_fill}|{market}"
     return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 
@@ -344,6 +356,7 @@ async def strategy_stream(
     holding_days: int = 5,
     asset_type: str = "stock",
     minute_fill: bool = False,
+    market: str = "cn",
 ):
     """SSE 流式策略回测: 实时推送进度, 完成后推送结果, 支持重连 (刷新/切页后恢复)。
 
@@ -358,6 +371,15 @@ async def strategy_stream(
     """
     from app.backtest.strategy import StrategyBacktestConfig
     from app.backtest.worker import make_worker_task, run_worker_task
+    from app.services.market_scope import normalize_market, symbols_for_market
+
+    market = normalize_market(market)
+    resolved_symbols = [s.strip() for s in symbols.split(",") if s.strip()] if symbols else None
+    if asset_type == "stock":
+        allowed_symbols = symbols_for_market(request.app.state.repo, market)
+        allowed_set = set(allowed_symbols)
+        resolved_symbols = [s for s in resolved_symbols if s in allowed_set] if resolved_symbols else allowed_symbols
+    resolved_symbols_key = ",".join(resolved_symbols) if resolved_symbols else None
 
     end_date = date.fromisoformat(end) if end else date.today()
     if start:
@@ -375,7 +397,7 @@ async def strategy_stream(
             guard_violated = True
 
     job_key = _make_job_key(
-        strategy_id, symbols, start, end,
+        strategy_id, resolved_symbols_key, start, end,
         matching, entry_fill, exit_fill,
         fees_pct, slippage_bps, max_positions, max_exposure_pct, initial_capital, position_sizing,
         params, overrides,
@@ -383,6 +405,7 @@ async def strategy_stream(
         commission_pct, stamp_tax_pct,
         asset_type=asset_type,
         minute_fill=minute_fill,
+        market=market,
     )
 
     _cleanup_stale_jobs()
@@ -423,7 +446,7 @@ async def strategy_stream(
         if is_new and not job.done:
             cfg = StrategyBacktestConfig(
                 strategy_id=strategy_id,
-                symbols=[s.strip() for s in symbols.split(",") if s.strip()] if symbols else None,
+                symbols=resolved_symbols,
                 start=start_date,
                 end=end_date,
                 params=json.loads(params) if params else None,
@@ -443,6 +466,7 @@ async def strategy_stream(
                 holding_days=int(holding_days),
                 asset_type=asset_type,
                 minute_fill=minute_fill,
+                market=market,
             )
 
             def _run_backtest():

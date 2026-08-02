@@ -16,9 +16,20 @@ import { boardTag } from '@/lib/board'
 import { boardTag as boardBadge } from '@/components/stock-table/primitives'
 import { BUILTIN_COLUMNS } from '@/lib/watchlist-columns'
 import { cnSignal } from '@/lib/signals'
+import { isBacktestableStrategy } from '@/lib/strategy-role'
+import {
+  currencyForMarket,
+  currencyLabel,
+  matchesMarketFilter,
+  marketFromSymbol,
+  marketLabel,
+  type MarketCode,
+} from '@/lib/market-display'
+import { MarketFilterTabs } from '@/components/MarketFilterTabs'
 import { SignalPicker } from '@/components/screener/SignalPicker'
 import { startBacktest, stopBacktest, tryReconnect, useBacktestTask } from '@/lib/backtestTask'
 import { useDataStatus, useCapabilities } from '@/lib/useSharedQueries'
+import { useMarketScope } from '@/lib/market-scope'
 import { EmptyState } from '@/components/EmptyState'
 import { WarmupBadge } from '@/components/WarmupBadge'
 import { DatePicker } from '@/components/DatePicker'
@@ -275,6 +286,14 @@ const fmtLots = (v: number | null | undefined) => {
   if (v == null || Number.isNaN(v)) return '—'
   return v.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
 }
+
+const tradeMarket = (trade: StrategyBacktestTrade) => (
+  String(trade.market || marketFromSymbol(trade.symbol)).toLowerCase()
+)
+
+const tradeCurrency = (trade: StrategyBacktestTrade) => (
+  String(trade.currency || currencyForMarket(tradeMarket(trade))).toUpperCase()
+)
 
 const statValueColor = (v: number | null | undefined) => {
   // 中性值继承页面前景色 (亮暗主题都可读), 不再写死近白色
@@ -708,6 +727,7 @@ function StrategyParamInput({ param, value, onChange }: {
 }
 
 function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: string; onChange: (value: string) => void; assetType?: 'stock' | 'etf' }) {
+  const { market: marketFilter, setMarket } = useMarketScope()
   const symbols = useMemo(() => value.split(',').map(s => s.trim()).filter(Boolean), [value])
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
@@ -715,8 +735,8 @@ function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: stri
   const ref = useRef<HTMLDivElement>(null)
   const searchAssetTypes = assetType === 'etf' ? 'stock,etf' : 'stock'
   const search = useQuery({
-    queryKey: QK.instrumentSearch(query, searchAssetTypes),
-    queryFn: () => api.instrumentSearch(query, 20, searchAssetTypes),
+    queryKey: QK.instrumentSearch(query, searchAssetTypes, marketFilter),
+    queryFn: () => api.instrumentSearch(query, 20, searchAssetTypes, marketFilter),
     enabled: query.trim().length > 0,
     staleTime: 30_000,
   })
@@ -764,12 +784,20 @@ function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: stri
       entries.forEach(e => { if (e.name) next[e.symbol] = e.name })
       return next
     })
-    setSymbols([...symbols, ...entries.map(e => e.symbol)])
+    setSymbols([...symbols, ...entries.map(e => e.symbol).filter(symbol => matchesMarketFilter(symbol, marketFilter))])
   }
   const watchlistCount = watchlist.data?.symbols?.length ?? 0
 
   return (
     <div className="space-y-2" ref={ref}>
+      {assetType === 'stock' && (
+        <MarketFilterTabs
+          value={marketFilter}
+          includeAll={false}
+          onChange={(nextMarket) => { if (nextMarket !== 'all') setMarket(nextMarket) }}
+          className="w-fit"
+        />
+      )}
       <div className="flex items-center gap-2">
         <div className="relative flex-1">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
@@ -795,6 +823,7 @@ function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: stri
                   >
                     <span className="w-[78px] shrink-0 font-mono">{r.symbol}</span>
                     <span className="min-w-0 flex-1 truncate text-secondary">{r.name}</span>
+                    <span className="shrink-0 text-[9px] text-muted">{marketLabel(r.market)}</span>
                     {(() => {
                       const b = boardBadge(r.symbol)
                       return b && (
@@ -857,6 +886,7 @@ function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: stri
 }
 
 export function StrategyBacktest() {
+  const { market } = useMarketScope()
   const signalNames = useSignalNames()
   const [saved] = useState(() => storage.strategyBacktestLast.get(null))
   const [selectedStrategy, setSelectedStrategy] = useState<string | null>(saved?.selectedStrategy ?? null)
@@ -909,13 +939,25 @@ export function StrategyBacktest() {
   const [tradePageSize, setTradePageSize] = useState(10)
   const [selectedTrade, setSelectedTrade] = useState<StrategyBacktestTrade | null>(null)
   const loadedStrategyRef = useRef<string | null>(null)
+  const previousMarketRef = useRef(market)
+
+  useEffect(() => {
+    if (previousMarketRef.current === market) return
+    previousMarketRef.current = market
+    setSymbols('')
+    setResult(null)
+    setSelectedTrade(null)
+  }, [market])
 
   const strategies = useQuery({
     queryKey: QK.screenerStrategies(assetType),
     queryFn: () => api.screenerStrategies(assetType),
   })
 
-  const strategyList = useMemo(() => strategies.data?.presets ?? [], [strategies.data])
+  const strategyList = useMemo(
+    () => (strategies.data?.presets ?? []).filter(isBacktestableStrategy),
+    [strategies.data],
+  )
   const filteredStrategyList = useMemo(() => (
     strategyGroup === 'all' ? strategyList : strategyList.filter(st => st.source === strategyGroup)
   ), [strategyGroup, strategyList])
@@ -986,6 +1028,7 @@ export function StrategyBacktest() {
   // 当全局回测任务完成时, 把结果写入组件 (切页回来也能恢复)
   useEffect(() => {
     if (backtestTask && !backtestTask.isPending && backtestTask.result) {
+      if (backtestTask.result.config?.market && backtestTask.result.config.market !== market) return
       setResult(backtestTask.result)
       setResultTab('daily')
       setDailyPage(0)
@@ -1017,7 +1060,7 @@ export function StrategyBacktest() {
         result: backtestTask.result,
       })
     }
-  }, [backtestTask])
+  }, [backtestTask, market])
 
   const handleRun = () => {
     if (!selectedStrategy || backtestDataUnavailable) return
@@ -1027,6 +1070,7 @@ export function StrategyBacktest() {
     startBacktest({
       strategy_id: selectedStrategy,
       asset_type: assetType,
+      market,
       symbols: symbols ? symbols.split(',').map(s => s.trim()).filter(Boolean) : null,
       start: start || null,
       end: end || undefined,
@@ -1130,6 +1174,26 @@ export function StrategyBacktest() {
       if (exitCmp !== 0) return exitCmp
       return String(b.entry_date).localeCompare(String(a.entry_date))
     })
+  }, [result?.trades])
+
+  const marketSummaries = useMemo(() => {
+    const summaries = (['cn', 'hk', 'us'] as MarketCode[]).map(market => ({
+      market,
+      currency: currencyForMarket(market),
+      trades: 0,
+      wins: 0,
+      pnl: 0,
+    }))
+    const byMarket = new Map(summaries.map(item => [item.market, item]))
+    for (const trade of result?.trades ?? []) {
+      const summary = byMarket.get(tradeMarket(trade) as MarketCode)
+      if (!summary) continue
+      summary.trades += 1
+      summary.pnl += Number(trade.pnl_amount ?? 0)
+      if (Number(trade.pnl_pct) > 0) summary.wins += 1
+      summary.currency = tradeCurrency(trade) || summary.currency
+    }
+    return summaries
   }, [result?.trades])
 
   const dailyTradeRows = useMemo<DailyTradeRow[]>(() => {
@@ -1296,8 +1360,10 @@ export function StrategyBacktest() {
     ['buy_score_filter', '评分过滤'],
     ['buy_limit_up', '涨停未买'],
     ['buy_suspended', '停牌未买'],
+    ['buy_lot_size', '整手不足'],
     ['sell_limit_down', '跌停阻塞'],
     ['sell_suspended', '停牌阻塞'],
+    ['sell_same_day_restricted', 'A股当日卖出限制'],
     ['pending_exit', '待卖阻塞'],
     ['sell_minute_trigger_fallback', '分钟信号顺延'],
   ]
@@ -1939,6 +2005,30 @@ export function StrategyBacktest() {
               </div>
             )}
 
+            {result.trades.length > 0 && (
+              <div className="grid gap-3 md:grid-cols-3">
+                {marketSummaries.map(item => (
+                  <div key={item.market} className="rounded-card border border-border bg-surface px-4 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-sm font-medium text-foreground">{marketLabel(item.market)}</span>
+                      <span className="rounded border border-border bg-elevated px-1.5 py-0.5 text-[10px] text-secondary">
+                        {item.currency} · {currencyLabel(item.currency)}
+                      </span>
+                    </div>
+                    <div className={`mt-2 font-mono text-lg font-semibold num ${priceColorClass(item.pnl)}`}>
+                      {fmtSignedMoney(item.pnl)}
+                    </div>
+                    <div className="mt-1 flex items-center gap-3 text-[11px] text-muted">
+                      <span>交易 <b className="num font-medium text-secondary">{item.trades}</b></span>
+                      <span>胜率 <b className="num font-medium text-secondary">
+                        {item.trades ? fmtPct(item.wins / item.trades) : '—'}
+                      </b></span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {executionSummary.length > 0 && (
               <div className="rounded-card border border-amber-400/25 bg-amber-400/5 px-3 py-2 text-[11px] leading-5 text-secondary">
                 <span className="font-medium text-amber-300">成交约束：</span>
@@ -2078,10 +2168,12 @@ export function StrategyBacktest() {
 
                 {resultTab === 'trades' && (
                   <div className="overflow-x-auto">
-                    <table className="w-full min-w-[960px] text-sm text-foreground">
+                    <table className="w-full min-w-[1120px] text-sm text-foreground">
                       <thead className="bg-elevated">
                         <tr className="text-left text-secondary">
                           <th className="px-4 py-2.5 font-medium">标的</th>
+                          <th className="px-4 py-2.5 font-medium">市场</th>
+                          <th className="px-4 py-2.5 font-medium">币种</th>
                           <th className="px-4 py-2.5 font-medium">买入</th>
                           <th className="px-4 py-2.5 font-medium">卖出</th>
                           <th className="px-4 py-2.5 font-medium text-right">仓位 / 手数</th>
@@ -2098,6 +2190,11 @@ export function StrategyBacktest() {
                                 {t.name || t.symbol}
                               </div>
                               <div className="mt-0.5 font-mono text-[11px] text-muted">{t.symbol}</div>
+                            </td>
+                            <td className="px-4 py-2.5 text-secondary">{marketLabel(tradeMarket(t))}</td>
+                            <td className="px-4 py-2.5">
+                              <div className="font-mono text-secondary">{tradeCurrency(t) || '—'}</div>
+                              <div className="mt-0.5 text-[10px] text-muted">{currencyLabel(tradeCurrency(t))}</div>
                             </td>
                             <td className="px-4 py-2.5">
                               <TradeLegCell trade={t} side="buy" signalNames={signalNames} />

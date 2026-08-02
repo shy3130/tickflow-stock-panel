@@ -5,6 +5,7 @@ import { Onboarding } from './pages/Onboarding'
 import { Auth } from './pages/Auth'
 import { useSettings } from './lib/useSharedQueries'
 import { Logo } from './components/Logo'
+import { MarketScopeProvider } from './lib/market-scope'
 
 // 代码分割: 页面全部 lazy 加载, 避免首屏打包所有页面 (ECharts / lightweight-charts /
 // framer-motion 等重库) → 大幅减小首屏 bundle。命名导出用 .then 映射为 default。
@@ -15,6 +16,9 @@ const Backtest = lazy(() => import('./pages/Backtest').then(m => ({ default: m.B
 const Financials = lazy(() => import('./pages/Financials').then(m => ({ default: m.Financials })))
 const Data = lazy(() => import('./pages/Data').then(m => ({ default: m.Data })))
 const Monitor = lazy(() => import('./pages/Monitor').then(m => ({ default: m.Monitor })))
+const DowMonitor = lazy(() => import('./pages/DowMonitor').then(m => ({ default: m.DowMonitor })))
+const DowMonitorHelp = lazy(() => import('./pages/DowMonitorHelp').then(m => ({ default: m.DowMonitorHelp })))
+const CollectionMonitor = lazy(() => import('./pages/CollectionMonitor').then(m => ({ default: m.CollectionMonitor })))
 const Dashboard = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })))
 const AnalysisDetail = lazy(() => import('./pages/AnalysisDetail').then(m => ({ default: m.AnalysisDetail })))
 const ConceptAnalysis = lazy(() => import('./pages/ConceptAnalysis').then(m => ({ default: m.ConceptAnalysis })))
@@ -61,9 +65,11 @@ export const router = createBrowserRouter([
   {
     path: '/',
     element: (
-      <OnboardingGuard>
-        <Layout />
-      </OnboardingGuard>
+      <MarketScopeProvider>
+        <OnboardingGuard>
+          <Layout />
+        </OnboardingGuard>
+      </MarketScopeProvider>
     ),
     children: [
       { index: true, element: <Dashboard /> },
@@ -80,6 +86,9 @@ export const router = createBrowserRouter([
       { path: 'financials', element: <Financials /> },
       { path: 'data', element: <Data /> },
       { path: 'monitor', element: <Monitor /> },
+      { path: 'dow-monitor', element: <DowMonitor /> },
+      { path: 'dow-monitor/help', element: <DowMonitorHelp /> },
+      { path: 'collection-monitor', element: <CollectionMonitor /> },
       { path: 'limit-ladder', element: <LimitUpLadder /> },
       { path: 'indices', element: <Indices /> },
       { path: 'branding', element: <Branding /> },

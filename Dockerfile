@@ -10,11 +10,18 @@ ARG PYPI_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
 ARG PYPI_FALLBACK=https://mirrors.aliyun.com/pypi/simple
 ARG BACKEND_EXTRAS=
 ARG CODEX_CLI_VERSION=0.144.3
+ARG BASE_IMAGE_PREFIX=
+ARG BUILD_ID=dev
+ARG PUBLISHED_AT=
 
 # === Stage 1: 前端构建 ===
-FROM node:20-alpine AS frontend-builder
+FROM ${BASE_IMAGE_PREFIX}node:20-alpine AS frontend-builder
 ARG USE_CN_MIRROR=1
 ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG BUILD_ID
+ARG PUBLISHED_AT
+ENV VITE_BUILD_ID=${BUILD_ID} \
+    VITE_PUBLISHED_AT=${PUBLISHED_AT}
 WORKDIR /build
 # 关键:corepack 不读 npm 的 registry 配置,且跨 RUN 不保留环境变量,
 # 因此国内网络下最稳的做法是直接用 npm 安装 pnpm(npm 会读取 .npmrc 镜像源),
@@ -26,14 +33,15 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then pnpm config set registry "$NPM_REGISTRY"
 COPY frontend/package.json frontend/pnpm-lock.yaml* ./
 RUN pnpm install --frozen-lockfile || pnpm install
 COPY frontend/ ./
-RUN pnpm build
+RUN pnpm build \
+    && cp ./dist/index.html ./dist/collection-monitor.html
 
 # === Stage 1b: stock-sdk 插件依赖(可选,默认跳过) ===
 # ⚠️ 合规提示: stock-sdk 通过 node bridge.mjs 抓取第三方财经网站(如东方财富)的行情接口,
 #    未经对方授权,可能违反其服务条款并涉及交易所行情版权。默认不打包(INCLUDE_STOCKSDK=0)。
 #    如确需启用,构建时传 --build-arg INCLUDE_STOCKSDK=1,即视为使用者知悉并自行承担合规责任。
 # INCLUDE_STOCKSDK=0 时,本 stage 仅产出空 node_modules 目录,保证后续 COPY 不报错。
-FROM node:20-bookworm-slim AS stocksdk-builder
+FROM ${BASE_IMAGE_PREFIX}node:20-bookworm-slim AS stocksdk-builder
 ARG USE_CN_MIRROR=1
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 ARG INCLUDE_STOCKSDK=0
@@ -49,7 +57,7 @@ RUN if [ "$INCLUDE_STOCKSDK" = "1" ]; then \
 
 # === Stage 1c: Codex CLI ===
 # 固定版本保证镜像可复现；只复制安装产物到运行镜像，不保留 npm。
-FROM node:20-bookworm-slim AS codex-builder
+FROM ${BASE_IMAGE_PREFIX}node:20-bookworm-slim AS codex-builder
 ARG USE_CN_MIRROR=1
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 # 版本由顶层 ARG CODEX_CLI_VERSION 提供, 这里仅声明以继承, 不再重复默认值。
@@ -63,12 +71,14 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then npm config set registry "$NPM_REGISTRY";
     && /opt/codex-native --version
 
 # === Stage 2: Python 运行时 ===
-FROM python:3.11-slim AS runtime
+FROM ${BASE_IMAGE_PREFIX}python:3.11-slim AS runtime
 ARG USE_CN_MIRROR=1
 ARG PYPI_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
 ARG PYPI_FALLBACK=https://mirrors.aliyun.com/pypi/simple
 ARG BACKEND_EXTRAS=
 ARG INCLUDE_STOCKSDK=0
+ARG BUILD_ID
+ARG PUBLISHED_AT
 WORKDIR /app
 
 # Node.js 运行时: 仅在启用 stock-sdk 插件时安装(供 node bridge.mjs 使用)。
@@ -112,11 +122,17 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
     done; \
     uv sync --frozen "$@" || uv sync "$@"
 
+# 固定版本的共享策略核心。只安装 wheel 本身，运行所需 NumPy 已由后端依赖提供。
+COPY backend/vendor/longbridge_stock-0.1.0-py3-none-any.whl /tmp/vendor/
+RUN uv pip install --python /app/.venv/bin/python --no-cache --no-deps \
+    /tmp/vendor/longbridge_stock-0.1.0-py3-none-any.whl
+
 # Backend code
 # 注意:Docker 里 WORKDIR=/app, 而 config.py 的 _PROJECT_ROOT 是按开发布局
 # (<root>/backend/app/) 推导的, 容器内会错算到 /。这里用环境变量显式指定
 # 三个关键路径, 确保 static / tiers / data 都指向容器内正确位置。
 COPY backend/app ./app
+COPY backend/scripts ./scripts
 # stock-sdk 插件依赖: 从 stocksdk-builder 拷入。
 # INCLUDE_STOCKSDK=0(默认) 时, stocksdk-builder 产出空目录,此处拷入空目录,
 # 即最终镜像不含 stock-sdk 依赖,插件默认不可用。
@@ -125,7 +141,9 @@ COPY --from=stocksdk-builder /build/node_modules ./app/plugins/stocksdk/node_mod
 COPY tiers.yaml /app/tiers.yaml
 ENV STATIC_DIR=/app/static \
     TIERS_YAML=/app/tiers.yaml \
-    DATA_DIR=/app/data
+    DATA_DIR=/app/data \
+    BUILD_ID=${BUILD_ID} \
+    PUBLISHED_AT=${PUBLISHED_AT}
 
 # Frontend 静态产物
 COPY --from=frontend-builder /build/dist ./static

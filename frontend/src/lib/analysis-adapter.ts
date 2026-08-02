@@ -10,6 +10,105 @@
 
 import type { ExtDataConfig, ExtDataField, ExtDataRowsResult } from '@/lib/api'
 
+export interface MarketIndustryResponse {
+  market: string
+  as_of: string | null
+  source: string | null
+  rows: Record<string, any>[]
+}
+
+export interface MarketConceptResponse {
+  market: string
+  as_of: string | null
+  source: string | null
+  window_days: number
+  rows: Record<string, any>[]
+}
+
+export function marketConceptDimensionData(
+  market: string,
+  response: MarketConceptResponse | null | undefined,
+): { data: ExtDataRowsResult; config: ExtDataConfig; sourceLabel: string } | null {
+  const normalized = market.trim().toLowerCase()
+  if (normalized === 'cn' || !response) return null
+
+  const suffix = `.${normalized.toUpperCase()}`
+  const rows = response.rows
+    .filter(row => String(row.symbol ?? '').toUpperCase().endsWith(suffix))
+    .map(row => ({ ...row, concept: [String(row.concept ?? '').trim()].filter(Boolean) }))
+  const id = `clickhouse-concepts-${normalized}`
+  const label = 'ClickHouse 动态事件主题'
+  const fields: ExtDataField[] = [
+    { name: 'symbol', dtype: 'string', label: '标的代码' },
+    { name: 'name', dtype: 'string', label: '标的名称' },
+    { name: 'concept', dtype: 'string', label: '概念主题' },
+  ]
+  return {
+    data: {
+      id,
+      label,
+      mode: 'snapshot',
+      date: response.as_of,
+      total: rows.length,
+      limit: rows.length,
+      fields,
+      rows,
+    },
+    config: {
+      id,
+      label,
+      mode: 'snapshot',
+      fields,
+      description: `来自 ClickHouse 最近 ${response.window_days} 天舆情事件的市场影响主题`,
+      created_at: response.as_of ?? '',
+      updated_at: response.as_of ?? '',
+    },
+    sourceLabel: label,
+  }
+}
+
+export function marketIndustryDimensionData(
+  market: string,
+  response: MarketIndustryResponse | null | undefined,
+): { data: ExtDataRowsResult; config: ExtDataConfig; sourceLabel: string } | null {
+  const normalized = market.trim().toLowerCase()
+  if (normalized === 'cn' || !response) return null
+
+  const suffix = `.${normalized.toUpperCase()}`
+  const rows = response.rows.filter(row => String(row.symbol ?? '').toUpperCase().endsWith(suffix))
+  const id = `clickhouse-industries-${normalized}`
+  const fields: ExtDataField[] = [
+    { name: 'symbol', dtype: 'string', label: '标的代码' },
+    { name: 'name', dtype: 'string', label: '标的名称' },
+    { name: 'main_sector', dtype: 'string', label: '一级行业' },
+    { name: 'sub_industry', dtype: 'string', label: '二级行业' },
+    { name: 'industry', dtype: 'string', label: '行业路径' },
+    { name: 'is_leader', dtype: 'bool', label: '行业代表股' },
+  ]
+  return {
+    data: {
+      id,
+      label: 'ClickHouse 全量行业分类',
+      mode: 'snapshot',
+      date: response.as_of,
+      total: rows.length,
+      limit: rows.length,
+      fields,
+      rows,
+    },
+    config: {
+      id,
+      label: 'ClickHouse 全量行业分类',
+      mode: 'snapshot',
+      fields,
+      description: '来自 ClickHouse F10 全量行业分类，附带行业代表股标记',
+      created_at: response.as_of ?? '',
+      updated_at: response.as_of ?? '',
+    },
+    sourceLabel: 'ClickHouse 全量行业分类',
+  }
+}
+
 // ===== 公共类型 =====
 
 export interface StockRow {
@@ -65,6 +164,9 @@ function dimensionValue(raw: unknown): string {
 
 function dimensionValues(raw: unknown): string[] {
   if (raw == null) return []
+  if (Array.isArray(raw)) {
+    return raw.map(dimensionValue).filter(Boolean)
+  }
   return String(raw).split(SEPARATORS)
     .map(dimensionValue)
     .filter(Boolean)

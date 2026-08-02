@@ -15,6 +15,9 @@ import { useTheme } from '@/lib/theme'
 import { useCapabilities, usePreferences } from '@/lib/useSharedQueries'
 import { SealedBadge } from '@/components/SealedBadge'
 import type { ExtColumnDisplayConfig } from '@/lib/watchlist-columns'
+import { useMarketScope } from '@/lib/market-scope'
+import { marketLabel } from '@/lib/market-display'
+import { limitLadderRefetchInterval } from '@/lib/limit-ladder-realtime'
 
 // ===== Ext 字段配置 =====
 
@@ -1429,6 +1432,19 @@ function ExtConfigDialog({ fields, onSave, onClose }: {
 // ===== 主页面 =====
 
 export function LimitUpLadder() {
+  const { market } = useMarketScope()
+  if (market !== 'cn') {
+    return (
+      <div className="h-full flex flex-col">
+        <PageHeader title="涨跌停梯队" subtitle={`当前市场：${marketLabel(market)}`} />
+        <EmptyState icon={Flame} title={`${marketLabel(market)}不使用 A 股涨跌停梯队`} hint="该功能依赖 A 股涨跌停、连板和封板规则；切回 A 股后可使用。" />
+      </div>
+    )
+  }
+  return <LimitUpLadderCn />
+}
+
+function LimitUpLadderCn() {
   const [asOf, setAsOf] = useState('')
   const [direction, setDirection] = useState<Direction>(() => storage.limitLadderDirection.get('up'))
   const [sealMode, setSealMode] = useState<'vol' | 'amount'>(() => storage.limitLadderSealMode.get('vol'))
@@ -1517,6 +1533,8 @@ export function LimitUpLadder() {
     queryKey: [QK.limitLadder(asOf || undefined), extColumnsParam, direction],
     queryFn: () => api.limitLadder(asOf || undefined, extColumnsParam, direction),
     staleTime: 5 * 60_000,
+    refetchInterval: limitLadderRefetchInterval(asOf),
+    refetchIntervalInBackground: true,
   })
   const handleOpenDimension = useCallback((kind: DimensionKind, value: string, sourceField?: string) => {
     if (!sourceField) return

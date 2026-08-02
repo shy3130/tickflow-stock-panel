@@ -1,8 +1,22 @@
 import { useState, useCallback, useEffect } from 'react'
 import { storage } from '@/lib/storage'
 
+const REQUIRED_SIGNAL_STRATEGIES = [
+  'next_day_direction',
+  'dow_trend_signals',
+  'head_shoulders_signals',
+]
+
+function loadInitialPool(): string[] {
+  const existing = storage.strategyPool.get([])
+  return [
+    ...existing,
+    ...REQUIRED_SIGNAL_STRATEGIES.filter(id => !existing.includes(id)),
+  ]
+}
+
 export function useStrategyPool() {
-  const [pool, setPool] = useState<string[]>(() => storage.strategyPool.get([]))
+  const [pool, setPool] = useState<string[]>(loadInitialPool)
 
   // 同步写入 localStorage
   useEffect(() => { storage.strategyPool.set(pool) }, [pool])

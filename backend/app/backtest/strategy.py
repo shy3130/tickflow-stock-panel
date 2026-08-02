@@ -51,7 +51,7 @@ _EXECUTION_COLUMNS = frozenset({
     "name", "score", "signal_limit_up", "signal_limit_down",
 })
 _LIMIT_BASE_COLUMNS = frozenset({"raw_close", "raw_high"})
-_INSTRUMENT_COLUMNS = frozenset({"name", "total_shares", "float_shares"})
+_INSTRUMENT_COLUMNS = frozenset({"name", "total_shares", "float_shares", "lot_size"})
 
 
 @dataclass(frozen=True)
@@ -176,8 +176,8 @@ class StrategyDependencyResolver:
             base_columns = frozenset(set(base_columns) | set(_LIMIT_BASE_COLUMNS))
 
         instrument_columns = frozenset(required_features & set(_INSTRUMENT_COLUMNS))
-        instrument_columns = frozenset(set(instrument_columns) | {"name"})
-        matrix_columns = set(_EXECUTION_COLUMNS) | required_signals
+        instrument_columns = frozenset(set(instrument_columns) | {"name", "lot_size"})
+        matrix_columns = set(_EXECUTION_COLUMNS) | set(instrument_columns) | required_signals
         if minute_fill:
             indicator_columns = frozenset(set(indicator_columns) | {"ma5", "ma10", "ma20"})
             matrix_columns.update({"ma5", "ma10", "ma20"})
@@ -227,7 +227,7 @@ class StrategyDependencyResolver:
         base_columns = _resolve_base_columns(required_features | set(_EXECUTION_COLUMNS))
         base_columns = frozenset(set(base_columns) | set(_LIMIT_BASE_COLUMNS))
         instrument_columns = frozenset(required_features & set(_INSTRUMENT_COLUMNS))
-        instrument_columns = frozenset(set(instrument_columns) | {"name"})
+        instrument_columns = frozenset(set(instrument_columns) | {"name", "lot_size"})
         warmup_bars = max(60, int(strategy.matrix_strategy.required_warmup_bars(params)))
         matrix_columns = set(base_columns) | set(instrument_columns) | {
             "signal_limit_up",
@@ -470,6 +470,7 @@ class StrategyBacktestConfig:
     position_sizing: Literal["equal", "score_weight"] = "equal"
     mode: Literal["position", "full"] = "position"
     asset_type: str = "stock"
+    market: str = "cn"
     holding_days: int = 5
     # 分钟K精确成交: 开启后用当日分钟K确定穿越价/VWAP (需 Pro+ 分钟K能力)
     minute_fill: bool = False
@@ -584,6 +585,12 @@ class StrategyBacktestService:
         self.engine = engine
         self.strategy_engine = strategy_engine
 
+    def _require_backtestable(self, strategy_id: str) -> StrategyDef:
+        strategy = self.strategy_engine.get(strategy_id)
+        if strategy.meta.get("strategy_role") == "risk":
+            raise ValueError("风险策略不支持买入回测")
+        return strategy
+
     @staticmethod
     def _matrix_prepare_signature(config: StrategyBacktestConfig) -> tuple:
         return (
@@ -593,6 +600,7 @@ class StrategyBacktestService:
             config.end,
             config.mode,
             config.asset_type,
+            config.market,
             config.holding_days,
             config.minute_fill,
             json.dumps(config.overrides or {}, sort_keys=True, ensure_ascii=False, default=str),
@@ -620,7 +628,7 @@ class StrategyBacktestService:
             raise ValueError("optimizer trials must share strategy, universe, range and overrides")
 
         first = configs[0]
-        strategy = self.strategy_engine.get(first.strategy_id)
+        strategy = self._require_backtestable(first.strategy_id)
         if strategy.execution_backend != "matrix_native":
             raise ValueError("shared MarketDataMatrix preparation requires matrix_native strategy")
         StrategyEngine.validate_context(
@@ -770,6 +778,7 @@ class StrategyBacktestService:
         prepared: PreparedMatrixBacktest | None = None,
         result_policy: BacktestResultPolicy | None = None,
     ) -> StrategyBacktestResult:
+        s = self._require_backtestable(config.strategy_id)
         t0 = time.perf_counter()
         run_id = uuid.uuid4().hex[:10]
         result_policy = result_policy or BacktestResultPolicy()
@@ -784,7 +793,6 @@ class StrategyBacktestService:
 
         # 获取策略定义
         try:
-            s = self.strategy_engine.get(config.strategy_id)
             StrategyEngine.validate_context(
                 s,
                 StrategyDataContext(

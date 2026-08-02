@@ -8,6 +8,7 @@ import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
 import { fmtPrice, fmtPct, fmtBigNum, priceColorClass } from '@/lib/format'
 import { PageHeader } from '@/components/PageHeader'
+import { MarketFilterTabs } from '@/components/MarketFilterTabs'
 import { EmptyState } from '@/components/EmptyState'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import {
@@ -25,6 +26,8 @@ import { MiniCandlestick } from '@/components/stock-table/MiniCandlestick'
 import { MiniIntraday } from '@/components/stock-table/MiniIntraday'
 import { boardTag, renderBuiltinDataCell } from '@/components/stock-table/primitives'
 import { getSignals, signalCls, getSortValue, UNSORTABLE_KEYS } from '@/lib/stock-table'
+import { marketLabel, matchesMarketFilter, type MarketFilter } from '@/lib/market-display'
+import { useMarketScope } from '@/lib/market-scope'
 import { resolveCandleConfig, resolveIntradayConfig } from '@/lib/list-columns'
 import { useQuoteStatus, useCapabilities, usePreferences } from '@/lib/useSharedQueries'
 import {
@@ -208,10 +211,12 @@ function StockSearchBox({
   onPreview,
   existingSymbols,
   onAdd,
+  marketFilter,
 }: {
   onPreview: (symbol: string, name: string) => void
   existingSymbols: string[]
   onAdd: (symbol: string) => void
+  marketFilter: MarketFilter
 }) {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
@@ -220,8 +225,8 @@ function StockSearchBox({
   const [activeIdx, setActiveIdx] = useState(-1)
 
   const search = useQuery({
-    queryKey: QK.instrumentSearch(query, 'stock,etf,index'),
-    queryFn: () => api.instrumentSearch(query, 20, 'stock,etf,index'),
+    queryKey: QK.instrumentSearch(query, 'stock,etf,index', marketFilter),
+    queryFn: () => api.instrumentSearch(query, 20, 'stock,etf,index', marketFilter),
     enabled: query.trim().length > 0,
     staleTime: 30_000,
   })
@@ -302,6 +307,9 @@ function StockSearchBox({
                   >
                     <span className="font-mono shrink-0 w-[80px]">{r.symbol}</span>
                     <span className="truncate text-secondary flex-1">{r.name}</span>
+                    <span className="shrink-0 rounded border border-border px-1 py-0.5 text-[9px] text-muted">
+                      {marketLabel(r.market)}
+                    </span>
                     {r.asset_type === 'etf' && (
                       <span className="shrink-0 px-1 py-0.5 rounded text-[10px] leading-none bg-accent/10 text-accent">ETF</span>
                     )}
@@ -566,6 +574,10 @@ const StockCard = React.memo(function StockCard({
 
 export function Watchlist() {
   const qc = useQueryClient()
+  const { market: marketFilter, setMarket } = useMarketScope()
+  const setMarketFilter = useCallback((market: MarketFilter) => {
+    if (market !== 'all') setMarket(market)
+  }, [setMarket])
   const [viewMode, setViewMode] = useState<'table' | 'card'>(() => {
     return (storage.watchlistView.get('table') as 'table' | 'card')
   })
@@ -880,12 +892,13 @@ export function Watchlist() {
 
   // 筛选 + 排序
   const filteredRows = useMemo(() => {
-    // 板块筛选（全选时跳过）
-    let result = rows
+    let result = rows.filter(r => matchesMarketFilter(r.symbol, marketFilter))
+    // 板块筛选只约束 A 股；港美股没有创/科/北板块语义。
     if (boardFilter.size > 0 && boardFilter.size < BOARDS.length) {
       result = result.filter(r => {
         // 非股票 (指数/ETF) 无板块语义, 不受板块筛选影响 (顺带修复 ETF 行被误过滤)
         if (r.asset_type && r.asset_type !== 'stock') return true
+        if (!matchesMarketFilter(r.symbol, 'cn')) return true
         const board = getBoardType(r.symbol)
         return board != null && boardFilter.has(board)
       })
@@ -910,7 +923,7 @@ export function Watchlist() {
       })
     }
     return result
-  }, [rows, filters, columns, boardFilter])
+  }, [rows, filters, columns, boardFilter, marketFilter])
 
   const activeFilterCount = Object.values(filters).filter(v => v.min || v.max || v.text).length
   const hasBoardFilter = boardFilter.size > 0 && boardFilter.size < BOARDS.length
@@ -1015,7 +1028,8 @@ export function Watchlist() {
           </span>
         }
         right={
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-max items-center gap-2 md:min-w-0">
+            <MarketFilterTabs value={marketFilter} includeAll={false} onChange={setMarketFilter} />
             {/* 筛选 / 重置 / 搜索 */}
             <button
               onClick={() => setFilterOpen(v => !v)}
@@ -1042,6 +1056,7 @@ export function Watchlist() {
               onPreview={(sym, name) => { setPreviewSymbol(sym); setPreviewName(name) }}
               existingSymbols={allSymbols as string[]}
               onAdd={(sym) => addMutation.mutate(sym)}
+              marketFilter={marketFilter}
             />
             <button
               onClick={() => {
@@ -1102,7 +1117,7 @@ export function Watchlist() {
 
       {/* 筛选栏 */}
       {filterOpen && (
-        <div className="px-5 py-2 border-b border-border bg-surface/50 max-h-[184px] overflow-y-auto">
+        <div className="max-h-[184px] overflow-y-auto border-b border-border bg-surface/50 px-3 py-2 sm:px-5">
           {/* 板块筛选 */}
           <div className="mb-2">
             <div className="text-[10px] text-muted uppercase tracking-wider mb-0.5">板块</div>
@@ -1174,7 +1189,7 @@ export function Watchlist() {
 
       {/* 可滚动列表区 — 占满剩余高度，内部独立滚动，表头 sticky 固定 */}
       <div className="flex-1 min-h-0 overflow-y-auto">
-        <div className="px-5 py-3">
+        <div className="px-2 py-2 sm:px-5 sm:py-3">
           {/* 列表 */}
           {list.isLoading && <div className="text-sm text-muted">加载中…</div>}
           {list.isError && <div className="text-sm text-danger">读取自选失败</div>}
@@ -1410,10 +1425,10 @@ export function Watchlist() {
                 // 其余纯数据列 → 共享原语
                 return renderBuiltinDataCell(r, col)
               }}
-              className="rounded-card overflow-x-auto"
+              className="max-w-full rounded-card overflow-x-auto"
             />
           ) : !virtualizeCards ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
               {sortedRows.map(renderStockCard)}
             </div>
           ) : (
@@ -1430,7 +1445,7 @@ export function Watchlist() {
                     key={virtualRow.key}
                     ref={cardRowVirtualizer.measureElement}
                     data-index={virtualRow.index}
-                    className="absolute left-0 top-0 w-full grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3"
+                    className="absolute left-0 top-0 grid w-full grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6"
                     style={{ transform: `translateY(${virtualRow.start - cardScrollMargin}px)` }}
                   >
                     {row.map(renderStockCard)}

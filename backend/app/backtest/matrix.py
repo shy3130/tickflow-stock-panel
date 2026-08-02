@@ -519,6 +519,7 @@ class MarketMatrix:
     session_ids: np.ndarray
     symbols: tuple[str, ...]
     names: tuple[str, ...]
+    lot_sizes: np.ndarray
 
     open: np.ndarray
     high: np.ndarray
@@ -884,7 +885,7 @@ def _resolve_matrix_storage_fields(
     matrix_fields = set(parquet_fields)
     vector_fields = {
         name
-        for name in ("total_shares", "float_shares")
+        for name in ("total_shares", "float_shares", "lot_size")
         if name in wanted_fields
         and name in instrument_columns
         and name not in parquet_fields
@@ -898,7 +899,7 @@ def _resolve_matrix_storage_fields(
     if "price_limit_pct" in wanted_fields:
         matrix_fields.add("price_limit_pct")
     resolved = matrix_fields | vector_fields
-    unresolved = wanted_fields - resolved
+    unresolved = wanted_fields - resolved - {"lot_size"}
     if unresolved:
         raise ValueError(f"matrix parquet fields unavailable: {sorted(unresolved)}")
     return parquet_fields, sorted(matrix_fields), sorted(vector_fields)
@@ -1549,7 +1550,15 @@ def _instrument_fingerprint(instruments: pl.DataFrame | None) -> bytes:
         return b"no-instruments"
     columns = [
         name
-        for name in ("symbol", "name", "total_shares", "float_shares", "limit_up", "limit_down")
+        for name in (
+            "symbol",
+            "name",
+            "total_shares",
+            "float_shares",
+            "lot_size",
+            "limit_up",
+            "limit_down",
+        )
         if name in instruments.columns
     ]
     payload = instruments.select(columns).sort("symbol").to_dicts()
@@ -1753,11 +1762,12 @@ def _slice_and_project_market_data_matrix(
     if start_id >= stop_id:
         raise ValueError("matrix parquet range contains no market data")
     sliced = slice_market_data_matrix(market, start_id, stop_id)
-    missing = requested_fields - set(sliced.fields)
+    available_requested_fields = requested_fields & set(sliced.fields)
+    missing = requested_fields - available_requested_fields - {"lot_size"}
     if missing:
         raise ValueError(f"matrix disk cache missing requested fields: {sorted(missing)}")
     projected_values: dict[str, np.ndarray] = {}
-    for name in sorted(requested_fields):
+    for name in sorted(available_requested_fields):
         values = sliced.fields[name]
         if name in sliced.vector_fields:
             values = np.where(np.isfinite(sliced.close), values, np.nan).astype(
@@ -2314,12 +2324,23 @@ def build_market_matrix_from_signals(
         exit_signal_code,
     )
 
+    lot_sizes = np.zeros(len(market.symbols), dtype=np.int32)
+    lot_size_field = market.fields.get("lot_size")
+    if lot_size_field is not None:
+        for asset_id in range(len(market.symbols)):
+            values = lot_size_field[:, asset_id]
+            valid = values[np.isfinite(values) & (values > 0)]
+            if valid.size:
+                lot_sizes[asset_id] = int(valid[0])
+    _make_read_only(lot_sizes)
+
     return MarketMatrix(
         timestamps=market.timestamps,
         timestamp_labels=market.timestamp_labels,
         session_ids=market.session_ids,
         symbols=market.symbols,
         names=market.names,
+        lot_sizes=lot_sizes,
         open=market.open,
         high=market.high,
         low=market.low,
@@ -2357,7 +2378,7 @@ def build_market_matrix(
         raise ValueError("cannot build MarketMatrix from an empty panel")
     market = build_market_data_matrix(
         panel,
-        field_columns={"score", "ma5", "ma10", "ma20"},
+        field_columns={"score", "ma5", "ma10", "ma20", "lot_size"},
     )
     _, _, _, time_id, asset_id = _encode_axes(panel)
     shape = market.shape
@@ -3679,6 +3700,7 @@ def matrix_feature(market: MarketDataMatrix, name: str) -> np.ndarray:
             "high_60d",
             "low_60d",
             "annual_vol_20d",
+            "macd_hist",
             "ma20_bias",
         }
         or (name.startswith("ma") and name[2:].isdigit())
@@ -3775,6 +3797,12 @@ def _compute_matrix_feature(market: MarketDataMatrix, name: str) -> np.ndarray:
             20,
             ddof=1,
         ) * np.float32(252 ** 0.5)
+    if name == "macd_hist":
+        ema12 = valid_ewm_adjust_false(market.close, close_valid, span=12)
+        ema26 = valid_ewm_adjust_false(market.close, close_valid, span=26)
+        dif = ema12 - ema26
+        dea = valid_ewm_adjust_false(dif, np.isfinite(dif), span=9)
+        return (dif - dea) * np.float32(2.0)
     if name.startswith("rsi_") and name[4:].isdigit():
         window = int(name[4:])
         delta = market.close - valid_shift(market.close, 1, close_valid)

@@ -1,0 +1,713 @@
+version: 1
+requirements:
+  - id: REQ-DOW-MONITOR-KEY-INTERPRETATION-COLUMN-001
+    specification: USER-20260730-DOW-MONITOR-KEY-INTERPRETATION-COLUMN
+    implementation:
+      - frontend/src/components/dow-monitor/interpretationMarketContext.ts
+      - frontend/src/components/dow-monitor/keyInterpretation.ts
+      - frontend/src/components/dow-monitor/KeyInterpretationCell.tsx
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+      - frontend/src/pages/DowMonitorHelp.tsx
+    tests: {path: tests/spec_contracts/test_dow_monitor_key_interpretation_column_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-key-interpretation-column.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-key-interpretation-column.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-SUDDEN-ANOMALY-HIGHLIGHT-001
+    specification: USER-20260730-DOW-MONITOR-SUDDEN-ANOMALY-HIGHLIGHT
+    implementation:
+      - frontend/src/components/dow-monitor/suddenAnomalyHighlights.ts
+      - frontend/src/components/dow-monitor/useSuddenAnomalyHighlights.ts
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+      - frontend/src/pages/DowMonitorHelp.tsx
+    tests: {path: tests/spec_contracts/test_dow_monitor_sudden_anomaly_highlight_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-sudden-anomaly-highlight.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-sudden-anomaly-highlight.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-P0-SEMANTICS-001
+    specification: USER-20260730-DOW-MONITOR-P0-CLARITY
+    implementation:
+      - frontend/src/components/dow-monitor/monitorListPresentation.ts
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+      - frontend/src/pages/DowMonitorHelp.tsx
+    tests: {path: tests/spec_contracts/test_dow_monitor_p0_clarity_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-p0-clarity.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-p0-clarity.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-P0-POSITION-RISK-001
+    specification: USER-20260730-DOW-MONITOR-P0-CLARITY
+    implementation:
+      - frontend/src/components/dow-monitor/monitorListPresentation.ts
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+    tests: {path: tests/spec_contracts/test_dow_monitor_p0_clarity_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-p0-clarity.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-p0-clarity.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-P0-FRESHNESS-001
+    specification: USER-20260730-DOW-MONITOR-P0-CLARITY
+    implementation:
+      - frontend/src/components/dow-monitor/monitorListPresentation.ts
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+    tests: {path: tests/spec_contracts/test_dow_monitor_p0_clarity_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-p0-clarity.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-p0-clarity.md, type: independent-review}
+  - id: REQ-COLLECTION-MONITOR-PROXY-001
+    specification: SPEC-COLLECTION-MONITOR-INTEGRATION-001
+    implementation:
+      - backend/app/api/collection_monitor.py
+      - backend/app/main.py
+    tests:
+      - {path: tests/backend/test_collection_monitor_proxy.py, type: executable-test}
+      - {path: tests/spec_contracts/test_collection_monitor_integration_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/collection-monitor-integration.md, type: semantic-acceptance}
+      - {path: docs/reviews/collection-monitor-integration.md, type: independent-review}
+  - id: REQ-COLLECTION-MONITOR-PAGE-001
+    specification: SPEC-COLLECTION-MONITOR-INTEGRATION-001
+    implementation:
+      - frontend/src/pages/CollectionMonitor.tsx
+      - frontend/src/components/collection-monitor/types.ts
+      - frontend/src/components/collection-monitor/useCollectionMonitor.ts
+      - frontend/src/router.tsx
+      - frontend/src/components/Layout.tsx
+      - backend/app/spa_entry.py
+      - backend/app/main.py
+      - Dockerfile
+    tests:
+      - {path: tests/backend/test_collection_monitor_entry.py, type: executable-test}
+      - {path: tests/spec_contracts/test_collection_monitor_integration_contract.py, type: executable-test}
+      - {path: tests/spec_contracts/test_collection_monitor_frontend_behavior.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/collection-monitor-integration.md, type: semantic-acceptance}
+      - {path: docs/reviews/collection-monitor-integration.md, type: independent-review}
+  - id: REQ-COLLECTION-MONITOR-PREACCEPTANCE-001
+    specification: SPEC-COLLECTION-MONITOR-INTEGRATION-001
+    implementation:
+      - docs/acceptance/collection-monitor-integration.md
+      - docs/reviews/collection-monitor-integration.md
+    tests:
+      - {path: tests/spec_contracts/test_collection_monitor_integration_contract.py, type: executable-test}
+      - {path: tests/spec_contracts/test_collection_monitor_frontend_behavior.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/collection-monitor-integration.md, type: semantic-acceptance}
+      - {path: docs/reviews/collection-monitor-integration.md, type: independent-review}
+  - id: REQ-TICKFLOW-PRODUCTION-SOURCE-RECOVERY-001
+    specification: SPEC-TICKFLOW-PRODUCTION-SOURCE-RECOVERY-001
+    implementation:
+      - backend/app/main.py
+      - backend/app/api/dow_strategy.py
+      - frontend/src/pages/DowMonitor.tsx
+      - frontend/src/pages/Screener.tsx
+      - frontend/src/components/screener/DowStrategyCard.tsx
+      - frontend/src/components/data/EnrichedRebuildPanel.tsx
+      - frontend/src/components/StockPreviewDialog.tsx
+    tests:
+      - {path: tests/spec_contracts/test_production_source_recovery.py, type: executable-test}
+      - {path: tests/spec_contracts/test_production_source_semantics.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/production-source-recovery.md, type: semantic-acceptance}
+      - {path: docs/reviews/production-source-recovery.md, type: independent-review}
+  - id: REQ-REALTIME-UI-GATEWAY-001
+    specification: SPEC-REALTIME-UI-GATEWAY-001
+    implementation:
+      - backend/app/api/realtime.py
+      - backend/app/services/realtime_market_data.py
+      - backend/app/main.py
+    tests: {path: tests/spec_contracts/test_realtime_gateway_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/realtime-ui-fast-path.md, type: semantic-acceptance}
+      - {path: docs/reviews/realtime-ui-fast-path.md, type: independent-review}
+  - id: REQ-REALTIME-UI-FALLBACK-001
+    specification: SPEC-REALTIME-UI-GATEWAY-001
+    implementation:
+      - frontend/src/lib/realtimeMarketData.ts
+      - frontend/src/lib/realtimeOverlays.ts
+      - frontend/src/components/StockPreviewDialog.tsx
+      - frontend/src/components/StockPanel.tsx
+      - frontend/src/components/StockInfoBar.tsx
+      - frontend/src/components/StockIntradayChart.tsx
+      - frontend/src/components/dow-monitor/DowMonitorCard.tsx
+      - frontend/src/pages/DowMonitor.tsx
+    tests: {path: tests/spec_contracts/test_realtime_frontend_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/realtime-ui-fast-path.md, type: semantic-acceptance}
+      - {path: docs/reviews/realtime-ui-fast-path.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-STRICT-DOUBLE-BREAK-001
+    specification: SPEC-DOW-MONITOR-SIGNAL-PRESENTATION-001
+    implementation:
+      - frontend/src/components/dow-monitor/chartMappings.ts
+    tests: {path: tests/spec_contracts/test_dow_monitor_presentation_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-signal-presentation.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-signal-presentation.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-CHINESE-MARKER-001
+    specification: SPEC-DOW-MONITOR-SIGNAL-PRESENTATION-001
+    implementation:
+      - frontend/src/components/dow-monitor/chartMappings.ts
+    tests: {path: tests/spec_contracts/test_dow_monitor_presentation_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-signal-presentation.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-signal-presentation.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-LINE-TOGGLE-001
+    specification: SPEC-DOW-MONITOR-SIGNAL-PRESENTATION-001
+    implementation:
+      - frontend/src/components/dow-monitor/DowMonitorDetailDialog.tsx
+    tests: {path: tests/spec_contracts/test_dow_monitor_presentation_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-signal-presentation.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-signal-presentation.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-FALSE-BREAK-PRESENTATION-001
+    specification: SPEC-DOW-MONITOR-SIGNAL-PRESENTATION-001
+    implementation:
+      - frontend/src/components/dow-monitor/chartMappings.ts
+      - frontend/src/components/dow-monitor/types.ts
+    tests: {path: tests/spec_contracts/test_dow_monitor_presentation_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-signal-presentation.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-signal-presentation.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-MARKER-CLEARANCE-001
+    specification: SPEC-DOW-MONITOR-SIGNAL-PRESENTATION-001
+    implementation:
+      - frontend/src/components/EChartsCandlestick.tsx
+    tests: {path: tests/spec_contracts/test_dow_monitor_presentation_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-signal-presentation.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-signal-presentation.md, type: independent-review}
+  - id: REQ-DOW-HEAD-SHOULDERS-SIGNAL-001
+    specification: SPEC-DOW-HEAD-SHOULDERS-001
+    implementation:
+      - backend/app/services/dow_monitor_client.py
+      - backend/app/services/dow_monitor_service.py
+      - frontend/src/components/EChartsCandlestick.tsx
+      - frontend/src/components/dow-monitor/types.ts
+      - frontend/src/components/dow-monitor/chartMappings.ts
+      - frontend/src/components/dow-monitor/DowMonitorDetailDialog.tsx
+    tests:
+      - {path: tests/spec_contracts/test_head_shoulders_monitor_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-head-shoulders.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-head-shoulders.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-SYMBOL-IDENTITY-001
+    specification: SPEC-DOW-MONITOR-SYMBOL-IDENTITY-001
+    implementation:
+      - backend/app/services/dow_monitor_service.py
+      - backend/app/services/dow_monitor_store.py
+      - backend/app/services/dow_minute_decision.py
+      - backend/app/services/dow_monitor_models.py
+    tests: {path: tests/spec_contracts/test_dow_monitor_symbol_identity_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-symbol-identity.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-symbol-identity.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-DETAIL-TOGGLE-LAYOUT-001
+    specification: USER-20260728-DOW-MONITOR-DETAIL-TOGGLE-LAYOUT
+    implementation:
+      - frontend/src/components/dow-monitor/DowMonitorDetailDialog.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_presentation_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-detail-toggle-layout.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-detail-toggle-layout.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-REALTIME-RENDER-THROTTLE-001
+    specification: USER-20260729-DOW-MONITOR-REALTIME-RENDER
+    implementation:
+      - frontend/src/lib/realtimeOverlays.ts
+    tests:
+      - {path: tests/spec_contracts/test_realtime_frontend_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-realtime-render-performance.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-realtime-render-performance.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-REALTIME-RENDER-BATCH-001
+    specification: USER-20260729-DOW-MONITOR-REALTIME-RENDER
+    implementation:
+      - frontend/src/lib/realtimeMarketData.ts
+    tests:
+      - {path: tests/spec_contracts/test_realtime_frontend_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-realtime-render-performance.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-realtime-render-performance.md, type: independent-review}
+  - id: REQ-DOW-DAILY-DECISION-BEGINNER-COPY-001
+    specification: USER-20260729-DOW-DAILY-DECISION-BEGINNER-COPY
+    implementation:
+      - frontend/src/components/dow-monitor/DailyDecisionSummary.tsx
+      - frontend/src/components/dow-monitor/DowMonitorCard.css
+      - frontend/src/components/dow-monitor/types.ts
+    tests:
+      - {path: tests/spec_contracts/test_dow_daily_decision_beginner_copy_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-daily-decision-beginner-copy.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-daily-decision-beginner-copy.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-LIST-LAYOUT-001
+    specification: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    implementation:
+      - frontend/src/pages/DowMonitor.tsx
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-list-websocket.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-list-websocket.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-LIST-INDICATORS-001
+    specification: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    implementation:
+      - frontend/src/components/dow-monitor/monitorListPresentation.ts
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-list-websocket.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-list-websocket.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-LIST-REALTIME-001
+    specification: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    implementation:
+      - frontend/src/pages/DowMonitor.tsx
+      - frontend/src/components/dow-monitor/DowMonitorSparkline.tsx
+      - frontend/src/components/dow-monitor/monitorListPresentation.ts
+      - frontend/src/lib/realtimeMarketData.ts
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-list-websocket.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-list-websocket.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-LIST-SIGNAL-STABILITY-001
+    specification: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    implementation:
+      - frontend/src/components/dow-monitor/monitorListPresentation.ts
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+      - frontend/src/components/dow-monitor/formatServerTimestamp.ts
+      - frontend/src/pages/DowMonitor.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-list-websocket.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-list-websocket.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-INLINE-DETAIL-001
+    specification: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    implementation:
+      - frontend/src/pages/DowMonitor.tsx
+      - frontend/src/components/dow-monitor/DowMonitorDetailPanel.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-list-websocket.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-list-websocket.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-INDICATOR-GROUPS-LAYOUT-001
+    specification: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    implementation:
+      - frontend/src/components/dow-monitor/monitorListPresentation.ts
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+      - frontend/src/pages/DowMonitor.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-indicator-groups.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-indicator-groups.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-LIVE-OBSERVATION-METRICS-001
+    specification: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    implementation:
+      - frontend/src/components/dow-monitor/monitorListPresentation.ts
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+      - frontend/src/pages/DowMonitor.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-indicator-groups.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-indicator-groups.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-STABLE-DECISION-METRICS-001
+    specification: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    implementation:
+      - frontend/src/components/dow-monitor/monitorListPresentation.ts
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+      - frontend/src/pages/DowMonitor.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-indicator-groups.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-indicator-groups.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-INDICATOR-SIGNAL-BOUNDARY-001
+    specification: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    implementation:
+      - frontend/src/components/dow-monitor/monitorListPresentation.ts
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+      - frontend/src/pages/DowMonitor.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-indicator-groups.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-indicator-groups.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-HELP-NAVIGATION-001
+    specification: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    implementation:
+      - frontend/src/pages/DowMonitor.tsx
+      - frontend/src/pages/DowMonitorHelp.tsx
+      - frontend/src/router.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-indicator-help.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-indicator-help.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-HELP-CONTENT-001
+    specification: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    implementation:
+      - frontend/src/pages/DowMonitorHelp.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-indicator-help.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-indicator-help.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-HELP-ACCESSIBILITY-001
+    specification: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    implementation:
+      - frontend/src/pages/DowMonitorHelp.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-indicator-help.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-indicator-help.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-MINUTE-RESULTS-SCHEMA-001
+    specification: USER-20260729-DOW-MONITOR-MINUTE-RESULTS-CLICKHOUSE
+    implementation:
+      - backend/app/services/dow_monitor_minute_result_models.py
+      - backend/app/services/dow_monitor_minute_result_repository.py
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_minute_results_clickhouse_contract.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_repository.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-minute-results-clickhouse.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-minute-results-clickhouse.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-MINUTE-RESULTS-MATERIALIZATION-001
+    specification: USER-20260729-DOW-MONITOR-MINUTE-RESULTS-CLICKHOUSE
+    implementation:
+      - backend/app/services/dow_monitor_minute_result_models.py
+      - backend/app/services/dow_monitor_minute_result_calculator.py
+      - backend/app/services/dow_monitor_minute_result_history.py
+      - backend/app/services/dow_monitor_minute_result_materializer.py
+      - backend/app/services/dow_monitor_service.py
+      - backend/app/main.py
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_minute_results_clickhouse_contract.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_calculator.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_history.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_materializer.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_integration.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-minute-results-clickhouse.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-minute-results-clickhouse.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-MINUTE-RESULTS-BACKFILL-001
+    specification: USER-20260729-DOW-MONITOR-MINUTE-RESULTS-CLICKHOUSE
+    implementation:
+      - backend/app/services/dow_monitor_minute_result_source.py
+      - backend/app/services/dow_monitor_minute_result_history.py
+      - backend/app/services/dow_monitor_minute_result_materializer.py
+      - backend/app/services/dow_monitor_minute_result_repository.py
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_minute_results_clickhouse_contract.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_source.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_history.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_materializer.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-minute-results-clickhouse.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-minute-results-clickhouse.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-LIVE-WARMUP-INTERPRETATION-001
+    specification: USER-20260730-DOW-MONITOR-LIVE-WARMUP-INTERPRETATION
+    implementation:
+      - frontend/src/components/dow-monitor/interpretationMarketContext.ts
+      - frontend/src/components/dow-monitor/keyInterpretation.ts
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_live_warmup_interpretation_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-live-warmup-interpretation.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-live-warmup-interpretation.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-DAILY-PAYLOAD-SAFETY-001
+    specification: SPEC-DOW-MONITOR-DAILY-PAYLOAD-SAFETY-001
+    implementation:
+      - backend/app/services/dow_monitor_bar_safety.py
+      - backend/app/services/dow_monitor_client.py
+      - backend/app/services/dow_monitor_service.py
+    tests:
+      - {path: tests/backend/test_dow_monitor_bar_safety.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-daily-payload-safety.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-daily-payload-safety-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-MOBILE-COMPACT-LIST-001
+    specification: SPEC-DOW-MONITOR-MOBILE-VERSION-REFRESH-001
+    implementation:
+      - frontend/src/components/dow-monitor/DowMonitorMobileRow.tsx
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+      - frontend/src/components/dow-monitor/KeyInterpretationCell.tsx
+      - frontend/src/components/dow-monitor/DowMonitorDetailPanel.tsx
+      - frontend/src/pages/DowMonitor.tsx
+    tests:
+      - {path: tests/frontend/test_dow_monitor_mobile_version.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-mobile-version-refresh.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-mobile-version-refresh-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-FRONTEND-VERSION-REFRESH-001
+    specification: SPEC-DOW-MONITOR-MOBILE-VERSION-REFRESH-001
+    implementation:
+      - backend/app/api/routes.py
+      - Dockerfile
+      - docker-compose.yml
+      - frontend/src/components/AppVersionGuard.tsx
+      - frontend/src/lib/appVersion.ts
+      - frontend/src/lib/api.ts
+      - frontend/src/main.tsx
+    tests:
+      - {path: tests/backend/test_app_version.py, type: executable-test}
+      - {path: tests/frontend/test_dow_monitor_mobile_version.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-mobile-version-refresh.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-mobile-version-refresh-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-NEW-SYMBOL-HISTORY-BACKFILL-001
+    specification: SPEC-DOW-MONITOR-NEW-SYMBOL-HISTORY-BACKFILL-001
+    implementation:
+      - backend/app/services/dow_monitor_history_status.py
+      - backend/app/services/dow_monitor_models.py
+      - backend/app/services/dow_monitor_service.py
+      - backend/app/main.py
+      - frontend/src/components/dow-monitor/types.ts
+    tests:
+      - {path: tests/backend/test_dow_monitor_history_status.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-new-symbol-history-backfill.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-new-symbol-history-backfill-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001
+    specification: SPEC-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001
+    implementation:
+      - backend/app/services/dow_monitor_half_hour_ai_calendar.py
+      - backend/app/services/dow_monitor_half_hour_ai_models.py
+      - backend/app/services/dow_monitor_half_hour_ai_repository.py
+      - backend/app/services/dow_monitor_half_hour_ai_prompt.py
+      - backend/app/services/dow_monitor_half_hour_ai_snapshot.py
+      - backend/app/workers/dow_monitor_half_hour_ai.py
+      - docker-compose.yml
+      - docker-compose.override.yml
+    tests:
+      - {path: tests/backend/test_dow_monitor_half_hour_ai.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-half-hour-ai-analysis.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-half-hour-ai-analysis-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-HALF-HOUR-AI-VIEW-001
+    specification: SPEC-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001
+    implementation:
+      - backend/app/api/dow_monitor.py
+      - backend/app/services/dow_monitor_service.py
+      - frontend/src/components/dow-monitor/DowMonitorAiAnalysisDialog.tsx
+      - frontend/src/components/dow-monitor/DowMonitorHalfHourAiButton.tsx
+      - frontend/src/components/dow-monitor/formatServerTimestamp.ts
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+      - frontend/src/components/dow-monitor/DowMonitorMobileRow.tsx
+    tests:
+      - {path: tests/backend/test_dow_monitor_half_hour_ai.py, type: executable-test}
+      - {path: tests/frontend/test_dow_monitor_half_hour_ai_frontend.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-half-hour-ai-analysis.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-half-hour-ai-analysis-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-HOURLY-AI-CADENCE-001
+    specification: SPEC-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001
+    implementation:
+      - backend/app/services/dow_monitor_half_hour_ai_calendar.py
+      - backend/app/workers/dow_monitor_half_hour_ai.py
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_hourly_ai_stage_contract.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_half_hour_ai.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-hourly-ai-stage-analysis.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-08-01-dow-monitor-hourly-ai-stage-analysis-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-HOURLY-AI-STAGE-REPORT-001
+    specification: SPEC-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001
+    implementation:
+      - backend/app/services/dow_monitor_half_hour_ai_models.py
+      - backend/app/services/dow_monitor_half_hour_ai_prompt.py
+      - backend/app/workers/dow_monitor_half_hour_ai.py
+      - frontend/src/components/dow-monitor/DowMonitorAiStageReport.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_hourly_ai_stage_contract.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_half_hour_ai.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-hourly-ai-stage-analysis.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-08-01-dow-monitor-hourly-ai-stage-analysis-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-HOURLY-AI-MINUTE-PATH-001
+    specification: SPEC-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001
+    implementation:
+      - backend/app/services/dow_monitor_half_hour_ai_snapshot.py
+      - backend/app/services/dow_monitor_hourly_ai_structure.py
+      - backend/app/services/dow_monitor_half_hour_ai_prompt.py
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_hourly_ai_stage_contract.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_half_hour_ai.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_hourly_ai_structure.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-hourly-ai-stage-analysis.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-08-01-dow-monitor-hourly-ai-stage-analysis-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-HOURLY-AI-VIEW-001
+    specification: SPEC-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001
+    implementation:
+      - backend/app/services/dow_monitor_service.py
+      - frontend/src/components/dow-monitor/DowMonitorAiAnalysisDialog.tsx
+      - frontend/src/components/dow-monitor/DowMonitorAiStageReport.tsx
+      - frontend/src/components/dow-monitor/DowMonitorHalfHourAiButton.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_hourly_ai_stage_contract.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_half_hour_ai.py, type: executable-test}
+      - {path: tests/frontend/test_dow_monitor_half_hour_ai_frontend.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-hourly-ai-stage-analysis.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-08-01-dow-monitor-hourly-ai-stage-analysis-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-HOURLY-AI-DECISION-FIRST-VIEW-001
+    specification: SPEC-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001
+    implementation:
+      - frontend/src/components/dow-monitor/DowMonitorAiStageReport.tsx
+    tests:
+      - {path: tests/frontend/test_dow_monitor_half_hour_ai_frontend.py, type: executable-test}
+      - {path: tests/spec_contracts/test_dow_monitor_hourly_ai_stage_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-hourly-ai-decision-first-view.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-08-02-dow-monitor-hourly-ai-decision-first-view-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-HALF-HOUR-AI-OFFLINE-BOOTSTRAP-001
+    specification: SPEC-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001
+    implementation:
+      - backend/app/services/dow_monitor_minute_result_repository.py
+      - backend/app/services/dow_monitor_minute_result_materializer.py
+      - backend/app/services/dow_monitor_offline_bootstrap.py
+      - backend/app/workers/dow_monitor_half_hour_ai.py
+      - docker-compose.yml
+    tests:
+      - {path: tests/backend/test_dow_monitor_minute_result_repository.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_materializer.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_offline_bootstrap.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_half_hour_ai.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_offline_ai_bootstrap_integration.py, type: executable-test}
+      - {path: tests/spec_contracts/test_dow_monitor_offline_ai_bootstrap_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-offline-ai-bootstrap.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-offline-ai-bootstrap-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-HALF-HOUR-AI-BOOTSTRAP-ISOLATION-001
+    specification: SPEC-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001
+    implementation:
+      - backend/app/services/dow_monitor_minute_result_repository.py
+      - backend/app/services/dow_monitor_minute_result_materializer.py
+      - backend/app/services/dow_monitor_offline_bootstrap.py
+      - backend/app/workers/dow_monitor_half_hour_ai.py
+      - docker-compose.yml
+    tests:
+      - {path: tests/backend/test_dow_monitor_minute_result_repository.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_materializer.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_offline_bootstrap.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_half_hour_ai.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_offline_ai_bootstrap_integration.py, type: executable-test}
+      - {path: tests/spec_contracts/test_dow_monitor_offline_ai_bootstrap_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-offline-ai-bootstrap.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-offline-ai-bootstrap-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-INCREMENTAL-TIMEFRAME-EVALUATION-001
+    specification: USER-20260731-DOW-MONITOR-INCREMENTAL-EVALUATION-001
+    implementation:
+      - backend/app/services/dow_monitor_service.py
+      - backend/app/services/dow_monitor_store.py
+    tests:
+      - {path: tests/backend/test_dow_monitor_incremental_evaluation.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-incremental-evaluation.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-incremental-evaluation-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-BOUNDED-SYMBOL-CONCURRENCY-001
+    specification: USER-20260731-DOW-MONITOR-INCREMENTAL-EVALUATION-001
+    implementation:
+      - backend/app/services/dow_monitor_service.py
+    tests:
+      - {path: tests/backend/test_dow_monitor_incremental_evaluation.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-incremental-evaluation.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-incremental-evaluation-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-LIVE-INTERPRETATION-AVAILABILITY-001
+    specification: USER-20260731-DOW-MONITOR-INCREMENTAL-EVALUATION-001
+    implementation:
+      - frontend/src/components/dow-monitor/interpretationMarketContext.ts
+      - frontend/src/components/dow-monitor/keyInterpretation.ts
+    tests:
+      - {path: tests/frontend/test_dow_monitor_live_interpretation_availability.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-incremental-evaluation.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-incremental-evaluation-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-MINUTE-RESULTS-REALTIME-APPEND-001
+    specification: USER-20260731-DOW-MONITOR-INCREMENTAL-EVALUATION-001
+    implementation:
+      - backend/app/services/dow_monitor_minute_result_append.py
+      - backend/app/services/dow_monitor_minute_result_live.py
+      - backend/app/services/dow_monitor_minute_result_scheduler.py
+      - backend/app/services/dow_monitor_service.py
+    tests:
+      - {path: tests/backend/test_dow_monitor_minute_result_scheduling.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-incremental-evaluation.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-incremental-evaluation-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-MINUTE-RESULTS-STAGGERED-BACKFILL-001
+    specification: USER-20260731-DOW-MONITOR-INCREMENTAL-EVALUATION-001
+    implementation:
+      - backend/app/plugins/clickhouse/bridge.py
+      - backend/app/services/dow_monitor_client.py
+      - backend/app/services/dow_monitor_minute_result_history.py
+      - backend/app/services/dow_monitor_minute_result_materializer.py
+      - backend/app/services/dow_monitor_minute_result_scheduler.py
+      - backend/app/services/dow_monitor_minute_result_source.py
+      - backend/app/services/dow_monitor_minute_result_repository.py
+      - backend/app/services/dow_monitor_service.py
+    tests:
+      - {path: tests/backend/test_dow_monitor_minute_result_scheduling.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_history.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_repository.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-incremental-evaluation.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-incremental-evaluation-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-FAST-BOOTSTRAP-001
+    specification: SPEC-DOW-MONITOR-FAST-BOOTSTRAP-001
+    implementation:
+      - frontend/src/pages/DowMonitor.tsx
+      - frontend/src/components/dow-monitor/useDowMonitor.ts
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+      - frontend/src/lib/api.ts
+    tests:
+      - {path: tests/frontend/test_dow_monitor_fast_bootstrap_frontend.py, type: executable-test}
+      - {path: tests/spec_contracts/test_dow_monitor_fast_bootstrap_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-fast-bootstrap.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-08-02-dow-monitor-fast-bootstrap-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-LIGHTWEIGHT-LIST-OVERVIEW-001
+    specification: SPEC-DOW-MONITOR-FAST-BOOTSTRAP-001
+    implementation:
+      - backend/app/api/dow_monitor.py
+      - backend/app/services/dow_monitor_service.py
+      - backend/app/services/dow_monitor_store.py
+      - frontend/src/lib/api.ts
+    tests:
+      - {path: tests/backend/test_dow_monitor_fast_bootstrap.py, type: executable-test}
+      - {path: tests/frontend/test_dow_monitor_fast_bootstrap_frontend.py, type: executable-test}
+      - {path: tests/spec_contracts/test_dow_monitor_fast_bootstrap_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-fast-bootstrap.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-08-02-dow-monitor-fast-bootstrap-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-NOTIFICATION-SUMMARY-001
+    specification: SPEC-DOW-MONITOR-FAST-BOOTSTRAP-001
+    implementation:
+      - backend/app/api/dow_monitor.py
+      - backend/app/services/dow_monitor_store.py
+      - frontend/src/components/dow-monitor/useDowMonitor.ts
+      - frontend/src/lib/api.ts
+    tests:
+      - {path: tests/backend/test_dow_monitor_fast_bootstrap.py, type: executable-test}
+      - {path: tests/frontend/test_dow_monitor_fast_bootstrap_frontend.py, type: executable-test}
+      - {path: tests/spec_contracts/test_dow_monitor_fast_bootstrap_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-fast-bootstrap.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-08-02-dow-monitor-fast-bootstrap-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-STARTUP-PERFORMANCE-001
+    specification: SPEC-DOW-MONITOR-FAST-BOOTSTRAP-001
+    implementation:
+      - backend/app/services/dow_monitor_service.py
+      - frontend/src/pages/DowMonitor.tsx
+    tests:
+      - {path: tests/backend/test_dow_monitor_fast_bootstrap.py, type: executable-test}
+      - {path: tests/frontend/test_dow_monitor_fast_bootstrap_frontend.py, type: executable-test}
+      - {path: tests/spec_contracts/test_dow_monitor_fast_bootstrap_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-fast-bootstrap.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-08-02-dow-monitor-fast-bootstrap-review.md, type: independent-review}

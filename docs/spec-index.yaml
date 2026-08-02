@@ -1,0 +1,180 @@
+version: 1
+project_status: configured
+specifications:
+  - id: SPEC-TICKFLOW-PRODUCTION-SOURCE-RECOVERY-001
+    path: docs/specs/production-source-recovery.md
+    status: authoritative
+    requirements: [REQ-TICKFLOW-PRODUCTION-SOURCE-RECOVERY-001]
+  - id: SPEC-REALTIME-UI-GATEWAY-001
+    path: docs/specs/realtime-ui-gateway.md
+    status: authoritative
+    requirements:
+      - REQ-REALTIME-UI-GATEWAY-001
+      - REQ-REALTIME-UI-FALLBACK-001
+  - id: SPEC-DOW-MONITOR-SIGNAL-PRESENTATION-001
+    path: docs/specs/dow-monitor-signal-presentation.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-STRICT-DOUBLE-BREAK-001
+      - REQ-DOW-MONITOR-CHINESE-MARKER-001
+      - REQ-DOW-MONITOR-LINE-TOGGLE-001
+      - REQ-DOW-MONITOR-FALSE-BREAK-PRESENTATION-001
+      - REQ-DOW-MONITOR-MARKER-CLEARANCE-001
+  - id: SPEC-DOW-HEAD-SHOULDERS-001
+    path: docs/specs/dow-monitor-head-shoulders.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-HEAD-SHOULDERS-SIGNAL-001
+  - id: USER-20260728-DOW-MONITOR-DETAIL-TOGGLE-LAYOUT
+    path: docs/specs/dow-monitor-detail-toggle-layout.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-DETAIL-TOGGLE-LAYOUT-001
+  - id: SPEC-COLLECTION-MONITOR-INTEGRATION-001
+    path: docs/specs/collection-monitor-integration.md
+    status: authoritative
+    requirements:
+      - REQ-COLLECTION-MONITOR-PROXY-001
+      - REQ-COLLECTION-MONITOR-PAGE-001
+      - REQ-COLLECTION-MONITOR-PREACCEPTANCE-001
+  - id: SPEC-DOW-MONITOR-SYMBOL-IDENTITY-001
+    path: docs/specs/dow-monitor-symbol-identity.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-SYMBOL-IDENTITY-001
+  - id: USER-20260729-DOW-MONITOR-REALTIME-RENDER
+    path: docs/specs/dow-monitor-realtime-render-performance.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-REALTIME-RENDER-THROTTLE-001
+      - REQ-DOW-MONITOR-REALTIME-RENDER-BATCH-001
+  - id: USER-20260729-DOW-DAILY-DECISION-BEGINNER-COPY
+    path: docs/specs/dow-daily-decision-beginner-copy.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-DAILY-DECISION-BEGINNER-COPY-001
+  - id: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    path: docs/specs/dow-monitor-list-websocket.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-LIST-LAYOUT-001
+      - REQ-DOW-MONITOR-LIST-INDICATORS-001
+      - REQ-DOW-MONITOR-LIST-REALTIME-001
+      - REQ-DOW-MONITOR-LIST-SIGNAL-STABILITY-001
+      - REQ-DOW-MONITOR-INLINE-DETAIL-001
+      - REQ-DOW-MONITOR-INDICATOR-GROUPS-LAYOUT-001
+      - REQ-DOW-MONITOR-LIVE-OBSERVATION-METRICS-001
+      - REQ-DOW-MONITOR-STABLE-DECISION-METRICS-001
+      - REQ-DOW-MONITOR-INDICATOR-SIGNAL-BOUNDARY-001
+      - REQ-DOW-MONITOR-HELP-NAVIGATION-001
+      - REQ-DOW-MONITOR-HELP-CONTENT-001
+      - REQ-DOW-MONITOR-HELP-ACCESSIBILITY-001
+  - id: USER-20260729-DOW-MONITOR-MINUTE-RESULTS-CLICKHOUSE
+    path: docs/specs/dow-monitor-minute-results-clickhouse.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-MINUTE-RESULTS-BACKFILL-001
+      - REQ-DOW-MONITOR-MINUTE-RESULTS-MATERIALIZATION-001
+      - REQ-DOW-MONITOR-MINUTE-RESULTS-SCHEMA-001
+  - id: USER-20260730-DOW-MONITOR-P0-CLARITY
+    path: docs/specs/dow-monitor-p0-clarity.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-P0-SEMANTICS-001
+      - REQ-DOW-MONITOR-P0-POSITION-RISK-001
+      - REQ-DOW-MONITOR-P0-FRESHNESS-001
+  - id: USER-20260730-DOW-MONITOR-SUDDEN-ANOMALY-HIGHLIGHT
+    path: docs/superpowers/specs/2026-07-30-dow-monitor-sudden-anomaly-highlight-design.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-SUDDEN-ANOMALY-HIGHLIGHT-001
+  - id: USER-20260730-DOW-MONITOR-KEY-INTERPRETATION-COLUMN
+    path: docs/superpowers/specs/2026-07-30-dow-monitor-key-interpretation-column-design.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-KEY-INTERPRETATION-COLUMN-001
+  - id: USER-20260730-DOW-MONITOR-LIVE-WARMUP-INTERPRETATION
+    path: docs/specs/dow-monitor-live-warmup-interpretation.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-LIVE-WARMUP-INTERPRETATION-001
+  - id: SPEC-DOW-MONITOR-DAILY-PAYLOAD-SAFETY-001
+    path: docs/specs/dow-monitor-daily-payload-safety.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-DAILY-PAYLOAD-SAFETY-001
+  - id: SPEC-DOW-MONITOR-MOBILE-VERSION-REFRESH-001
+    path: docs/specs/dow-monitor-mobile-version-refresh.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-MOBILE-COMPACT-LIST-001
+      - REQ-DOW-MONITOR-FRONTEND-VERSION-REFRESH-001
+  - id: SPEC-DOW-MONITOR-NEW-SYMBOL-HISTORY-BACKFILL-001
+    path: docs/specs/dow-monitor-new-symbol-history-backfill.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-NEW-SYMBOL-HISTORY-BACKFILL-001
+  - id: SPEC-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001
+    path: docs/specs/dow-monitor-half-hour-ai-analysis.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001
+      - REQ-DOW-MONITOR-HALF-HOUR-AI-VIEW-001
+      - REQ-DOW-MONITOR-HOURLY-AI-CADENCE-001
+      - REQ-DOW-MONITOR-HOURLY-AI-STAGE-REPORT-001
+      - REQ-DOW-MONITOR-HOURLY-AI-MINUTE-PATH-001
+      - REQ-DOW-MONITOR-HOURLY-AI-VIEW-001
+      - REQ-DOW-MONITOR-HOURLY-AI-DECISION-FIRST-VIEW-001
+  - id: SPEC-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001
+    path: docs/superpowers/specs/2026-07-31-dow-monitor-offline-ai-bootstrap-design.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-HALF-HOUR-AI-OFFLINE-BOOTSTRAP-001
+      - REQ-DOW-MONITOR-HALF-HOUR-AI-BOOTSTRAP-ISOLATION-001
+  - id: USER-20260731-DOW-MONITOR-INCREMENTAL-EVALUATION-001
+    path: docs/superpowers/specs/2026-07-31-dow-monitor-incremental-evaluation-and-realtime-priority-design.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-INCREMENTAL-TIMEFRAME-EVALUATION-001
+      - REQ-DOW-MONITOR-BOUNDED-SYMBOL-CONCURRENCY-001
+      - REQ-DOW-MONITOR-LIVE-INTERPRETATION-AVAILABILITY-001
+      - REQ-DOW-MONITOR-MINUTE-RESULTS-REALTIME-APPEND-001
+      - REQ-DOW-MONITOR-MINUTE-RESULTS-STAGGERED-BACKFILL-001
+  - id: SPEC-DOW-MONITOR-FAST-BOOTSTRAP-001
+    path: docs/superpowers/specs/2026-08-02-dow-monitor-fast-bootstrap-design.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-FAST-BOOTSTRAP-001
+      - REQ-DOW-MONITOR-LIGHTWEIGHT-LIST-OVERVIEW-001
+      - REQ-DOW-MONITOR-NOTIFICATION-SUMMARY-001
+      - REQ-DOW-MONITOR-STARTUP-PERFORMANCE-001
+conflicts:
+  - id: CON-20260801-DOW-MONITOR-HOURLY-AI-CADENCE-001
+    specifications:
+      - SPEC-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001
+      - SPEC-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001
+    status: resolved
+    resolution: The updated intraday AI specification controls hourly and continuous-session-close checkpoints; the offline-bootstrap specification still controls bounded recovery, isolation, and resource limits, but its eligible checkpoints come from the updated calendar.
+    decision: docs/decisions/2026-08-01-dow-monitor-hourly-ai-cadence-precedence.md
+  - id: CON-20260731-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001
+    specifications:
+      - SPEC-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001
+      - SPEC-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001
+    status: resolved
+    resolution: The bootstrap specification permits exactly one latest completed startup checkpoint with window_end < created_at to use bounded offline recovery, and only when calendar.is_regular_session_time(market, created_at) is true; older checkpoints remain prohibited. Every normal checkpoint with window_end >= created_at may also use bounded offline recovery when canonical minute results are missing.
+    decision: docs/decisions/2026-07-31-dow-monitor-offline-ai-bootstrap-precedence.md
+  - id: CON-20260731-DOW-MONITOR-MOBILE-LAYOUT-001
+    specifications:
+      - USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+      - SPEC-DOW-MONITOR-MOBILE-VERSION-REFRESH-001
+    status: resolved
+    resolution: The mobile specification controls list visibility below 768px; the existing complete table controls 768px and above, while details retain every indicator at all widths.
+    decision: docs/decisions/2026-07-31-dow-monitor-mobile-layout-precedence.md
+authority_decisions:
+  - id: DEC-20260729-DOW-MONITOR-CONTROL-FALLBACK-001
+    scope:
+      - REQ-DOW-MONITOR-LIST-INDICATORS-001
+      - REQ-DOW-MONITOR-STABLE-DECISION-METRICS-001
+    decision: docs/decisions/2026-07-29-dow-monitor-control-fallback.md
+    approval: explicit user ruling on 2026-07-29
+exceptions: []

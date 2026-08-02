@@ -5,7 +5,6 @@ import glob as _glob
 import logging
 import math
 import os
-import re
 import time
 from dataclasses import asdict
 from datetime import date, datetime
@@ -15,6 +14,8 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.db_safe import is_valid_ext_ident, quote_ident
+from app.plugins.clickhouse.provider import ClickHouseProvider
+from app.price_limits import polars_is_risk_warning_name, polars_limit_price, polars_price_limit_pct
 from app.services import strategy_cache
 from app.services.screener import ScreenerService
 from app.strategy import config as strategy_config
@@ -22,6 +23,63 @@ from app.strategy import config as strategy_config
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/screener", tags=["screener"])
+
+
+def _overlay_live_limit_signals(previous, quotes: list[dict], trade_date: date):
+    import polars as pl
+
+    if previous.is_empty() or not quotes:
+        return pl.DataFrame()
+    live = pl.DataFrame([{
+        "symbol": row.get("symbol"),
+        "open": row.get("open"),
+        "high": row.get("high"),
+        "low": row.get("low"),
+        "close": row.get("last_price"),
+        "volume": row.get("volume"),
+        "amount": row.get("amount"),
+        "quote_prev_close": row.get("prev_close"),
+        "quote_change_pct": row.get("change_pct"),
+    } for row in quotes if row.get("symbol") and row.get("last_price")])
+    if live.is_empty():
+        return pl.DataFrame()
+
+    base_columns = [
+        column for column in (
+            "symbol", "name", "close", "consecutive_limit_ups", "consecutive_limit_downs"
+        ) if column in previous.columns
+    ]
+    base = previous.select(base_columns).rename({
+        "close": "_previous_close",
+        "consecutive_limit_ups": "_previous_limit_ups",
+        "consecutive_limit_downs": "_previous_limit_downs",
+    })
+    frame = live.join(base, on="symbol", how="inner").with_columns([
+        pl.lit(trade_date).alias("date"),
+        pl.coalesce("quote_prev_close", "_previous_close").cast(pl.Float64).alias("_prev"),
+        polars_is_risk_warning_name(pl.col("name")).alias("_is_st"),
+    ])
+    frame = frame.with_columns(
+        polars_price_limit_pct(pl.col("symbol"), pl.col("date"), pl.col("_is_st")).alias("_limit_pct")
+    )
+    up_price = polars_limit_price(pl.col("_prev"), pl.col("_limit_pct"), up=True)
+    down_price = polars_limit_price(pl.col("_prev"), pl.col("_limit_pct"), up=False)
+    is_up = pl.col("close") >= up_price - 0.005
+    is_down = pl.col("close") <= down_price + 0.005
+    prev_up = pl.col("_previous_limit_ups").fill_null(0) if "_previous_limit_ups" in frame.columns else pl.lit(0)
+    prev_down = pl.col("_previous_limit_downs").fill_null(0) if "_previous_limit_downs" in frame.columns else pl.lit(0)
+    return frame.with_columns([
+        pl.coalesce("quote_change_pct", pl.col("close") / pl.col("_prev") - 1).alias("change_pct"),
+        is_up.alias("signal_limit_up"),
+        is_down.alias("signal_limit_down"),
+        ((~is_up) & (pl.col("high") >= up_price - 0.005)).alias("signal_broken_limit_up"),
+        ((~is_down) & (pl.col("low") <= down_price + 0.005) & (pl.col("close") > pl.col("open"))).alias("signal_limit_down_recovery"),
+        pl.when(is_up).then(prev_up + 1).otherwise(0).cast(pl.UInt32).alias("consecutive_limit_ups"),
+        pl.when(is_down).then(prev_down + 1).otherwise(0).cast(pl.UInt32).alias("consecutive_limit_downs"),
+    ]).drop([
+        "quote_prev_close", "quote_change_pct", "_previous_close", "_previous_limit_ups",
+        "_previous_limit_downs", "_prev", "_is_st", "_limit_pct",
+    ], strict=False)
 
 
 class CustomRequest(BaseModel):
@@ -32,6 +90,7 @@ class CustomRequest(BaseModel):
     as_of: Optional[date] = None
     ext_columns: Optional[str] = None
     asset_type: str = "stock"
+    market: str = "cn"
 
 
 class PresetRequest(BaseModel):
@@ -41,6 +100,16 @@ class PresetRequest(BaseModel):
     ext_columns: Optional[str] = None
     asset_type: str = "stock"
     timeframe: str = "1d"
+    market: str = "cn"
+
+
+def _market_screener(repo, asset_type: str, market: str) -> ScreenerService:
+    """构造市场作用域服务；保留两参数构造兼容已有插件/测试替身。"""
+    from app.services.market_scope import normalize_market
+
+    service = ScreenerService(repo, asset_type=asset_type)
+    service.market = normalize_market(market)
+    return service
 
 
 def _safe(result_dict: dict) -> dict:
@@ -256,7 +325,7 @@ def strategies(
 @router.post("/run")
 def run_custom(req: CustomRequest, request: Request):
     repo = request.app.state.repo
-    svc = ScreenerService(repo, asset_type=req.asset_type)
+    svc = _market_screener(repo, req.asset_type, req.market)
     as_of = req.as_of or svc.latest_date()
     if not as_of:
         raise HTTPException(status_code=400,
@@ -276,7 +345,7 @@ def run_custom(req: CustomRequest, request: Request):
 @router.post("/run_preset")
 def run_preset(req: PresetRequest, request: Request):
     repo = request.app.state.repo
-    svc = ScreenerService(repo, asset_type=req.asset_type)
+    svc = _market_screener(repo, req.asset_type, req.market)
     as_of = req.as_of or svc.latest_date()
     if not as_of:
         raise HTTPException(status_code=400, detail="无可用数据日期")
@@ -313,13 +382,25 @@ def run_preset(req: PresetRequest, request: Request):
         raise HTTPException(status_code=status_code, detail=str(e)) from e
 
     safe_data = _safe(asdict(result))
-    _update_cache_strategy(data_dir, str(as_of), req.strategy_id, safe_data)
+    if svc.market == "cn":
+        _update_cache_strategy(data_dir, str(as_of), req.strategy_id, safe_data)
 
     return _result_with_ext(safe_data, ext_values)
 
 
-def _cached_with_realtime(request: Request) -> dict:
-    """读取盘后缓存，并用监控引擎的实时结果覆盖同策略。"""
+def _cached_with_realtime(request: Request, market: str = "cn") -> dict:
+    """读取策略结果缓存, 并叠加监控引擎本轮实时算出的结果。
+
+    - 盘后缓存 (strategy_cache.json): 非监控策略 / 页面秒加载用, run_all 写入。
+    - 监控引擎内存结果 (latest_strategy_results): 实时行情每轮对「加入监控的策略」算出,
+      不落盘 (避免与 read_cache 的 mtime 校验冲突), 在此直接叠加覆盖盘后结果。
+      被监控的策略拿到新鲜数据, 非监控策略仍用盘后缓存。
+    """
+    from app.services.market_scope import normalize_market
+
+    market = normalize_market(market)
+    if market != "cn":
+        return {"as_of": None, "market": market, "results": {}, "updated_at": None}
     data_dir = request.app.state.repo.store.data_dir
     cached = strategy_cache.read_cache(data_dir)
     if cached is None:
@@ -338,6 +419,8 @@ def _cached_with_realtime(request: Request) -> dict:
             import time as _time
             cached["updated_at"] = int(_time.time() * 1000)
 
+    cached = dict(cached)
+    cached["market"] = market
     return cached
 
 
@@ -345,6 +428,7 @@ def _cached_with_realtime(request: Request) -> dict:
 def get_cached(
     request: Request,
     ext_columns: Optional[str] = Query(None, description="逗号分隔: config_id.field_name"),
+    market: str = "cn",
 ):
     """读取策略结果缓存, 并叠加监控引擎本轮实时算出的结果。
 
@@ -353,20 +437,25 @@ def get_cached(
       不落盘 (避免与 read_cache 的 mtime 校验冲突), 在此直接叠加覆盖盘后结果。
       被监控的策略拿到新鲜数据, 非监控策略仍用盘后缓存。
     """
-    cached = _cached_with_realtime(request)
+    cached = _cached_with_realtime(request, market)
 
     # 无任何数据 (盘后缓存空 + 无实时结果) → 返回空标记, 前端据此提示
     if not cached.get("results") and cached.get("as_of") is None:
-        return {"as_of": None, "results": {}, "updated_at": None}
+        return {
+            "as_of": None,
+            "market": cached.get("market"),
+            "results": {},
+            "updated_at": None,
+        }
 
     ext_values = _load_ext_value_maps(request.app.state.repo, ext_columns)
     return _cache_payload_with_ext(cached, ext_values)
 
 
 @router.get("/cached-summary")
-def get_cached_summary(request: Request):
+def get_cached_summary(request: Request, market: str = "cn"):
     """返回策略卡片所需的轻量摘要，不序列化股票明细。"""
-    cached = _cached_with_realtime(request)
+    cached = _cached_with_realtime(request, market)
     results = cached.get("results") or {}
     summary = {
         sid: {
@@ -391,6 +480,7 @@ def get_cached_summary(request: Request):
         ever_counts[sid] = len(set((ever_rows.get(sid) or {}).keys()) | current_symbols)
     return {
         "as_of": cached_as_of,
+        "market": cached.get("market"),
         "results": summary,
         "today_ever_counts": ever_counts,
         "updated_at": cached.get("updated_at"),
@@ -402,9 +492,10 @@ def get_cached_result(
     strategy_id: str,
     request: Request,
     ext_columns: Optional[str] = Query(None, description="逗号分隔: config_id.field_name"),
+    market: str = "cn",
 ):
     """按需返回单个策略的完整明细及其今日失效行。"""
-    cached = _cached_with_realtime(request)
+    cached = _cached_with_realtime(request, market)
     raw_result = (cached.get("results") or {}).get(strategy_id)
     if not isinstance(raw_result, dict):
         return {
@@ -456,19 +547,27 @@ def get_cached_result(
 
 
 @router.get("/market-snapshot")
-def market_snapshot(request: Request):
+def market_snapshot(request: Request, market: str = "cn"):
     """最新全市场轻量行情快照，供板块/概念聚合分析使用。"""
     import polars as pl
 
-    repo = request.app.state.repo
-    svc = ScreenerService(repo)
-    as_of = svc.latest_date()
-    if not as_of:
-        return {"as_of": None, "rows": []}
+    from app.services.market_scope import (
+        filter_frame_by_market,
+        market_currency,
+        market_latest_date,
+        normalize_market,
+    )
 
-    df = svc._load_enriched_for_date(as_of)
+    market = normalize_market(market)
+    repo = request.app.state.repo
+    svc = _market_screener(repo, "stock", market)
+    as_of = market_latest_date(repo, market)
+    if not as_of:
+        return {"as_of": None, "market": market, "currency": market_currency(market), "rows": []}
+
+    df = filter_frame_by_market(svc._load_enriched_for_date(as_of), market)
     if df.is_empty():
-        return {"as_of": str(as_of), "rows": []}
+        return {"as_of": str(as_of), "market": market, "currency": market_currency(market), "rows": []}
 
     if "close" in df.columns and "total_shares" in df.columns and "market_cap" not in df.columns:
         df = df.with_columns((pl.col("close") * pl.col("total_shares")).alias("market_cap"))
@@ -482,12 +581,80 @@ def market_snapshot(request: Request):
     ]
     df = df.select([c for c in cols if c in df.columns])
     rows = df.to_dicts()
+    is_realtime = False
+    try:
+        from app.data_providers import custom as custom_sources
+        from app.services import preferences
+        from app.services.market_overview_builder import (
+            _overlay_realtime_rows,
+            _realtime_trade_date,
+        )
+
+        provider_name = preferences.get_realtime_data_provider()
+        if (
+            provider_name != "tickflow"
+            and custom_sources.provider_has_dataset(provider_name, "realtime")
+        ):
+            symbols = [str(row.get("symbol") or "") for row in rows if row.get("symbol")]
+            realtime_rows = custom_sources.get_provider(provider_name).get_realtime(
+                symbols=symbols
+            ) or []
+            realtime_date = _realtime_trade_date(realtime_rows, market)
+            rows = _overlay_realtime_rows(rows, realtime_rows, realtime_only=True)
+            if realtime_date and realtime_date >= as_of:
+                as_of = realtime_date
+                is_realtime = True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("market snapshot realtime overlay unavailable for %s: %s", market, exc)
+
     for r in rows:
         for k, v in list(r.items()):
             if isinstance(v, float) and not math.isfinite(v):
                 r[k] = None
 
-    return {"as_of": str(as_of), "rows": rows}
+    return {
+        "as_of": str(as_of),
+        "market": market,
+        "currency": market_currency(market),
+        "realtime": is_realtime,
+        "rows": rows,
+    }
+
+
+@router.get("/market-industries")
+def market_industries(market: str = "cn"):
+    """返回港股/美股在 ClickHouse 中最新的行业代表快照。"""
+    from app.services.market_scope import normalize_market
+
+    normalized = normalize_market(market)
+    if normalized == "cn":
+        return {"market": "cn", "as_of": None, "source": "ext_hy_ths", "rows": []}
+    try:
+        return ClickHouseProvider().get_market_industries(normalized)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("market industries load failed for %s: %s", normalized, type(exc).__name__)
+        raise HTTPException(status_code=503, detail="行业分类数据暂不可用") from exc
+
+
+@router.get("/market-concepts")
+def market_concepts(market: str = "cn"):
+    """Return market-scoped concept themes for HK/US analysis."""
+    from app.services.market_scope import normalize_market
+
+    normalized = normalize_market(market)
+    if normalized == "cn":
+        return {
+            "market": "cn",
+            "as_of": None,
+            "source": "ext_gn_ths",
+            "window_days": 30,
+            "rows": [],
+        }
+    try:
+        return ClickHouseProvider().get_market_concepts(normalized)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("market concepts load failed for %s: %s", normalized, type(exc).__name__)
+        raise HTTPException(status_code=503, detail="概念主题数据暂不可用") from exc
 
 
 @router.post("/run_all")
@@ -501,7 +668,8 @@ def run_all(request: Request, body: Optional[dict] = None):
     repo = request.app.state.repo
     asset_type = str(body.get("asset_type") or "stock")
     timeframe = str(body.get("timeframe") or "1d")
-    svc = ScreenerService(repo, asset_type=asset_type)
+    market = str(body.get("market") or "cn")
+    svc = _market_screener(repo, asset_type, market)
     engine = getattr(request.app.state, "strategy_engine", None)
     if engine is None:
         raise HTTPException(status_code=503, detail="策略引擎未初始化")
@@ -513,7 +681,7 @@ def run_all(request: Request, body: Optional[dict] = None):
     else:
         as_of = svc.latest_date()
     if not as_of:
-        return {"as_of": None, "results": {}}
+        return {"as_of": None, "market": svc.market, "results": {}}
 
     data_dir = request.app.state.repo.store.data_dir
 
@@ -532,7 +700,7 @@ def run_all(request: Request, body: Optional[dict] = None):
         ]
 
     if not all_ids:
-        return {"as_of": str(as_of), "results": {}}
+        return {"as_of": str(as_of), "market": svc.market, "results": {}}
 
     # 批量预加载所有 override 配置
     t0 = time.perf_counter()
@@ -575,7 +743,7 @@ def run_all(request: Request, body: Optional[dict] = None):
     logger.info("run_all: total took %.1fms (%d strategies)", elapsed, len(all_ids))
 
     # 写入策略缓存 (供页面秒加载)
-    if results:
+    if results and svc.market == "cn":
         try:
             strategy_cache.write_cache(data_dir, str(as_of), results)
         except Exception:  # noqa: BLE001
@@ -591,7 +759,7 @@ def run_all(request: Request, body: Optional[dict] = None):
         }
 
     ext_values = _load_ext_value_maps(repo, body.get("ext_columns"))
-    return {"as_of": str(as_of), "results": _results_with_ext(results, ext_values)}
+    return {"as_of": str(as_of), "market": svc.market, "results": _results_with_ext(results, ext_values)}
 
 
 @router.get("/limit-ladder")
@@ -629,6 +797,7 @@ def limit_ladder(
 
     repo = request.app.state.repo
     svc = ScreenerService(repo)
+    explicit_as_of = as_of is not None
     as_of = as_of or svc.latest_date()
     if not as_of:
         raise HTTPException(status_code=400, detail="无可用数据日期")
@@ -636,6 +805,29 @@ def limit_ladder(
     df = svc._load_enriched_for_date(as_of)
     if df.is_empty():
         return {"as_of": str(as_of), "tiers": [], "counts": {"up": 0, "down": 0}}
+
+    is_realtime = False
+    if not explicit_as_of:
+        try:
+            from app.data_providers import custom as custom_sources
+            from app.services import preferences
+            from app.services.market_overview_builder import _realtime_trade_date
+
+            provider_name = preferences.get_realtime_data_provider()
+            if (
+                provider_name != "tickflow"
+                and custom_sources.provider_has_dataset(provider_name, "realtime")
+            ):
+                realtime_rows = custom_sources.get_provider(provider_name).get_realtime() or []
+                realtime_date = _realtime_trade_date(realtime_rows, "cn")
+                if realtime_date and realtime_date >= as_of:
+                    live_df = _overlay_live_limit_signals(df, realtime_rows, realtime_date)
+                    if not live_df.is_empty():
+                        df = live_df
+                        as_of = realtime_date
+                        is_realtime = True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("limit ladder realtime overlay unavailable: %s", type(exc).__name__)
 
     # 双方向涨跌停计数(不论当前 direction, 前端始终同时显示)
     count_up_raw = int(df.filter(pl.col("signal_limit_up").fill_null(False)).height) if "signal_limit_up" in df.columns else 0
@@ -647,6 +839,8 @@ def limit_ladder(
     fake_down = 0
     sealed_up_ready = False
     sealed_down_ready = False
+    up_map = {}
+    down_map = {}
     if depth_svc_global:
         up_map = depth_svc_global.get_sealed_map(as_of, is_down=False)
         down_map = depth_svc_global.get_sealed_map(as_of, is_down=True)
@@ -830,6 +1024,7 @@ def limit_ladder(
 
     return {
         "as_of": str(as_of),
+        "is_realtime": is_realtime,
         "tiers": tier_list,
         "counts": {"up": count_up, "down": count_down},
         "counts_raw": {"up": count_up_raw, "down": count_down_raw},

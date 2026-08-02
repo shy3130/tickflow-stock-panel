@@ -11,6 +11,8 @@ import { LastStockChip } from '@/components/LastStockChip'
 import { useLastStock } from '@/lib/useLastStock'
 import { fmtBigNum } from '@/lib/format'
 import { toast } from '@/components/Toast'
+import { useMarketScope } from '@/lib/market-scope'
+import { matchesMarketFilter } from '@/lib/market-display'
 
 const TABLE_LABELS: Record<string, string> = {
   metrics: '核心指标',
@@ -29,6 +31,7 @@ const TABLE_ICON: Record<string, typeof FileText> = {
 }
 
 export function Financials() {
+  const { market } = useMarketScope()
   const { data: caps } = useCapabilities()
   const { data: status, isLoading } = useFinancialStatus()
   const hasFinancial = caps?.capabilities?.['financial'] != null || status?.available === true
@@ -54,6 +57,10 @@ export function Financials() {
   // 选中的个股(模糊搜索结果);null 时显示搜索引导
   const [selected, setSelected] = useState<{ symbol: string; name: string } | null>(null)
   const { last: lastStock, remember: rememberStock } = useLastStock('financials')
+  const marketLastStock = lastStock && matchesMarketFilter(lastStock.symbol, market) ? lastStock : null
+  useEffect(() => {
+    if (selected && !matchesMarketFilter(selected.symbol, market)) setSelected(null)
+  }, [market, selected])
   const pick = (symbol: string, name: string) => {
     setSelected({ symbol, name })
     rememberStock(symbol, name)
@@ -162,7 +169,7 @@ export function Financials() {
         subtitle="利润表 / 资负表 / 现金流 / 关键指标 / 股本 / AI分析 · Expert"
         right={
           <div className="flex items-center gap-2">
-            <LastStockChip stock={lastStock} onSelect={pick} />
+              <LastStockChip stock={marketLastStock} onSelect={pick} />
             {syncing && (
               <span className="text-xs text-accent/80 flex items-center gap-1.5">
                 <Loader2 className="w-3 h-3 animate-spin" />

@@ -2,12 +2,17 @@
 # 见 ADR-17 / §8.1。
 services:
   app:
+    # 通过 TICKFLOW_IMAGE 固定每次部署的镜像标签，便于保留上一版本并快速回滚。
+    image: ${TICKFLOW_IMAGE:-tickflow-stock-panel-app:latest}
     build:
       context: .
       dockerfile: Dockerfile
       args:
+        BASE_IMAGE_PREFIX: ${BASE_IMAGE_PREFIX:-}
         BACKEND_EXTRAS: ${BACKEND_EXTRAS:-}
         CODEX_CLI_VERSION: ${CODEX_CLI_VERSION:-0.144.3}
+        BUILD_ID: ${BUILD_ID:-dev}
+        PUBLISHED_AT: ${PUBLISHED_AT:-}
     container_name: TickFlow_Stock_Panel
     ports:
       - "${PORT:-3018}:3018"
@@ -23,10 +28,50 @@ services:
       - DATA_DIR=/app/data
       # 将主机 Codex Desktop 的 loopback local-access 端点映射到 Docker host gateway。
       - CODEX_DOCKER_HOST=host.docker.internal
+      # ClickHouse 默认运行在 Docker 主机；三类 Provider 可在设置页分别选择。
+      - CLICKHOUSE_URL=${CLICKHOUSE_URL:-http://host.docker.internal:8123}
+      - CLICKHOUSE_DATABASE=${CLICKHOUSE_DATABASE:-longbridge}
+      - CLICKHOUSE_READ_TIMEOUT_SECONDS=${CLICKHOUSE_READ_TIMEOUT_SECONDS:-30}
+      # ClickHouse 尚未覆盖的单股分时由 Longbridge API 按需补拉；结果会回写实时行情库。
+      - LONGBRIDGE_API_URL=${LONGBRIDGE_API_URL:-http://host.docker.internal:19912}
+      - LONGBRIDGE_API_TIMEOUT_SECONDS=${LONGBRIDGE_API_TIMEOUT_SECONDS:-20}
+      - REALTIME_REDIS_URL=${REALTIME_REDIS_URL:-redis://host.docker.internal:6379/0}
+      - REALTIME_REDIS_CHANNEL=${REALTIME_REDIS_CHANNEL:-lb:ui:v1:updates}
+      - REALTIME_WS_HEARTBEAT_SECONDS=${REALTIME_WS_HEARTBEAT_SECONDS:-15}
+      - REALTIME_WS_ALLOWED_ORIGINS=${REALTIME_WS_ALLOWED_ORIGINS:-http://192.168.10.28:3018,http://127.0.0.1:5173,http://localhost:5173}
     volumes:
       - ./data:/app/data
       - ./tiers.yaml:/app/tiers.yaml:ro
       # 复用主机 Codex 登录态；后端只读后复制到单次请求的临时 CODEX_HOME。
       # Windows PowerShell/CMD 下 HOME 常未设置, 可通过 .env 里 CODEX_HOME_HOST 覆盖。
+      - ${CODEX_HOME_HOST:-${HOME}/.codex}:/root/.codex:ro
+      # 长桥采集器每 30 秒写入轻量运行快照；设置页只读该文件，不扫描行情大表。
+      - ${LONGBRIDGE_STATUS_DIR_HOST:-/data/longbridge/status}:/run/longbridge:ro
+    restart: unless-stopped
+
+  dow-ai-worker:
+    image: ${TICKFLOW_IMAGE:-tickflow-stock-panel-app:latest}
+    container_name: TickFlow_Dow_AI_Worker
+    command: ["uv", "run", "python", "-m", "app.workers.dow_monitor_half_hour_ai"]
+    depends_on:
+      - app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - .env
+    environment:
+      - DATA_DIR=/app/data
+      - CODEX_DOCKER_HOST=host.docker.internal
+      - CLICKHOUSE_URL=${CLICKHOUSE_URL:-http://host.docker.internal:8123}
+      - CLICKHOUSE_DATABASE=${CLICKHOUSE_DATABASE:-longbridge}
+      - CLICKHOUSE_READ_TIMEOUT_SECONDS=${CLICKHOUSE_READ_TIMEOUT_SECONDS:-30}
+      - LONGBRIDGE_API_URL=${LONGBRIDGE_API_URL:-http://host.docker.internal:19912}
+      - DOW_AI_WORKER_ENABLED=${DOW_AI_WORKER_ENABLED:-true}
+      - DOW_AI_WORKER_CONCURRENCY=${DOW_AI_WORKER_CONCURRENCY:-1}
+      - DOW_AI_WORKER_POLL_SECONDS=${DOW_AI_WORKER_POLL_SECONDS:-15}
+      - DOW_MONITOR_AI_BOOTSTRAP_TIMEOUT_SECONDS=${DOW_MONITOR_AI_BOOTSTRAP_TIMEOUT_SECONDS:-15}
+      - DOW_MONITOR_AI_BOOTSTRAP_MAX_ROWS=${DOW_MONITOR_AI_BOOTSTRAP_MAX_ROWS:-500}
+    volumes:
+      - ./data:/app/data:ro
       - ${CODEX_HOME_HOST:-${HOME}/.codex}:/root/.codex:ro
     restart: unless-stopped

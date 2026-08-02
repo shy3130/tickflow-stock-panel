@@ -835,37 +835,12 @@ def fetch_minute_single(
     from datetime import datetime
     start_time = datetime(trade_date.year, trade_date.month, trade_date.day, 9, 25, 0)
     end_time = datetime(trade_date.year, trade_date.month, trade_date.day, 15, 5, 0)
-
-    # 自定义数据源分流: 与 sync_minute_batch 一致, 配了自定义分钟源时走 custom provider,
-    # 避免无 TickFlow Pro+ 权限的用户分时图首次打开(本地无数据)时补拉失败返回空。
-    df, fallback = _try_custom_minute(
-        [symbol], start_time=start_time, end_time=end_time,
-        asset_type=asset_type, freq="1m",
+    return sync_minute_batch(
+        [symbol],
+        start_time=start_time,
+        end_time=end_time,
+        asset_type=asset_type,
     )
-    if not fallback:
-        # 见 sync_minute_batch 同分支注释: df 在此必非 None。
-        return df if df is not None else pl.DataFrame()
-
-    tf = get_client()
-    try:
-        raw = tf.klines.batch(
-            [symbol], period="1m",
-            start_time=_datetime_to_ms(start_time),
-            end_time=_datetime_to_ms(end_time),
-            count=10000,
-            adjust="forward",
-            as_dataframe=True, show_progress=False,
-        )
-    except Exception as e:
-        logger.warning("fetch_minute_single(%s, %s) failed: %s", symbol, trade_date, e)
-        return pl.DataFrame()
-
-    if isinstance(raw, dict):
-        sub = raw.get(symbol)
-        return _normalize_minute(sub) if sub is not None and len(sub) > 0 else pl.DataFrame()
-    if raw is not None and len(raw) > 0:
-        return _normalize_minute(raw)
-    return pl.DataFrame()
 
 
 def fetch_adj_factor_single(symbol: str) -> pl.DataFrame:
