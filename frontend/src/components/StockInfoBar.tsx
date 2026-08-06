@@ -272,6 +272,7 @@ export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsCh
         builtinSectionLabel="可选指标"
         extColumnAlign="left"
         showStandaloneToggle
+        disableBackdropBlur
       />
     </div>
   )

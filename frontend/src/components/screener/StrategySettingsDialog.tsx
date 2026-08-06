@@ -638,7 +638,7 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
                       defaultOpen={false}
                       extra={<SignalTriggerActions kind="entry" signals={entrySignals} onChange={setEntrySignals} buttonClassName="rounded-md border border-border bg-base p-1 text-muted transition-colors cursor-pointer" iconClassName="h-3 w-3" />}
                     >
-                      <SignalPicker signals={entrySignals} onChange={setEntrySignals} kind="entry" variant="dialog" />
+                      <SignalPicker signals={entrySignals} onChange={setEntrySignals} kind="entry" options={{ variant: 'dialog' }} />
                       <div className="text-[10px] leading-4 text-muted/70">任一入场点满足即进入候选。</div>
                     </Section>
 
@@ -649,7 +649,7 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
                       defaultOpen={false}
                       extra={<SignalTriggerActions kind="exit" signals={exitSignals} onChange={setExitSignals} buttonClassName="rounded-md border border-border bg-base p-1 text-muted transition-colors cursor-pointer" iconClassName="h-3 w-3" />}
                     >
-                      <SignalPicker signals={exitSignals} onChange={setExitSignals} kind="exit" variant="dialog" />
+                      <SignalPicker signals={exitSignals} onChange={setExitSignals} kind="exit" options={{ variant: 'dialog' }} />
                       <div className="text-[10px] leading-4 text-muted/70">任一出场点满足即触发出场。</div>
                     </Section>
 

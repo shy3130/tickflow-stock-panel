@@ -1,8 +1,24 @@
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { PenLine } from 'lucide-react'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { SIGNAL_OPTIONS, cnSignal } from '@/lib/signals'
+
+/** 展示与过滤可选项 (全部可选, 有默认值) */
+interface SignalPickerOptions {
+  /** 渲染尺寸: dialog = 选股弹窗紧凑样式; panel = 回测页设置抽屉样式 */
+  variant?: 'dialog' | 'panel'
+  builtinSignals?: { key: string; label: string }[]
+  disabledSignals?: string[]
+  disabledSignalHint?: string
+  /**
+   * 是否按 kind 过滤自定义信号 (csg_*)。默认 true (选股/回测: 入场区只显示 entry)。
+   * 监控规则页设 false: 报警语义是"命中即报", 不分入场出场, 自定义信号全部显示
+   * (与内置信号一致: builtinSignals 透传时本就不按 kind 过滤)。
+   */
+  filterCustomByKind?: boolean
+}
 
 interface Props {
   /** 当前选中的信号 ID 列表 */
@@ -11,30 +27,27 @@ interface Props {
   onChange: (next: string[]) => void
   /** 买点 / 卖点 — 决定自定义信号的过滤与配色主题 */
   kind: 'entry' | 'exit'
-  /** 渲染尺寸: dialog = 选股弹窗紧凑样式; panel = 回测页设置抽屉样式 */
-  variant?: 'dialog' | 'panel'
-  builtinSignals?: { key: string; label: string }[]
-  disabledSignals?: string[]
-  disabledSignalHint?: string
+  options?: SignalPickerOptions
 }
 
 /**
  * 买卖触发器信号选择 — 选股页弹窗 / 回测页共用。
  *
  * - 内置信号 (signal_*): 全部展示
- * - 自定义信号 (csg_*): 按 kind 过滤 (entry / exit / both)
- * - entry 蓝色主题, exit 橙色主题
+ * - 自定义信号 (csg_*): 按 kind 过滤 (entry / exit / both), 除非 filterCustomByKind=false
+ * - entry 蓝色主题, exit 橙色主题; 自定义信号边框配色与内置一致, 右上角 PenLine 角标区分
  */
-export function SignalPicker({ signals, onChange, kind, variant = 'panel', builtinSignals, disabledSignals = [], disabledSignalHint }: Props) {
+export function SignalPicker({ signals, onChange, kind, options }: Props) {
+  const { variant = 'panel', builtinSignals, disabledSignals = [], disabledSignalHint, filterCustomByKind = true } = options ?? {}
   const customSignalsQuery = useQuery({ queryKey: QK.customSignals, queryFn: api.customSignalsList })
 
   const customOptions = useMemo(() => {
     const list = (customSignalsQuery.data?.signals ?? [])
-      .filter(s => s.enabled && (s.kind === kind || s.kind === 'both'))
+      .filter(s => s.enabled && (!filterCustomByKind || s.kind === kind || s.kind === 'both'))
     const names: Record<string, string> = {}
     for (const cs of list) names[`csg_${cs.id}`] = cs.name
     return { list, names }
-  }, [customSignalsQuery.data, kind])
+  }, [customSignalsQuery.data, kind, filterCustomByKind])
 
   const toggle = (sig: string) => {
     const next = signals.includes(sig) ? signals.filter(x => x !== sig) : [...signals, sig]
@@ -49,10 +62,6 @@ export function SignalPicker({ signals, onChange, kind, variant = 'panel', built
   const idle = variant === 'dialog'
     ? 'border-border bg-base text-muted hover:border-accent/40'
     : 'border-border bg-base text-muted hover:border-accent/40'
-  const customActive = isEntry
-    ? 'border-accent/50 bg-accent/10 text-accent'
-    : 'border-warning/50 bg-warning/10 text-warning'
-  const customIdle = 'border-amber-400/30 bg-amber-400/5 text-secondary hover:border-amber-400/50 hover:text-amber-400'
 
   const btnCls = variant === 'dialog'
     ? 'rounded px-1.5 py-0.5 text-[10px] font-medium border transition-colors cursor-pointer'
@@ -84,9 +93,12 @@ export function SignalPicker({ signals, onChange, kind, variant = 'panel', built
             type="button"
             onClick={() => toggle(id)}
             title="自定义信号"
-            className={`${btnCls} ${signals.includes(id) ? customActive : customIdle}`}
+            className={`${btnCls} relative ${signals.includes(id) ? active : idle}`}
           >
             {customOptions.names[id]}
+            <span className="pointer-events-none absolute -top-1 -right-1 rounded-full border border-border bg-base p-px">
+              <PenLine className="h-2 w-2 text-muted" />
+            </span>
           </button>
         )
       })}

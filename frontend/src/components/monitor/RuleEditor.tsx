@@ -253,9 +253,12 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
             signals={selectedSignals}
             onChange={onSignalPickerChange}
             kind="entry"
-            builtinSignals={pickerSignals}
-            disabledSignals={intradaySupport?.available === false ? MONITOR_INTRADAY_SIGNAL_OPTIONS : []}
-            disabledSignalHint={intradaySupport?.reason}
+            options={{
+              builtinSignals: pickerSignals,
+              disabledSignals: intradaySupport?.available === false ? MONITOR_INTRADAY_SIGNAL_OPTIONS : [],
+              disabledSignalHint: intradaySupport?.reason,
+              filterCustomByKind: false,
+            }}
           />
           {hasIntradaySignal && (
             <div className={`mt-2 text-[10px] ${intradaySupport?.available === false ? 'text-danger' : 'text-muted'}`}>
@@ -472,9 +475,12 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
                 signals={selectedSignals}
                 onChange={onSignalPickerChange}
                 kind="entry"
-                builtinSignals={pickerSignals}
-                disabledSignals={intradaySupport?.available === false ? MONITOR_INTRADAY_SIGNAL_OPTIONS : []}
-                disabledSignalHint={intradaySupport?.reason}
+                options={{
+                  builtinSignals: pickerSignals,
+                  disabledSignals: intradaySupport?.available === false ? MONITOR_INTRADAY_SIGNAL_OPTIONS : [],
+                  disabledSignalHint: intradaySupport?.reason,
+                  filterCustomByKind: false,
+                }}
               />
               {hasIntradaySignal && (
                 <div className={`mt-2 text-[10px] ${intradaySupport?.available === false ? 'text-danger' : 'text-muted'}`}>
