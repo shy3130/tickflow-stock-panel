@@ -595,15 +595,36 @@ export interface MonitorCondition {
 
 export type StrategyNotifyEvent = 'buy_signal' | 'sell_signal' | 'pool_entry' | 'pool_exit'
 
+export type SectorKind = 'index' | 'concept' | 'industry'
+
+export interface SectorMonitorTarget {
+  key: string
+  kind: SectorKind
+  name: string
+  symbol?: string
+  source_id?: string
+  field?: string
+  source_field?: string
+  value?: string
+  level?: number | null
+  available: boolean
+  member_count: number
+}
+
 export interface MonitorRule {
   id: string
   name: string
   enabled: boolean
-  type: 'strategy' | 'signal' | 'price' | 'market' | 'ladder'
+  type: 'strategy' | 'signal' | 'price' | 'market' | 'ladder' | 'sector'
   asset_type?: 'stock' | 'etf' | 'index'
   scope: 'symbols' | 'all' | 'sector'
   symbols: string[]
   sector?: string | null
+  sector_kind?: SectorKind | null
+  sector_targets?: SectorMonitorTarget[]
+  sector_trigger?: 'change_pct' | 'momentum'
+  threshold_pct?: number
+  window_minutes?: 1 | 3 | 5 | 10 | 15
   strategy_id?: string | null
   direction: 'entry' | 'exit' | 'both' | 'up' | 'down'
   notify_events?: StrategyNotifyEvent[]
@@ -638,6 +659,7 @@ export interface MonitorRuleOptions {
     max_symbols: number
     reason: string
   }
+  sector_targets: Record<SectorKind, SectorMonitorTarget[]>
 }
 
 export interface AlertEvent {
@@ -656,6 +678,19 @@ export interface AlertEvent {
   strategy_id?: string
   conditions?: MonitorCondition[]
   logic?: 'and' | 'or'
+  sector_kind?: SectorKind
+  sector_key?: string
+  sector_name?: string
+  sector_source_field?: string
+  sector_value?: string
+  sector_level?: number | null
+  window_change_pct?: number | null
+  coverage_ratio?: number
+  valid_count?: number
+  total_count?: number
+  up_count?: number
+  down_count?: number
+  leader?: { symbol?: string; name?: string; change_pct?: number } | null
   /** ext 富化字段 (行业/概念等), 键为 "{configId}__{fieldName}" */
   [key: string]: unknown
 }

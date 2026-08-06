@@ -214,9 +214,12 @@ async def lifespan(app: FastAPI):
     from app.strategy.monitor import MonitorRuleEngine
     from app.strategy import monitor_rules as mr_store
     from app.services import preferences
+    from app.services.sector_monitor import SectorMonitorService
     monitor_engine = MonitorRuleEngine()
+    sector_monitor_service = SectorMonitorService(repo)
     monitor_engine.set_strategy_engine(strategy_engine)
     monitor_engine.set_data_dir(store.data_dir)
+    monitor_engine.set_sector_monitor_service(sector_monitor_service)
     # 复用 ScreenerService 的历史窗口加载器 (三级缓存, 启动预计算命中 ~0ms),
     # 让声明 filter_history 的策略 (如反包) 也能在实时监控里跑选股 → 盘中触发通知。
     monitor_engine.set_history_loader(_screener_svc._load_enriched_history)
@@ -241,6 +244,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:  # noqa: BLE001
         logger.warning("monitor engine load failed: %s", e)
     app.state.monitor_engine = monitor_engine
+    app.state.sector_monitor_service = sector_monitor_service
 
     yield
 

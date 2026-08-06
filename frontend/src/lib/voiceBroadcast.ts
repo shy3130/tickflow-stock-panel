@@ -116,6 +116,11 @@ function buildSingleText(a: AlertEvent): string {
   const name = a.name || '标的'
   const pctText = a.change_pct != null ? fmtPctText(a.change_pct) : ''
 
+  // 板块消息已包含名称、触发条件和当前涨跌幅，避免重复播报。
+  if (a.source === 'sector') {
+    return a.message || name
+  }
+
   // 策略类: message 存的是策略名(单条) 或完整批量描述(>5只)
   if (a.source === 'strategy') {
     // 批量事件 (symbol 为空/为 _batch): message 已含 "策略「X」进入 N 只：…" 直接念

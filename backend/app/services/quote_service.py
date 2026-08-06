@@ -1116,6 +1116,11 @@ class QuoteService:
                         rule_events = engine.evaluate(eval_df, asset_type="stock")
                         if engine.consume_strategy_result_updates():
                             self.notify_strategy_results_updated()
+                    if engine.has_rule_type("sector"):
+                        rule_events += engine.evaluate_sectors(
+                            enriched_today if stock_ready else pl.DataFrame(),
+                            self.get_index_quotes(),
+                        )
                     # ETF 规则轮: 股票快照不含 ETF, 用 ETF enriched 快照单独评估。
                     # 独立 try —— ETF 轮任何异常都不得丢弃本轮已算出的股票告警。
                     # refresh=False —— 不在轮询线程上触发 ETF 冷缓存的同步重算 (缓存由 ETF 实时
@@ -1154,7 +1159,7 @@ class QuoteService:
                             logger.warning("告警落盘失败: %s", e)
                         # 转为 SSE 推送格式 (兼容旧 alert schema)
                         for ev in rule_events:
-                            all_alerts.append({
+                            alert = {
                                 "source": ev["source"],
                                 "type": ev["type"],
                                 "rule_id": ev.get("rule_id"),
@@ -1168,7 +1173,16 @@ class QuoteService:
                                 "severity": ev.get("severity", "info"),
                                 "conditions": ev.get("conditions") or [],
                                 "logic": ev.get("logic") or "and",
-                            })
+                            }
+                            for key in (
+                                "sector_kind", "sector_key", "sector_name",
+                                "sector_source_field", "sector_value", "sector_level",
+                                "window_change_pct", "coverage_ratio", "valid_count",
+                                "total_count", "up_count", "down_count", "leader",
+                            ):
+                                if key in ev:
+                                    alert[key] = ev[key]
+                            all_alerts.append(alert)
 
             # 策略页实时回显: 不写文件 (实时行情每轮更新 enriched, 写文件会被 read_cache
             # 的 mtime 校验判过期, 反复读不到)。监控引擎本轮已算出的结果存在内存
@@ -1339,6 +1353,7 @@ class QuoteService:
             source_labels = {
                 "strategy": "策略", "signal": "信号",
                 "price": "价格", "market": "异动", "ladder": "连板梯队",
+                "sector": "板块",
             }
             rules = engine.rules if engine is not None else {}
             enqueued = 0
@@ -1391,7 +1406,7 @@ class QuoteService:
                 source = ev.get("source", "")
                 source_label = {
                     "strategy": "策略", "signal": "信号",
-                    "price": "价格", "market": "异动",
+                    "price": "价格", "market": "异动", "sector": "板块",
                 }.get(source, source or "通知")
 
                 name = ev.get("name") or ""

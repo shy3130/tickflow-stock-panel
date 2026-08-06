@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { AlertTriangle, RadioTower, Plus, Trash2, Settings2, Zap, Bell, ListChecks, BellRing, TrendingUp, TrendingDown, Flame, Tags } from 'lucide-react'
@@ -20,7 +21,7 @@ import { DimensionMembersDialog, type DimensionKind, type DimensionMembersTarget
 import { usePreferences } from '@/lib/useSharedQueries'
 
 const TYPE_LABEL: Record<string, string> = {
-  signal: '信号', price: '价格/涨跌', market: '市场异动', strategy: '策略监控',
+  signal: '信号', price: '价格/涨跌', market: '市场异动', strategy: '策略监控', sector: '板块监控',
 }
 
 /** 严重级别 → 左侧色条 + 图标 */
@@ -34,6 +35,7 @@ const SOURCE_BADGE_STYLE: Record<string, string> = {
   signal:   'bg-accent/10 text-accent border-accent/20',
   price:    'bg-emerald-400/10 text-emerald-400 border-emerald-400/20',
   market:   'bg-purple-500/10 text-purple-400 border-purple-500/20',
+  sector:   'bg-cyan-500/10 text-cyan-700 border-cyan-500/20 dark:text-cyan-300',
 }
 
 /**
@@ -114,7 +116,7 @@ export function Monitor() {
   const [editingRule, setEditingRule] = useState<MonitorRule | null>(null)
 
   // 触发记录: 过滤 + 统计 (提升到主组件, 供 header 行使用)
-  const [filter, setFilter] = useState<'all' | 'strategy' | 'signal' | 'price' | 'market'>('all')
+  const [filter, setFilter] = useState<'all' | 'strategy' | 'signal' | 'price' | 'market' | 'sector'>('all')
   const [confirmClear, setConfirmClear] = useState(false)
   const [confirmClearRules, setConfirmClearRules] = useState(false)
 
@@ -175,7 +177,7 @@ export function Monitor() {
               <SectionHeader icon={BellRing} title="触发记录" />
               {/* 过滤标签 */}
               <div className="flex flex-wrap items-center gap-0.5">
-                {(['all', 'strategy', 'signal', 'price', 'market'] as const).map(f => (
+                {(['all', 'strategy', 'signal', 'price', 'market', 'sector'] as const).map(f => (
                   <button
                     key={f}
                     onClick={() => setFilter(f)}
@@ -294,6 +296,7 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
   monitorExtFields: { concept: MonitorExtFieldItem | null; industry: MonitorExtFieldItem | null }
 }) {
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const [confirmTs, setConfirmTs] = useState<number | null>(null)
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [previewEv, setPreviewEv] = useState<AlertEvent | null>(null)
@@ -431,7 +434,28 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
                   })() : (
                     <>
                       <div className="flex items-center gap-2 flex-wrap">
-                        {ev.symbol && (() => {
+                        {ev.source === 'sector' && (
+                          <button
+                            onClick={() => {
+                              if (ev.sector_kind === 'index' && ev.symbol) {
+                                navigate(`/indices?symbol=${encodeURIComponent(ev.symbol)}`)
+                              } else if (ev.sector_source_field && ev.sector_value) {
+                                setDimensionTarget({
+                                  kind: ev.sector_kind as DimensionKind,
+                                  value: ev.sector_value,
+                                  sourceField: ev.sector_source_field,
+                                })
+                              }
+                            }}
+                            className="inline-flex items-center gap-1.5 rounded px-1 -mx-1 text-xs font-medium text-foreground transition-colors hover:bg-elevated/50 hover:text-accent cursor-pointer"
+                            title={ev.sector_kind === 'index' ? '打开指数详情' : '查看成分股'}
+                          >
+                            <Tags className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-300" />
+                            <span>{ev.sector_name ?? ev.name}</span>
+                            {ev.symbol && <span className="font-mono text-[10px] text-muted">{ev.symbol}</span>}
+                          </button>
+                        )}
+                        {ev.symbol && ev.source !== 'sector' && (() => {
                           const board = boardTag(ev.symbol)
                           return (
                             <button
@@ -737,8 +761,24 @@ function RulesList({ rulesQuery, onEdit }: {
                 </div>
               )}
 
-              {/* 第二行: 策略类型显示通知事件 */}
-              {r.type === 'strategy' && r.strategy_id ? (
+              {/* 第二行: 类型摘要 */}
+              {r.type === 'sector' ? (
+                <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1 pl-0.5">
+                  {(r.sector_targets ?? []).slice(0, 3).map(target => (
+                    <span key={target.key} className="max-w-28 truncate rounded bg-cyan-500/8 px-1.5 py-0.5 text-[9px] text-cyan-700 dark:text-cyan-300">
+                      {target.name}
+                    </span>
+                  ))}
+                  {(r.sector_targets?.length ?? 0) > 3 && (
+                    <span className="text-[9px] text-muted">+{(r.sector_targets?.length ?? 0) - 3}</span>
+                  )}
+                  <span className="text-[9px] text-secondary">·</span>
+                  <span className="text-[9px] text-secondary">
+                    {r.sector_trigger === 'momentum' ? `${r.window_minutes ?? 5}分钟异动` : '涨跌幅'}
+                    {r.direction === 'down' ? ' ≤ -' : ' ≥ '}{r.threshold_pct ?? 1}%
+                  </span>
+                </div>
+              ) : r.type === 'strategy' && r.strategy_id ? (
                 <div className="mt-1 flex flex-wrap items-center gap-1 pl-0.5">
                   {(r.notify_events ?? LEGACY_STRATEGY_NOTIFY_EVENTS).map(event => {
                     const option = STRATEGY_NOTIFY_EVENT_OPTIONS.find(item => item.key === event)

@@ -353,6 +353,8 @@ class MonitorRuleEngine:
         self._building_strategy_results: dict[str, dict] = {}
         # 本轮成功写入股票策略实时结果的策略 ID, 供 QuoteService 在计算完成后精确通知策略页。
         self._latest_strategy_result_ids: set[str] = set()
+        self._sector_monitor_service = None
+        self._sector_condition_state: dict[tuple[str, str], bool] = {}
 
     def set_strategy_engine(self, engine) -> None:
         """注入 StrategyEngine, type=strategy 规则据此跑选股。"""
@@ -361,6 +363,9 @@ class MonitorRuleEngine:
     def set_data_dir(self, data_dir) -> None:
         """注入数据目录, 用于加载策略的用户覆盖配置。"""
         self._data_dir = data_dir
+
+    def set_sector_monitor_service(self, service) -> None:
+        self._sector_monitor_service = service
 
     def invalidate_strategy_state(self) -> None:
         """策略注册表变更后清除选股池、结果和矩阵快照。"""
@@ -413,6 +418,12 @@ class MonitorRuleEngine:
             rule.get("scope", "symbols"),
             tuple(sorted(str(symbol) for symbol in rule.get("symbols", []))),
             rule.get("sector"),
+            rule.get("sector_kind"),
+            tuple(sorted(str(target.get("key")) for target in rule.get("sector_targets", []))),
+            rule.get("sector_trigger"),
+            rule.get("direction"),
+            rule.get("threshold_pct"),
+            rule.get("window_minutes"),
         )
 
     def set_rules(self, rules: list[dict]) -> None:
@@ -450,6 +461,11 @@ class MonitorRuleEngine:
             for key, value in list(self._strategy_signal_seen.items())
             if key[0] in active_ids
         }
+        self._sector_condition_state = {
+            key: value
+            for key, value in list(self._sector_condition_state.items())
+            if key[0] in active_ids
+        }
         logger.info("MonitorRuleEngine: 装载 %d 条规则", len(self._rules))
 
     def add_rule(self, rule: dict) -> None:
@@ -470,6 +486,9 @@ class MonitorRuleEngine:
         self._strategy_signal_seen = {
             k: v for k, v in list(self._strategy_signal_seen.items()) if k[0] != rule_id
         }
+        self._sector_condition_state = {
+            k: v for k, v in self._sector_condition_state.items() if k[0] != rule_id
+        }
 
     def clear(self) -> None:
         self._rules.clear()
@@ -477,6 +496,7 @@ class MonitorRuleEngine:
         self._strategy_pools.clear()
         self._strategy_signal_state.clear()
         self._strategy_signal_seen.clear()
+        self._sector_condition_state.clear()
 
     @property
     def rules(self) -> dict[str, dict]:
@@ -640,6 +660,8 @@ class MonitorRuleEngine:
         for rule_id, rule in list(self._rules.items()):
             if rule.get("asset_type", "stock") != asset_type:
                 continue
+            if rule.get("type") == "sector":
+                continue
             try:
                 events.extend(self._evaluate_rule(df, rule, now))
             except Exception as e:
@@ -651,6 +673,156 @@ class MonitorRuleEngine:
         self._active_matrix_snapshots.pop(asset_type, None)
 
         return events
+
+    def evaluate_sectors(
+        self,
+        stock_df: pl.DataFrame,
+        index_df: pl.DataFrame,
+        *,
+        now: float | None = None,
+    ) -> list[dict]:
+        """按板块聚合快照评估 type=sector 规则。"""
+        if self._sector_monitor_service is None:
+            return []
+        rules = [
+            rule for rule in list(self._rules.values())
+            if rule.get("enabled", True) and rule.get("type") == "sector"
+        ]
+        if not rules:
+            return []
+
+        targets_by_key: dict[str, dict] = {}
+        windows: set[int] = set()
+        for rule in rules:
+            for target in rule.get("sector_targets", []):
+                if target.get("key"):
+                    targets_by_key[str(target["key"])] = target
+            if rule.get("sector_trigger") == "momentum":
+                windows.add(int(rule.get("window_minutes", 5)))
+
+        timestamp = time.time() if now is None else now
+        snapshots = self._sector_monitor_service.build_snapshots(
+            stock_df,
+            index_df,
+            list(targets_by_key.values()),
+            windows,
+            now=timestamp,
+        )
+        events: list[dict] = []
+        for rule in rules:
+            try:
+                events.extend(self._evaluate_sector_rule(rule, snapshots, timestamp))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("板块规则评估失败 %s: %s", rule.get("id"), exc)
+        return events
+
+    def _evaluate_sector_rule(self, rule: dict, snapshots: dict[str, dict], now: float) -> list[dict]:
+        events: list[dict] = []
+        direction = rule.get("direction", "up")
+        trigger = rule.get("sector_trigger", "change_pct")
+        threshold = float(rule.get("threshold_pct", 1.0)) / 100
+        window = int(rule.get("window_minutes", 5))
+
+        for target in rule.get("sector_targets", []):
+            target_key = str(target.get("key") or "")
+            snapshot = snapshots.get(target_key)
+            if not snapshot or not snapshot.get("valid"):
+                continue
+            value = (
+                snapshot.get("change_pct")
+                if trigger == "change_pct"
+                else snapshot.get("window_changes", {}).get(window)
+            )
+            condition = value is not None and (
+                value >= threshold if direction == "up" else value <= -threshold
+            )
+            state_key = (rule["id"], target_key)
+            previous = self._sector_condition_state.get(state_key)
+            self._sector_condition_state[state_key] = condition
+            if previous is None or previous or not condition:
+                continue
+
+            event_type = f"sector_{trigger}_{direction}"
+            cooldown_key = (rule["id"], target_key, event_type)
+            last = self._last_fire.get(cooldown_key)
+            cooldown = int(rule.get("cooldown_seconds", 3600))
+            if last is not None and now - last < cooldown:
+                continue
+            self._last_fire[cooldown_key] = now
+            message = rule.get("message", "") or self._sector_message(
+                snapshot, trigger, direction, threshold, window, value,
+            )
+            event = {
+                "ts": int(now * 1000),
+                "rule_id": rule["id"],
+                "rule_name": rule.get("name", ""),
+                "strategy_id": None,
+                "source": "sector",
+                "type": event_type,
+                "symbol": snapshot.get("symbol") if snapshot.get("kind") == "index" else "",
+                "name": snapshot.get("name"),
+                "message": message,
+                "price": snapshot.get("price"),
+                "change_pct": snapshot.get("change_pct"),
+                "window_change_pct": value if trigger == "momentum" else None,
+                "signals": [],
+                "severity": rule.get("severity", "info"),
+                "conditions": [],
+                "logic": "and",
+                "sector_kind": snapshot.get("kind"),
+                "sector_key": target_key,
+                "sector_name": snapshot.get("name"),
+                "sector_source_field": snapshot.get("source_field"),
+                "sector_value": snapshot.get("value"),
+                "sector_level": snapshot.get("level"),
+                "coverage_ratio": snapshot.get("coverage_ratio"),
+                "valid_count": snapshot.get("valid_count"),
+                "total_count": snapshot.get("total_count"),
+                "up_count": snapshot.get("up_count"),
+                "down_count": snapshot.get("down_count"),
+                "leader": snapshot.get("leader"),
+            }
+            events.append(event)
+            if self._alert_handler:
+                try:
+                    self._alert_handler(event)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("alert handler failed: %s", exc)
+        return events
+
+    @staticmethod
+    def _sector_message(
+        snapshot: dict,
+        trigger: str,
+        direction: str,
+        threshold: float,
+        window: int,
+        value: float | None,
+    ) -> str:
+        kind_label = {
+            "index": "指数", "concept": "概念", "industry": "行业",
+        }.get(snapshot.get("kind"), "板块")
+        current = float(snapshot.get("change_pct") or 0)
+        if trigger == "momentum":
+            action = "快速拉升" if direction == "up" else "快速下跌"
+            head = (
+                f"{kind_label}「{snapshot.get('name')}」{window}分钟{action} "
+                f"{float(value or 0) * 100:+.2f}%"
+            )
+        else:
+            action = "涨幅上穿" if direction == "up" else "跌幅下穿"
+            head = f"{kind_label}「{snapshot.get('name')}」{action} {threshold * 100:.2f}%"
+        parts = [head, f"当前 {current * 100:+.2f}%"]
+        if snapshot.get("kind") != "index":
+            parts.append(f"上涨 {snapshot.get('up_count', 0)}/{snapshot.get('valid_count', 0)}")
+            parts.append(f"覆盖 {float(snapshot.get('coverage_ratio') or 0) * 100:.0f}%")
+            leader = snapshot.get("leader") or {}
+            if leader.get("name") or leader.get("symbol"):
+                parts.append(
+                    f"领涨 {leader.get('name') or leader.get('symbol')} "
+                    f"{float(leader.get('change_pct') or 0) * 100:+.2f}%"
+                )
+        return "｜".join(parts)
 
     def _evaluate_rule(self, df: pl.DataFrame, rule: dict, now: float) -> list[dict]:
         """评估单条规则,返回触发的 events。"""

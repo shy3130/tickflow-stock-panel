@@ -59,15 +59,34 @@ class ConditionModel(BaseModel):
     value: float | None = None   # op 非 truth 时必填
 
 
+class SectorTargetModel(BaseModel):
+    key: str
+    kind: str
+    name: str
+    symbol: str | None = None
+    source_id: str | None = None
+    field: str | None = None
+    source_field: str | None = None
+    value: str | None = None
+    level: int | None = None
+    available: bool = True
+    member_count: int = 0
+
+
 class RuleModel(BaseModel):
     id: str
     name: str
     enabled: bool = True
-    type: str          # strategy | signal | price | market
+    type: str          # strategy | signal | price | market | sector
     asset_type: str = "stock"   # stock | etf (etf: strategy 型走 ETF 历史加载器)
     scope: str = "symbols"   # symbols | all | sector
     symbols: list[str] = []
     sector: str | None = None
+    sector_kind: str | None = None  # index | concept | industry
+    sector_targets: list[SectorTargetModel] = []
+    sector_trigger: str = "change_pct"  # change_pct | momentum
+    threshold_pct: float = 1.0
+    window_minutes: int = 5
     strategy_id: str | None = None
     direction: str = "entry"  # entry | exit | both
     notify_events: list[str] | None = None
@@ -119,6 +138,10 @@ def get_options(request: Request):
     except Exception:
         pass
 
+    sector_service = getattr(request.app.state, "sector_monitor_service", None)
+    sector_targets = sector_service.list_targets() if sector_service is not None else {
+        "index": [], "concept": [], "industry": [],
+    }
     return {
         "threshold_fields": threshold_fields,
         "builtin_signals": builtin_signals,
@@ -129,6 +152,7 @@ def get_options(request: Request):
             {"key": "price", "label": "价格/涨跌"},
             {"key": "market", "label": "市场异动"},
             {"key": "strategy", "label": "策略监控"},
+            {"key": "sector", "label": "板块监控"},
         ],
         "scopes": [
             {"key": "symbols", "label": "指定标的"},
@@ -152,6 +176,7 @@ def get_options(request: Request):
         "intraday_signal_support": intraday_monitor_support(
             getattr(request.app.state, "capabilities", None),
         ),
+        "sector_targets": sector_targets,
     }
 
 
@@ -186,6 +211,17 @@ def list_rules(request: Request):
     if runtime_warning:
         for rule in intraday_rules:
             rule["runtime_warning"] = runtime_warning
+    sector_service = getattr(request.app.state, "sector_monitor_service", None)
+    if sector_service is not None:
+        for rule in rules:
+            if rule.get("type") != "sector":
+                continue
+            missing = sector_service.missing_target_keys(rule.get("sector_targets", []))
+            unavailable = sector_service.unavailable_target_keys(rule.get("sector_targets", []))
+            if missing:
+                rule["runtime_warning"] = "部分板块数据已不存在, 请重新选择监控对象"
+            elif unavailable:
+                rule["runtime_warning"] = "所选指数未加入实时指数池, 请先在实时监控设置中启用"
     # 按 created_at 倒序
     rules.sort(key=lambda r: r.get("created_at", ""), reverse=True)
     return {"rules": rules}
@@ -232,6 +268,15 @@ def save_rule(req: RuleModel, request: Request):
         monitor_rules.validate(rule)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    if rule.get("type") == "sector":
+        sector_service = getattr(request.app.state, "sector_monitor_service", None)
+        if sector_service is None:
+            raise HTTPException(status_code=503, detail="板块监控服务未初始化")
+        targets = rule.get("sector_targets", [])
+        if sector_service.missing_target_keys(targets):
+            raise HTTPException(status_code=400, detail="所选板块数据已变化, 请重新选择")
+        if sector_service.unavailable_target_keys(targets):
+            raise HTTPException(status_code=400, detail="所选指数未加入实时指数池, 请先在实时监控设置中启用")
     if rule.get("enabled", True) and uses_intraday_signals(rule):
         from app.services.kline_sync import intraday_monitor_support
 
