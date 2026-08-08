@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Save, Loader2, Check, Wifi, WifiOff, Eye, EyeOff, Shield,
@@ -14,10 +14,13 @@ const INPUT_CLS =
   'w-full h-9 px-2.5 rounded-lg bg-base border-0 ring-1 ring-border/30 text-xs font-mono text-foreground placeholder:text-muted/30 focus:outline-none focus:ring-2 focus:ring-accent/30 transition-shadow'
 
 const CODEX_PROVIDER = 'codex_cli'
-const OPENAI_PROVIDER = 'openai_compat'
+const OPENAI_PROVIDER = 'openai'
+const OPENAI_COMPAT_PROVIDER = 'openai_compat'
 const CODEX_COMMAND = 'codex'
 const DEFAULT_CODEX_MODEL = 'gpt-5.6-sol'
 const DEFAULT_CODEX_REASONING_EFFORT = 'xhigh'
+const DEFAULT_OPENAI_MODEL = 'gpt-5.5'
+const DEFAULT_REASONING_EFFORT = 'high'
 const SAVED_CODEX_OPTION_VALUE = '__saved_codex_config__'
 const CODEX_REASONING_LABELS: Record<string, string> = {
   high: '高',
@@ -42,8 +45,11 @@ const codexModelLabel = (model?: string, effort?: string) => {
   return effortLabel ? `${modelLabel} · ${effortLabel}` : modelLabel
 }
 
-const PRESETS: { label: string; provider?: string; url: string; model: string; codexCommand?: string; website: string; websiteLabel: string; description: string; custom?: boolean }[] = [
+type AiPreset = { label: string; provider?: string; url: string; model: string; codexCommand?: string; website: string; websiteLabel: string; description: string; custom?: boolean }
+
+const PRESETS: AiPreset[] = [
   { label: '自定义', url: '', model: '', website: '', websiteLabel: '', description: '不自动填充任何配置，完全手动填写 API 地址、模型和密钥。', custom: true },
+  { label: 'OpenAI', provider: OPENAI_PROVIDER, url: 'https://api.openai.com/v1', model: DEFAULT_OPENAI_MODEL, website: 'https://platform.openai.com/', websiteLabel: 'platform.openai.com', description: 'OpenAI 官方接口，可单独配置模型支持的推理强度。' },
   { label: 'DeepSeek', url: 'https://api.deepseek.com', model: 'deepseek-v4-pro', website: 'https://www.deepseek.com/', websiteLabel: 'deepseek.com', description: 'DeepSeek 官方 OpenAI 兼容接口。' },
   { label: '通义千问', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-3.6plus', website: 'https://tongyi.aliyun.com/', websiteLabel: 'tongyi.aliyun.com', description: '阿里云 DashScope 兼容模式接口。' },
   { label: '智谱 GLM', url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-5.2', website: 'https://open.bigmodel.cn/', websiteLabel: 'open.bigmodel.cn', description: '智谱 AI 官方 OpenAI 兼容接口。' },
@@ -52,15 +58,23 @@ const PRESETS: { label: string; provider?: string; url: string; model: string; c
   { label: '炸鸡中转站', url: 'https://api.zhaji.dev/v1', model: 'gpt-5.5', website: 'https://api.zhaji.dev', websiteLabel: 'api.zhaji.dev', description: 'OpenAI 兼容中转服务，适合直接使用国际模型。' },
 ]
 
+const findPreset = (provider: string, baseUrl: string, codexCommand: string) => PRESETS.find(p => {
+  if (p.custom || (p.provider ?? OPENAI_COMPAT_PROVIDER) !== provider) return false
+  if (provider === OPENAI_PROVIDER) return true
+  return provider === CODEX_PROVIDER ? p.codexCommand === codexCommand : p.url === baseUrl
+}) ?? PRESETS[0]
+
 export function SettingsAIPanel() {
   const qc = useQueryClient()
   const settings = useSettings()
   const s = settings.data
 
-  const [provider, setProvider] = useState(OPENAI_PROVIDER)
+  const [provider, setProvider] = useState(OPENAI_COMPAT_PROVIDER)
   const [baseUrl, setBaseUrl] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [model, setModel] = useState('')
+  const [reasoningEffort, setReasoningEffort] = useState(DEFAULT_REASONING_EFFORT)
+  const [codexModel, setCodexModel] = useState('')
   const [codexReasoningEffort, setCodexReasoningEffort] = useState('')
   const [codexCommand, setCodexCommand] = useState(CODEX_COMMAND)
   const [customUa, setCustomUa] = useState(false)
@@ -70,15 +84,21 @@ export function SettingsAIPanel() {
   const [confirmClear, setConfirmClear] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null)
+  const [selectedPresetLabel, setSelectedPresetLabel] = useState(PRESETS[0].label)
+  const directDrafts = useRef({
+    custom: { baseUrl: '', model: '' },
+    openai: { baseUrl: 'https://api.openai.com/v1', model: DEFAULT_OPENAI_MODEL },
+  })
+  const draftsInitialized = useRef(false)
 
   const isCodexProvider = provider === CODEX_PROVIDER
+  const isOpenAIProvider = provider === OPENAI_PROVIDER
   const savedCodexProvider = s?.ai_provider === CODEX_PROVIDER
   const configured = s?.ai_configured ?? (savedCodexProvider ? !!(s?.ai_codex_command ?? CODEX_COMMAND) : s?.has_ai_key)
-  // 选中的预设: 精确匹配 provider+url/codexCommand; 匹配不上时默认"自定义"
-  const matchedPreset = PRESETS.find(p => (p.provider ?? OPENAI_PROVIDER) === provider && (isCodexProvider ? p.codexCommand === codexCommand : p.url === baseUrl))
-  const selectedPreset = matchedPreset ?? PRESETS.find(p => p.custom)
-  const savedCodexModel = savedCodexProvider ? (s?.ai_model ?? '') : ''
-  const savedCodexEffort = savedCodexProvider ? (s?.ai_codex_reasoning_effort ?? '') : ''
+  const selectedPreset = PRESETS.find(p => p.label === selectedPresetLabel) ?? PRESETS[0]
+  const configTitle = isCodexProvider ? 'Codex CLI 配置' : isOpenAIProvider ? 'OpenAI 配置' : selectedPreset.custom ? '自定义配置' : `${selectedPreset.label} 配置`
+  const savedCodexModel = s?.ai_codex_model ?? (savedCodexProvider ? (s?.ai_model ?? '') : '')
+  const savedCodexEffort = s?.ai_codex_reasoning_effort ?? ''
   const savedCodexOptionKnown = CODEX_MODEL_OPTIONS.some(option =>
     option.model === savedCodexModel && option.effort === savedCodexEffort,
   )
@@ -96,7 +116,7 @@ export function SettingsAIPanel() {
     ? [savedCodexOption, ...CODEX_MODEL_OPTIONS]
     : CODEX_MODEL_OPTIONS
   const selectedCodexModelOption = codexModelOptions.find(option =>
-    option.model === model && option.effort === codexReasoningEffort,
+    option.model === codexModel && option.effort === codexReasoningEffort,
   ) ?? CODEX_MODEL_OPTIONS[0]
   const codexModelSelectValue = selectedCodexModelOption.value
   const canSave = isCodexProvider ? true : !!baseUrl.trim() && !!model.trim()
@@ -105,11 +125,26 @@ export function SettingsAIPanel() {
     if (!s) return
     // 未配置过 AI (无 api_key): 字段留空, 默认选中"自定义"预设, 不预填充后端默认值
     const unconfigured = !s.has_ai_key && !s.ai_configured
-    const savedProvider = s.ai_provider ?? OPENAI_PROVIDER
+    const savedProvider = s.ai_provider ?? OPENAI_COMPAT_PROVIDER
+    const savedBaseUrl = unconfigured ? '' : (s.ai_base_url ?? '')
+    const savedOpenAIModel = unconfigured ? '' : (s.ai_openai_model ?? (savedProvider !== CODEX_PROVIDER ? s.ai_model : '') ?? '')
+    const savedPreset = unconfigured ? PRESETS[0] : findPreset(savedProvider, savedBaseUrl, s.ai_codex_command ?? CODEX_COMMAND)
+    if (!draftsInitialized.current) {
+      const officialOpenAI = PRESETS.find(p => p.provider === OPENAI_PROVIDER)
+      if (savedProvider === OPENAI_PROVIDER || (savedProvider === CODEX_PROVIDER && savedBaseUrl === officialOpenAI?.url)) {
+        directDrafts.current.openai = { baseUrl: savedBaseUrl, model: savedOpenAIModel }
+      } else if (findPreset(OPENAI_COMPAT_PROVIDER, savedBaseUrl, CODEX_COMMAND).custom) {
+        directDrafts.current.custom = { baseUrl: savedBaseUrl, model: savedOpenAIModel }
+      }
+      draftsInitialized.current = true
+    }
     setProvider(savedProvider)
-    setBaseUrl(unconfigured ? '' : (s.ai_base_url ?? ''))
-    setModel(unconfigured ? '' : (s.ai_model ?? ''))
-    setCodexReasoningEffort(unconfigured ? '' : (s.ai_codex_reasoning_effort ?? ''))
+    setSelectedPresetLabel(savedPreset.label)
+    setBaseUrl(savedBaseUrl)
+    setModel(savedOpenAIModel)
+    setReasoningEffort(s.ai_reasoning_effort ?? DEFAULT_REASONING_EFFORT)
+    setCodexModel(s.ai_codex_model ?? (savedProvider === CODEX_PROVIDER ? s.ai_model : '') ?? '')
+    setCodexReasoningEffort(s.ai_codex_reasoning_effort ?? '')
     setCodexCommand(s.ai_codex_command ?? CODEX_COMMAND)
     const ua = s.ai_user_agent ?? ''
     setCustomUa(!!ua)
@@ -120,7 +155,8 @@ export function SettingsAIPanel() {
     provider,
     base_url: baseUrl,
     api_key: apiKey || undefined,
-    model,
+    model: isCodexProvider ? codexModel : model,
+    ...(isOpenAIProvider ? { reasoning_effort: reasoningEffort } : {}),
     codex_command: isCodexProvider ? CODEX_COMMAND : codexCommand,
     codex_reasoning_effort: isCodexProvider ? codexReasoningEffort : '',
     user_agent: customUa ? userAgent : '',
@@ -135,7 +171,10 @@ export function SettingsAIPanel() {
         ...prev,
         ai_provider: result.ai_provider ?? provider,
         ai_base_url: baseUrl,
-        ai_model: result.ai_model ?? model,
+        ai_model: result.ai_model ?? (isCodexProvider ? codexModel : model),
+        ai_openai_model: result.ai_openai_model ?? model,
+        ai_reasoning_effort: result.ai_reasoning_effort ?? reasoningEffort,
+        ai_codex_model: result.ai_codex_model ?? codexModel,
         ai_codex_command: result.ai_codex_command ?? (isCodexProvider ? CODEX_COMMAND : codexCommand),
         ai_codex_reasoning_effort: result.ai_codex_reasoning_effort ?? (isCodexProvider ? codexReasoningEffort : ''),
         ai_configured: result.ai_configured ?? (isCodexProvider ? true : (apiKey ? true : prev.ai_configured)),
@@ -153,18 +192,28 @@ export function SettingsAIPanel() {
     mutationFn: () => api.clearAiSettings(),
     onSuccess: () => {
       setConfirmClear(false)
-      setProvider(OPENAI_PROVIDER)
+      setProvider(OPENAI_COMPAT_PROVIDER)
+      setSelectedPresetLabel(PRESETS[0].label)
       setBaseUrl('')
       setApiKey('')
       setModel('')
+      setReasoningEffort(DEFAULT_REASONING_EFFORT)
+      setCodexModel('')
       setCodexReasoningEffort('')
       setCodexCommand(CODEX_COMMAND)
+      directDrafts.current = {
+        custom: { baseUrl: '', model: '' },
+        openai: { baseUrl: 'https://api.openai.com/v1', model: DEFAULT_OPENAI_MODEL },
+      }
       setTestResult(null)
       qc.setQueryData<SettingsState>(QK.settings, prev => prev ? {
         ...prev,
-        ai_provider: OPENAI_PROVIDER,
+        ai_provider: OPENAI_COMPAT_PROVIDER,
         ai_base_url: '',
         ai_model: '',
+        ai_openai_model: '',
+        ai_reasoning_effort: DEFAULT_REASONING_EFFORT,
+        ai_codex_model: '',
         ai_codex_command: CODEX_COMMAND,
         ai_codex_reasoning_effort: '',
         has_ai_key: false,
@@ -186,20 +235,42 @@ export function SettingsAIPanel() {
     setUserAgent(`Mozilla/5.0 (${pf}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`)
   }
 
-  const handlePreset = (p: typeof PRESETS[number]) => {
+  const handlePreset = (p: AiPreset) => {
+    setSelectedPresetLabel(p.label)
     if (p.custom) {
-      // 自定义: 清空所有自动填充字段, 由用户完全手动填写
-      setProvider(OPENAI_PROVIDER)
-      setBaseUrl('')
-      setModel('')
-      setCodexReasoningEffort('')
+      setProvider(OPENAI_COMPAT_PROVIDER)
+      setBaseUrl(directDrafts.current.custom.baseUrl)
+      setModel(directDrafts.current.custom.model)
       return
     }
-    setProvider(p.provider ?? OPENAI_PROVIDER)
-    setBaseUrl(p.url)
-    setModel(p.model)
-    setCodexReasoningEffort(p.provider === CODEX_PROVIDER ? DEFAULT_CODEX_REASONING_EFFORT : '')
-    if (p.codexCommand) setCodexCommand(CODEX_COMMAND)
+    if (p.provider === CODEX_PROVIDER) {
+      setProvider(CODEX_PROVIDER)
+      setCodexModel(p.model)
+      setCodexReasoningEffort(DEFAULT_CODEX_REASONING_EFFORT)
+      setCodexCommand(CODEX_COMMAND)
+      return
+    }
+    const nextProvider = p.provider ?? OPENAI_COMPAT_PROVIDER
+    setProvider(nextProvider)
+    if (nextProvider === OPENAI_PROVIDER) {
+      setBaseUrl(directDrafts.current.openai.baseUrl)
+      setModel(directDrafts.current.openai.model)
+    } else {
+      setBaseUrl(p.url)
+      setModel(p.model)
+    }
+  }
+
+  const handleBaseUrlChange = (value: string) => {
+    setBaseUrl(value)
+    if (selectedPreset.custom) directDrafts.current.custom.baseUrl = value
+    if (isOpenAIProvider) directDrafts.current.openai.baseUrl = value
+  }
+
+  const handleModelChange = (value: string) => {
+    setModel(value)
+    if (selectedPreset.custom) directDrafts.current.custom.model = value
+    if (isOpenAIProvider) directDrafts.current.openai.model = value
   }
 
   const handleTest = async () => {
@@ -280,7 +351,7 @@ export function SettingsAIPanel() {
 
       <Card
         icon={Settings2}
-        title="自定义配置"
+        title={configTitle}
         right={
           <span className="inline-flex items-center gap-1.5 text-[10px] text-muted/60" title={isCodexProvider ? 'Use local Codex CLI via codex exec' : 'Use OpenAI-compatible Chat Completions API'}>
             <span className="rounded-full border border-border/40 bg-base/50 px-1.5 py-px font-mono">{isCodexProvider ? 'codex exec' : 'Chat Completions'}</span>
@@ -290,7 +361,7 @@ export function SettingsAIPanel() {
       >
         <div className="space-y-4">
           {isCodexProvider ? (
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Field label="CLI 命令" hint="固定使用默认 codex 命令, 由后端自动解析本机 Codex Desktop/CLI, 不支持自定义可执行路径。">
                 <div className={`${INPUT_CLS} flex items-center text-muted/80 select-none`} aria-label="Codex CLI command">
                   {CODEX_COMMAND}
@@ -305,7 +376,7 @@ export function SettingsAIPanel() {
                   onChange={e => {
                     const value = e.target.value
                     const option = codexModelOptions.find(item => item.value === value) ?? CODEX_MODEL_OPTIONS[0]
-                    setModel(option.model)
+                    setCodexModel(option.model)
                     setCodexReasoningEffort(option.effort)
                   }}
                   className={INPUT_CLS}
@@ -318,14 +389,27 @@ export function SettingsAIPanel() {
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <Field label="API 地址">
-                  <input type="text" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder="https://api.zhaji.dev/v1" className={INPUT_CLS} />
+                  <input type="text" value={baseUrl} onChange={e => handleBaseUrlChange(e.target.value)} placeholder="https://api.zhaji.dev/v1" className={INPUT_CLS} />
                 </Field>
                 <Field label="模型">
-                  <input type="text" value={model} onChange={e => setModel(e.target.value)} placeholder="gpt-5.6-sol" className={INPUT_CLS} />
+                  <input type="text" value={model} onChange={e => handleModelChange(e.target.value)} placeholder="gpt-5.6-sol" className={INPUT_CLS} />
                 </Field>
               </div>
+
+              {isOpenAIProvider && (
+                <div className="rounded-lg border border-accent/15 bg-accent/[0.03] p-3">
+                  <div className="mb-2.5">
+                    <span className="rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent">OpenAI 专属</span>
+                  </div>
+                  <div className="max-w-xs">
+                    <Field label="推理强度">
+                      <input type="text" value={reasoningEffort} onChange={e => setReasoningEffort(e.target.value)} placeholder={DEFAULT_REASONING_EFFORT} className={INPUT_CLS} />
+                    </Field>
+                  </div>
+                </div>
+              )}
 
               <Field label="API Key">
                 <div className="flex gap-2">

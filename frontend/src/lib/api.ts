@@ -1,6 +1,6 @@
 // 后端 API 客户端 — 全项目统一入口
 //
-// Dev:Vite 代理 /api 到 :3018
+// Dev: Vite 按启动脚本解析出的 BACKEND_HOST/BACKEND_PORT 代理 /api
 // Prod:同源(FastAPI 托管前端 dist)
 
 import { toast } from '@/components/Toast'
@@ -860,6 +860,9 @@ export interface SettingsState {
   has_ai_key: boolean
   ai_configured?: boolean
   ai_model: string
+  ai_openai_model?: string
+  ai_reasoning_effort?: string
+  ai_codex_model?: string
   ai_codex_command?: string
   ai_codex_reasoning_effort?: string
   ai_user_agent: string
@@ -969,6 +972,8 @@ export interface Preferences {
   minute_data_provider?: string
   realtime_data_provider?: string
   financial_data_provider?: string
+  data_source_job_timeout_s: number
+  data_source_long_job_timeout_s: number
   realtime_watchlist_symbols?: string[]
   realtime_pull_stock?: boolean
   realtime_pull_etf?: boolean
@@ -1076,8 +1081,8 @@ export const api = {
     ),
 
   /** 保存 AI 配置 */
-  saveAiSettings: (ai: { provider?: string; base_url?: string; api_key?: string; model?: string; codex_command?: string; codex_reasoning_effort?: string; user_agent?: string }) =>
-    request<{ ok: boolean; ai_provider?: string; ai_model?: string; ai_codex_command?: string; ai_codex_reasoning_effort?: string; ai_configured?: boolean }>('/api/settings/ai', {
+  saveAiSettings: (ai: { provider?: string; base_url?: string; api_key?: string; model?: string; reasoning_effort?: string; codex_command?: string; codex_reasoning_effort?: string; user_agent?: string }) =>
+    request<{ ok: boolean; ai_provider?: string; ai_model?: string; ai_openai_model?: string; ai_reasoning_effort?: string; ai_codex_model?: string; ai_codex_command?: string; ai_codex_reasoning_effort?: string; ai_configured?: boolean }>('/api/settings/ai', {
       method: 'POST',
       body: JSON.stringify(ai),
     }),
@@ -1125,6 +1130,17 @@ export const api = {
     request<Pick<Preferences, 'daily_data_provider' | 'adj_factor_provider' | 'minute_data_provider' | 'realtime_data_provider'>>(
       '/api/settings/preferences/data-providers',
       { method: 'PUT', body: JSON.stringify(cfg) },
+    ),
+  updateDataSourceJobTimeouts: (dataSourceJobTimeoutS: number, dataSourceLongJobTimeoutS: number) =>
+    request<Pick<Preferences, 'data_source_job_timeout_s' | 'data_source_long_job_timeout_s'>>(
+      '/api/settings/preferences/data-source-job-timeouts',
+      {
+        method: 'PUT',
+        body: JSON.stringify({
+          data_source_job_timeout_s: dataSourceJobTimeoutS,
+          data_source_long_job_timeout_s: dataSourceLongJobTimeoutS,
+        }),
+      },
     ),
   updateMinuteSync: (enabled: boolean, days: number, segmentDays?: number) =>
     request<Preferences>('/api/settings/preferences/minute-sync', {

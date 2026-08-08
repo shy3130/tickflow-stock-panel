@@ -5,6 +5,9 @@ import tomllib
 import httpx
 import openai
 
+from app import secrets_store
+from app.api import settings as settings_api
+from app.config import settings
 from app.services import ai_provider
 from app.services.ai_provider import (
     _format_openai_error,
@@ -108,7 +111,7 @@ def test_is_temperature_rejected_matches_moonshot_message():
     assert _is_temperature_rejected(exc) is True
 
 
-def test_is_temperature_rejected_matches_generic_temperature_hint():
+def test_optional_openai_params_use_targeted_400_fallbacks():
     response = httpx.Response(
         400,
         json={"error": {"message": "unsupported parameter: temperature"}},
@@ -119,6 +122,29 @@ def test_is_temperature_rejected_matches_generic_temperature_hint():
         body={"error": {"message": "unsupported parameter: temperature"}},
     )
     assert _is_temperature_rejected(exc) is True
+
+    kwargs = {"max_tokens": 1000, "temperature": 0.3, "reasoning_effort": "high"}
+    assert ai_provider._openai_retry_kwargs(exc, kwargs) == {
+        "max_tokens": 1000,
+        "reasoning_effort": "high",
+    }
+
+    response = httpx.Response(
+        400,
+        json={"error": {"message": "unrecognized request argument", "param": "reasoning_effort"}},
+        request=httpx.Request("POST", "https://example.com/v1/chat/completions"),
+    )
+    exc = openai.BadRequestError(
+        "bad request", response=response,
+        body={"error": {"message": "unrecognized request argument", "param": "reasoning_effort"}},
+    )
+    assert _is_temperature_rejected(exc) is False
+    assert ai_provider._is_reasoning_effort_rejected(exc) is True
+    assert ai_provider._openai_retry_kwargs(exc, kwargs) == {
+        "max_tokens": 1000,
+        "temperature": 0.3,
+    }
+    assert kwargs == {"max_tokens": 1000, "temperature": 0.3, "reasoning_effort": "high"}
 
 
 def test_is_temperature_rejected_false_for_other_400():
@@ -143,6 +169,96 @@ def test_is_temperature_rejected_false_for_non_400():
     )
     exc = openai.AuthenticationError("unauthorized", response=response, body=None)
     assert _is_temperature_rejected(exc) is False
+
+
+def test_openai_kwargs_include_configured_reasoning_effort(monkeypatch):
+    stored = {"ai_provider": "openai_compat"}
+    monkeypatch.setattr(secrets_store, "load", lambda: stored)
+
+    assert "reasoning_effort" not in ai_provider._openai_kwargs(temperature=None, max_tokens=1000)
+
+    stored["ai_provider"] = "openai"
+    assert ai_provider._openai_kwargs(temperature=None, max_tokens=1000)["reasoning_effort"] == "high"
+
+    stored["ai_reasoning_effort"] = "custom-high"
+    kwargs = ai_provider._openai_kwargs(temperature=0.3, max_tokens=1000)
+
+    assert kwargs == {
+        "max_tokens": 1000,
+        "temperature": 0.3,
+        "reasoning_effort": "custom-high",
+    }
+
+    stored["ai_reasoning_effort"] = ""
+    assert "reasoning_effort" not in ai_provider._openai_kwargs(temperature=None, max_tokens=1000)
+
+    stored["ai_reasoning_effort"] = "custom-high"
+    stored["ai_provider"] = "openai_compat"
+    assert "reasoning_effort" not in ai_provider._openai_kwargs(temperature=None, max_tokens=1000)
+
+
+def test_ai_settings_keep_provider_models_separate(monkeypatch):
+    stored = {
+        "ai_provider": "openai_compat",
+        "ai_model": "custom-api-model",
+    }
+
+    def save(updates: dict) -> dict:
+        stored.update(updates)
+        return stored
+
+    def clear(*keys: str) -> dict:
+        for key in keys:
+            stored.pop(key, None)
+        return stored
+
+    monkeypatch.setattr(secrets_store, "load", lambda: stored)
+    monkeypatch.setattr(secrets_store, "save", save)
+    monkeypatch.setattr(secrets_store, "clear", clear)
+    monkeypatch.setattr(ai_provider, "ai_configured", lambda provider=None: True)
+    monkeypatch.setattr(settings, "ai_provider", "openai_compat")
+    monkeypatch.setattr(settings, "ai_base_url", "")
+    monkeypatch.setattr(settings, "ai_model", "")
+    monkeypatch.setattr(settings, "ai_codex_command", "codex")
+    monkeypatch.setattr(settings, "ai_codex_reasoning_effort", "")
+    monkeypatch.setattr(settings, "ai_user_agent", "")
+
+    settings_api.save_ai_settings(
+        settings_api.AiSettingsIn(
+            provider="codex_cli",
+            model="gpt-5.6-sol",
+            codex_command="codex",
+            codex_reasoning_effort="high",
+        )
+    )
+
+    assert stored["ai_model"] == "custom-api-model"
+    assert stored["ai_codex_model"] == "gpt-5.6-sol"
+
+    settings_api.save_ai_settings(
+        settings_api.AiSettingsIn(
+            provider="openai",
+            base_url="https://api.openai.com/v1",
+            model="openai-model",
+            reasoning_effort="vendor-high",
+        )
+    )
+
+    assert stored["ai_model"] == "openai-model"
+    assert stored["ai_reasoning_effort"] == "vendor-high"
+    assert stored["ai_codex_model"] == "gpt-5.6-sol"
+
+    settings_api.save_ai_settings(
+        settings_api.AiSettingsIn(
+            provider="openai_compat",
+            base_url="https://example.com/v1",
+            model="new-custom-model",
+        )
+    )
+
+    assert stored["ai_model"] == "new-custom-model"
+    assert stored["ai_reasoning_effort"] == "vendor-high"
+    assert stored["ai_codex_model"] == "gpt-5.6-sol"
 
 
 def test_codex_process_env_excludes_application_secrets(monkeypatch, tmp_path):
@@ -201,7 +317,7 @@ def test_codex_config_adapts_local_access_provider_for_docker(monkeypatch, tmp_p
     assert provider["supports_websockets"] is False
 
 
-def test_codex_config_does_not_copy_provider_without_docker_opt_in(monkeypatch, tmp_path):
+def test_codex_config_preserves_remote_provider_without_docker_rewrite(monkeypatch, tmp_path):
     monkeypatch.delenv("CODEX_DOCKER_HOST", raising=False)
     monkeypatch.setattr(ai_provider, "current_ai_model", lambda: "")
     monkeypatch.setattr(ai_provider, "current_codex_reasoning_effort", lambda: "")
@@ -209,11 +325,13 @@ def test_codex_config_does_not_copy_provider_without_docker_opt_in(monkeypatch, 
         ai_provider,
         "_read_codex_config",
         lambda: {
-            "model_provider": "codex_local_access",
+            "model_provider": "remote-api",
+            "openai_base_url": "https://builtin.example/v1",
             "model_providers": {
-                "codex_local_access": {
-                    "base_url": "http://localhost:62678/v1",
-                    "experimental_bearer_token": "must-not-leak",
+                "remote-api": {
+                    "base_url": "https://custom.example/v1",
+                    "wire_api": "responses",
+                    "requires_openai_auth": True,
                 }
             },
         },
@@ -222,7 +340,11 @@ def test_codex_config_does_not_copy_provider_without_docker_opt_in(monkeypatch, 
 
     ai_provider._write_compatible_codex_config(path)
 
-    text = path.read_text(encoding="utf-8")
-    assert "model_provider" not in text
-    assert "model_providers" not in text
-    assert "must-not-leak" not in text
+    with path.open("rb") as f:
+        config = tomllib.load(f)
+    assert config["model_provider"] == "remote-api"
+    assert config["openai_base_url"] == "https://builtin.example/v1"
+    provider = config["model_providers"]["remote-api"]
+    assert provider["base_url"] == "https://custom.example/v1"
+    assert provider["wire_api"] == "responses"
+    assert provider["requires_openai_auth"] is True

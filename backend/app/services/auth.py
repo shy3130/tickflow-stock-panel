@@ -131,9 +131,17 @@ def bootstrap_from_env() -> bool:
     Returns:
         True 表示本次用环境变量初始化了密码; False 表示无需初始化。
     """
-    from app.config import settings
+    from app.config import _ENV_FILE, settings
 
     pwd = (settings.auth_password or "").strip()
+    # Compose 会对 env_file 中未加单引号的 $VAR 做插值。Docker 部署时同时
+    # 只读挂载原始 .env,首次初始化密码直接按 dotenv 语义读取,避免特殊字符被截断。
+    if _ENV_FILE.is_file():
+        from dotenv import dotenv_values
+
+        raw_pwd = dotenv_values(_ENV_FILE, encoding="utf-8", interpolate=False).get("AUTH_PASSWORD")
+        if isinstance(raw_pwd, str) and raw_pwd.strip():
+            pwd = raw_pwd.strip()
     if not pwd:
         return False
     if is_configured():

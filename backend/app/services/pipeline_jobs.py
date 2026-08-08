@@ -27,7 +27,7 @@ JobStatus = Literal["pending", "running", "succeeded", "failed"]
 # 由 reap_stale() 在 /run 和 /jobs/{id} 轮询端点检查 — 保证卡死后能自愈,
 # 无需用户再次点击「同步」。
 #
-# 超时阈值按任务类型区分:
+# 默认超时阈值按任务类型区分,可在 Web 数据源设置中调整:
 #   - 普通任务(日K管道/扩展/修正/重算): 1200s (20 分钟)
 #   - 长任务(分钟K全市场同步,数据量是日K的 ~240 倍): 1800s (30 分钟)
 # 分钟K即使流式落盘后仍可能跑十几到数十分钟(限速 sleep 是主因),
@@ -105,7 +105,12 @@ class JobStore:
 
     # ===== lifecycle =====
 
-    def create(self, timeout_s: int = DEFAULT_JOB_TIMEOUT_S) -> tuple[str, bool]:
+    def create(
+        self,
+        timeout_s: int | None = None,
+        *,
+        long_running: bool = False,
+    ) -> tuple[str, bool]:
         """单飞创建任务。返回 (job_id, is_new)。
 
         去重条件为 **pending ∨ running**(而非仅 running):`/run` 先 create() 再在
@@ -115,9 +120,17 @@ class JobStore:
 
         is_new=False 表示复用了已有活跃任务,调用方**不得**再调度新的后台任务。
 
-        timeout_s: reap_stale 判定卡死的阈值。普通任务默认 1200s;
-            分钟K全市场同步等长任务传 LONG_JOB_TIMEOUT_S (1800s)。
+        timeout_s: reap_stale 判定卡死的阈值。None 时读取用户配置。
+        long_running: timeout_s 为 None 时,是否读取长任务配置;普通任务默认
+            1200s,分钟K全市场同步等长任务默认 1800s。
         """
+        if timeout_s is None:
+            from app.services import preferences
+            if long_running:
+                timeout_s = preferences.get_data_source_long_job_timeout_s()
+            else:
+                timeout_s = preferences.get_data_source_job_timeout_s()
+
         with self._lock:
             if self._active_id:
                 active = self._active_jobs.get(self._active_id)

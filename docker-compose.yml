@@ -10,7 +10,7 @@ services:
         CODEX_CLI_VERSION: ${CODEX_CLI_VERSION:-0.144.3}
     container_name: TickFlow_Stock_Panel
     ports:
-      - "${PORT:-3018}:3018"
+      - "${HOST:-0.0.0.0}:${PORT:-3018}:3018"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     env_file:
@@ -26,6 +26,8 @@ services:
     volumes:
       - ./data:/app/data
       - ./tiers.yaml:/app/tiers.yaml:ro
+      # 保留原始 dotenv 值供首次密码初始化读取，避免 Compose 展开密码中的 $VAR。
+      - ./.env:/app/.env:ro
       # 复用主机 Codex 登录态；后端只读后复制到单次请求的临时 CODEX_HOME。
       # Windows PowerShell/CMD 下 HOME 常未设置, 可通过 .env 里 CODEX_HOME_HOST 覆盖。
       - ${CODEX_HOME_HOST:-${HOME}/.codex}:/root/.codex:ro

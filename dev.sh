@@ -13,13 +13,48 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$ROOT/backend"
 FRONTEND_DIR="$ROOT/frontend"
-BACKEND_PORT="${BACKEND_PORT:-3018}"
+
+# Read only the launcher-owned keys from .env. Do not source the whole file:
+# .env is data, not a shell script, and may contain values that are unsafe or
+# invalid as Bash syntax. Exported environment variables keep highest priority.
+read_dotenv_value() {
+  local key="$1"
+  if [[ ! -f "$ROOT/.env" ]]; then
+    return 0
+  fi
+  awk -v wanted="$key" '
+    $0 ~ "^[[:space:]]*" wanted "[[:space:]]*=" {
+      sub(/^[^=]*=/, "")
+      sub(/[[:space:]]+#.*$/, "")
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+      if (($0 ~ /^".*"$/) || ($0 ~ /^\047.*\047$/)) {
+        $0 = substr($0, 2, length($0) - 2)
+      }
+      print
+      exit
+    }
+  ' "$ROOT/.env"
+}
+
+ENV_HOST="$(read_dotenv_value HOST)"
+ENV_PORT="$(read_dotenv_value PORT)"
+BACKEND_HOST="${HOST:-${ENV_HOST:-0.0.0.0}}"
+# Keep BACKEND_PORT as a backwards-compatible explicit override.
+BACKEND_PORT="${BACKEND_PORT:-${PORT:-${ENV_PORT:-3018}}}"
 FRONTEND_PORT="${FRONTEND_PORT:-3011}"
+UVICORN_ENV_ARGS=()
+if [[ -f "$ROOT/.env" ]]; then
+  UVICORN_ENV_ARGS=(--env-file "$ROOT/.env")
+fi
+DISPLAY_HOST="$BACKEND_HOST"
+if [[ "$DISPLAY_HOST" == "0.0.0.0" || "$DISPLAY_HOST" == "::" ]]; then
+  DISPLAY_HOST="localhost"
+fi
 
 # Match Docker's BACKEND_EXTRAS behavior so old CPUs can select Polars'
 # rtcompat runtime before the backend starts. An exported value wins over .env.
 if [[ -z "${BACKEND_EXTRAS+x}" && -f "$ROOT/.env" ]]; then
-  BACKEND_EXTRAS="$(awk '/^[[:space:]]*BACKEND_EXTRAS[[:space:]]*=/ {sub(/^[^=]*=/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit}' "$ROOT/.env")"
+  BACKEND_EXTRAS="$(read_dotenv_value BACKEND_EXTRAS)"
 fi
 BACKEND_EXTRAS="${BACKEND_EXTRAS:-}"
 BACKEND_EXTRA_ARGS=()
@@ -129,8 +164,8 @@ echo
 echo -e "${BLUE}╭──────────────────────────────────────────────╮${NC}"
 echo -e "${BLUE}│${NC}  ${GREEN}tickflow-stock-panel${NC}                        ${BLUE}│${NC}"
 echo -e "${BLUE}│${NC}                                              ${BLUE}│${NC}"
-echo -e "${BLUE}│${NC}  backend   ${YELLOW}http://localhost:$BACKEND_PORT${NC}          ${BLUE}│${NC}"
-echo -e "${BLUE}│${NC}  frontend  ${YELLOW}http://localhost:$FRONTEND_PORT${NC}          ${BLUE}│${NC}"
+echo -e "${BLUE}│${NC}  backend   ${YELLOW}http://$DISPLAY_HOST:$BACKEND_PORT${NC}          ${BLUE}│${NC}"
+echo -e "${BLUE}│${NC}  frontend  ${YELLOW}http://$DISPLAY_HOST:$FRONTEND_PORT${NC}          ${BLUE}│${NC}"
 echo -e "${BLUE}│${NC}                                              ${BLUE}│${NC}"
 echo -e "${BLUE}│${NC}  Ctrl-C 同时关闭两端                          ${BLUE}│${NC}"
 echo -e "${BLUE}╰──────────────────────────────────────────────╯${NC}"
@@ -138,14 +173,16 @@ echo
 
 (
   cd "$BACKEND_DIR"
-  uv run uvicorn app.main:app --reload --host 0.0.0.0 --port "$BACKEND_PORT" 2>&1 \
+  uv run uvicorn app.main:app "${UVICORN_ENV_ARGS[@]}" --reload \
+    --host "$BACKEND_HOST" --port "$BACKEND_PORT" 2>&1 \
     | prefix_awk "$(printf "${BLUE}[backend ]${NC} ")"
 ) &
 PIDS+=("$!")
 
 (
   cd "$FRONTEND_DIR"
-  pnpm dev --host 0.0.0.0 --port "$FRONTEND_PORT" 2>&1 \
+  BACKEND_HOST="$BACKEND_HOST" BACKEND_PORT="$BACKEND_PORT" \
+    pnpm dev --host "$BACKEND_HOST" --port "$FRONTEND_PORT" 2>&1 \
     | prefix_awk "$(printf "${GREEN}[frontend]${NC} ")"
 ) &
 PIDS+=("$!")

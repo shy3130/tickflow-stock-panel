@@ -58,7 +58,10 @@ def get_settings() -> dict:
         ai_configured,
         current_ai_model,
         current_codex_command,
+        current_codex_model,
         current_codex_reasoning_effort,
+        current_openai_model,
+        current_openai_reasoning_effort,
     )
 
     key = secrets_store.get_tickflow_key()
@@ -81,6 +84,9 @@ def get_settings() -> dict:
         "has_ai_key": bool(secrets_store.get_ai_key()),
         "ai_configured": ai_configured(ai_provider),
         "ai_model": current_ai_model(),
+        "ai_openai_model": current_openai_model(),
+        "ai_reasoning_effort": current_openai_reasoning_effort(),
+        "ai_codex_model": current_codex_model(),
         "ai_codex_command": current_codex_command(),
         "ai_codex_reasoning_effort": current_codex_reasoning_effort(),
         "ai_user_agent": secrets_store.get_ai_config("ai_user_agent", settings.ai_user_agent),
@@ -240,6 +246,7 @@ class AiSettingsIn(BaseModel):
     base_url: str = ""
     api_key: str | None = None
     model: str = ""
+    reasoning_effort: str = Field(default="high", max_length=64)
     codex_command: str = ""
     codex_reasoning_effort: str = ""
     user_agent: str = ""
@@ -250,12 +257,17 @@ def save_ai_settings(req: AiSettingsIn) -> dict:
     """保存 AI 配置（全部持久化到 secrets.json）"""
     from app.config import settings
     from app.services.ai_provider import (
+        OPENAI_PROVIDER,
         ai_configured,
         current_ai_model,
         current_ai_provider,
         current_codex_command,
+        current_codex_model,
         current_codex_reasoning_effort,
+        current_openai_model,
+        current_openai_reasoning_effort,
         normalize_codex_command,
+        normalize_codex_model,
         normalize_codex_reasoning_effort,
     )
 
@@ -263,23 +275,8 @@ def save_ai_settings(req: AiSettingsIn) -> dict:
     if req.provider:
         updates["ai_provider"] = req.provider
         settings.ai_provider = req.provider
-    if req.base_url:
-        updates["ai_base_url"] = req.base_url
-        settings.ai_base_url = req.base_url
-    if req.api_key is not None:
-        if req.api_key:
-            updates["ai_api_key"] = req.api_key
-            settings.ai_api_key = req.api_key
-        else:
-            secrets_store.clear("ai_api_key")
-            settings.ai_api_key = ""
-    if req.provider == "codex_cli" and not req.model:
-        secrets_store.clear("ai_model")
-        settings.ai_model = ""
-    elif req.model:
-        updates["ai_model"] = req.model
-        settings.ai_model = req.model
     if req.provider == "codex_cli":
+        updates["ai_codex_model"] = normalize_codex_model(req.model)
         try:
             codex_command = normalize_codex_command(req.codex_command)
         except ValueError as exc:
@@ -289,6 +286,22 @@ def save_ai_settings(req: AiSettingsIn) -> dict:
         updates["ai_codex_reasoning_effort"] = codex_reasoning_effort
         settings.ai_codex_command = codex_command
         settings.ai_codex_reasoning_effort = codex_reasoning_effort
+    else:
+        if req.base_url:
+            updates["ai_base_url"] = req.base_url
+            settings.ai_base_url = req.base_url
+        if req.api_key is not None:
+            if req.api_key:
+                updates["ai_api_key"] = req.api_key
+                settings.ai_api_key = req.api_key
+            else:
+                secrets_store.clear("ai_api_key")
+                settings.ai_api_key = ""
+        if req.model:
+            updates["ai_model"] = req.model
+            settings.ai_model = req.model
+        if req.provider == OPENAI_PROVIDER:
+            updates["ai_reasoning_effort"] = req.reasoning_effort.strip()
     # user_agent 允许清空(回到默认浏览器 UA),故无条件持久化
     updates["ai_user_agent"] = req.user_agent
     settings.ai_user_agent = req.user_agent
@@ -301,6 +314,9 @@ def save_ai_settings(req: AiSettingsIn) -> dict:
         "ok": True,
         "ai_provider": provider,
         "ai_model": current_ai_model(),
+        "ai_openai_model": current_openai_model(),
+        "ai_reasoning_effort": current_openai_reasoning_effort(),
+        "ai_codex_model": current_codex_model(),
         "ai_codex_command": current_codex_command(),
         "ai_codex_reasoning_effort": current_codex_reasoning_effort(),
         "ai_configured": ai_configured(provider),
@@ -315,7 +331,16 @@ def clear_ai_settings() -> dict:
     """
     from app.config import settings
 
-    secrets_store.clear("ai_provider", "ai_base_url", "ai_api_key", "ai_model", "ai_codex_command", "ai_codex_reasoning_effort")
+    secrets_store.clear(
+        "ai_provider",
+        "ai_base_url",
+        "ai_api_key",
+        "ai_model",
+        "ai_reasoning_effort",
+        "ai_codex_model",
+        "ai_codex_command",
+        "ai_codex_reasoning_effort",
+    )
     # 同步重置运行时内存(provider 回默认值,其余置空)
     settings.ai_provider = "openai_compat"
     settings.ai_base_url = ""
@@ -348,6 +373,11 @@ class DataProvidersIn(BaseModel):
     minute_data_provider: str | None = None
     realtime_data_provider: str | None = None
     financial_data_provider: str | None = None
+
+
+class DataSourceJobTimeoutPrefs(BaseModel):
+    data_source_job_timeout_s: int = Field(ge=60)
+    data_source_long_job_timeout_s: int = Field(ge=60)
 
 
 class DatasetFieldMapItem(BaseModel):
@@ -413,6 +443,8 @@ def get_preferences() -> dict:
         "minute_data_provider": preferences.get_minute_data_provider(),
         "realtime_data_provider": preferences.get_realtime_data_provider(),
         "financial_data_provider": preferences.get_financial_provider(),
+        "data_source_job_timeout_s": preferences.get_data_source_job_timeout_s(),
+        "data_source_long_job_timeout_s": preferences.get_data_source_long_job_timeout_s(),
         "realtime_watchlist_symbols": preferences.get_realtime_watchlist_symbols(),
         **preferences.get_realtime_quote_scope(),
         "pipeline_pull_a_share": preferences.get_pipeline_pull_a_share(),
@@ -614,6 +646,14 @@ def update_data_providers(req: DataProvidersIn) -> dict:
         "realtime_data_provider": preferences.get_realtime_data_provider(),
         "financial_data_provider": preferences.get_financial_provider(),
     }
+
+
+@router.put("/preferences/data-source-job-timeouts")
+def update_data_source_job_timeouts(req: DataSourceJobTimeoutPrefs) -> dict:
+    """保存普通与长数据后台任务的卡死判定时间。"""
+    from app.services import preferences
+    preferences.save(req.model_dump())
+    return req.model_dump()
 
 
 @router.get("/preferences/watchlist-columns")

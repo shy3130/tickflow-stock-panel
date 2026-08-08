@@ -18,8 +18,42 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# Port precedence: CLI arg > env var > default
-if ($BackendPort  -le 0) { $BackendPort  = if ($env:BACKEND_PORT)  { [int]$env:BACKEND_PORT }  else { 3018 } }
+$Root        = Split-Path -Parent $MyInvocation.MyCommand.Path
+$BackendDir  = Join-Path $Root 'backend'
+$FrontendDir = Join-Path $Root 'frontend'
+$EnvFile     = Join-Path $Root '.env'
+
+# Read only launcher-owned keys. Do not execute .env as PowerShell code.
+function Read-DotEnvValue($Path, $Name) {
+    if (-not (Test-Path $Path)) { return $null }
+    $escaped = [Regex]::Escape($Name)
+    foreach ($line in Get-Content $Path) {
+        if ($line -match "^\s*$escaped\s*=\s*(.*?)\s*$") {
+            $value = $Matches[1].Trim()
+            $value = ($value -replace '\s+#.*$', '').Trim()
+            if ($value.Length -ge 2 -and
+                (($value.StartsWith('"') -and $value.EndsWith('"')) -or
+                 ($value.StartsWith("'") -and $value.EndsWith("'")))) {
+                return $value.Substring(1, $value.Length - 2)
+            }
+            return $value
+        }
+    }
+    return $null
+}
+
+$DotEnvHost = Read-DotEnvValue $EnvFile 'HOST'
+$DotEnvPort = Read-DotEnvValue $EnvFile 'PORT'
+$BindAddress = if ($env:HOST) { $env:HOST } elseif ($DotEnvHost) { $DotEnvHost } else { '0.0.0.0' }
+$DisplayHost = if ($BindAddress -in @('0.0.0.0', '::')) { 'localhost' } else { $BindAddress }
+
+# Port precedence: CLI arg > BACKEND_PORT env > PORT env > .env PORT > default
+if ($BackendPort -le 0) {
+    if ($env:BACKEND_PORT) { $BackendPort = [int]$env:BACKEND_PORT }
+    elseif ($env:PORT)     { $BackendPort = [int]$env:PORT }
+    elseif ($DotEnvPort)   { $BackendPort = [int]$DotEnvPort }
+    else                   { $BackendPort = 3018 }
+}
 if ($FrontendPort -le 0) { $FrontendPort = if ($env:FRONTEND_PORT) { [int]$env:FRONTEND_PORT } else { 3011 } }
 
 # Force UTF-8 console output so child process logs aren't garbled
@@ -27,10 +61,6 @@ try {
     [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
     $OutputEncoding           = New-Object System.Text.UTF8Encoding $false
 } catch {}
-
-$Root        = Split-Path -Parent $MyInvocation.MyCommand.Path
-$BackendDir  = Join-Path $Root 'backend'
-$FrontendDir = Join-Path $Root 'frontend'
 
 function Log-Info($m) { Write-Host "[dev] $m" -ForegroundColor DarkGray }
 function Log-Ok  ($m) { Write-Host "[dev] $m" -ForegroundColor Green }
@@ -113,15 +143,7 @@ Free-Port 'frontend' $FrontendPort
 # select Polars' rtcompat runtime before the backend starts.
 $BackendExtras = $env:BACKEND_EXTRAS
 if (-not (Test-Path Env:BACKEND_EXTRAS)) {
-    $envFile = Join-Path $Root '.env'
-    if (Test-Path $envFile) {
-        foreach ($line in Get-Content $envFile) {
-            if ($line -match '^\s*BACKEND_EXTRAS\s*=\s*(.*?)\s*$') {
-                $BackendExtras = $Matches[1]
-                break
-            }
-        }
-    }
+    $BackendExtras = Read-DotEnvValue $EnvFile 'BACKEND_EXTRAS'
 }
 
 $BackendExtraArgs = @()
@@ -156,8 +178,8 @@ Write-Host ''
 Write-Host '+----------------------------------------------+' -ForegroundColor Blue
 Write-Host '|  tickflow-stock-panel                        |' -ForegroundColor Blue
 Write-Host '|                                              |' -ForegroundColor Blue
-Write-Host "|  backend   http://localhost:$BackendPort"      -ForegroundColor Blue
-Write-Host "|  frontend  http://localhost:$FrontendPort"     -ForegroundColor Blue
+Write-Host "|  backend   http://${DisplayHost}:$BackendPort"  -ForegroundColor Blue
+Write-Host "|  frontend  http://${DisplayHost}:$FrontendPort" -ForegroundColor Blue
 Write-Host '|                                              |' -ForegroundColor Blue
 Write-Host '|  Ctrl-C closes both                          |' -ForegroundColor Blue
 Write-Host '+----------------------------------------------+' -ForegroundColor Blue
@@ -170,7 +192,7 @@ $backendPidFile  = [System.IO.Path]::GetTempFileName()
 $frontendPidFile = [System.IO.Path]::GetTempFileName()
 
 $backendJob = Start-Job -Name 'backend' -ScriptBlock {
-    param($pidFile, $dir, $port)
+    param($pidFile, $dir, $envFile, $bindAddress, $port)
     # Start-Job 开的是全新 powershell.exe 子进程, 不继承主进程的 UTF-8 设置,
     # 默认用系统 ANSI (中文 Windows = GBK/cp936) 解码后端 UTF-8 输出 → 中文乱码。
     # 这里强制子进程用 UTF-8, 与 app/__init__.py 的 stdout/stderr 编码对齐。
@@ -179,18 +201,21 @@ $backendJob = Start-Job -Name 'backend' -ScriptBlock {
     $PID | Out-File -FilePath $pidFile -Encoding ascii -Force
     $env:PYTHONUNBUFFERED = '1'
     Set-Location $dir
-    & .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 0.0.0.0 --port $port 2>&1
-} -ArgumentList $backendPidFile, $BackendDir, $BackendPort
+    $envArgs = if (Test-Path $envFile) { @('--env-file', $envFile) } else { @() }
+    & .\.venv\Scripts\python.exe -m uvicorn app.main:app @envArgs --reload --host $bindAddress --port $port 2>&1
+} -ArgumentList $backendPidFile, $BackendDir, $EnvFile, $BindAddress, $BackendPort
 
 $frontendJob = Start-Job -Name 'frontend' -ScriptBlock {
-    param($pidFile, $dir, $port)
+    param($pidFile, $dir, $bindAddress, $backendPort, $port)
     # 同上: job 子进程默认 GBK, pnpm/前端工具链也是 UTF-8 输出, 需对齐。
     [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
     $OutputEncoding           = New-Object System.Text.UTF8Encoding $false
     $PID | Out-File -FilePath $pidFile -Encoding ascii -Force
     Set-Location $dir
-    & pnpm dev --host 0.0.0.0 --port $port 2>&1
-} -ArgumentList $frontendPidFile, $FrontendDir, $FrontendPort
+    $env:BACKEND_HOST = $bindAddress
+    $env:BACKEND_PORT = [string]$backendPort
+    & pnpm dev --host $bindAddress --port $port 2>&1
+} -ArgumentList $frontendPidFile, $FrontendDir, $BindAddress, $BackendPort, $FrontendPort
 
 # Wait up to 5 seconds for the PID files to materialise
 function Read-JobPid($file) {

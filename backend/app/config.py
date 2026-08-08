@@ -1,6 +1,7 @@
 """全局配置 — 从环境变量 / .env 读取。"""
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -63,11 +64,17 @@ def _project_root() -> Path:
 
 _PROJECT_ROOT = _project_root()
 _RESOURCE_ROOT = _resource_root()
+_ENV_FILE = Path(
+    os.environ.get(
+        "TICKFLOW_ENV_FILE",
+        str(_RESOURCE_ROOT / ".env") if not _IS_FROZEN else ".env",
+    )
+)
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=str(_RESOURCE_ROOT / ".env") if not _IS_FROZEN else ".env",
+        env_file=str(_ENV_FILE),
         env_file_encoding="utf-8",
         extra="ignore",
     )
